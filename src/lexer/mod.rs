@@ -28,10 +28,26 @@ pub fn lex_input(input: &str) -> Vec<Token> {
                     tokens.push(make_token(TokenKind::Equals, "=".to_string()));
                 }
             }
+            '>' => {
+                if chars.peek().is_some() {
+                    tokens.push(make_token(TokenKind::GtEquals, ">=".to_string()));
+                    chars.next();
+                } else {
+                    tokens.push(make_token(TokenKind::GreaterThan, ">".to_string()));
+                }
+            }
+            '<' => {
+                if chars.peek().is_some() {
+                    tokens.push(make_token(TokenKind::LtEquals, "<=".to_string()));
+                    chars.next();
+                } else {
+                    tokens.push(make_token(TokenKind::LessThan, "<".to_string()));
+                }
+            }
             '{' => tokens.push(make_token(TokenKind::LeftCurly, "{".to_string())),
             '}' => tokens.push(make_token(TokenKind::RightCurly, "}".to_string())),
-            '(' => tokens.push(make_token(TokenKind::LeftParen, "{".to_string())),
-            ')' => tokens.push(make_token(TokenKind::RightParen, "}".to_string())),
+            '(' => tokens.push(make_token(TokenKind::LeftParen, "(".to_string())),
+            ')' => tokens.push(make_token(TokenKind::RightParen, ")".to_string())),
             '"' => {
                 // NOTE: This is duplicated for ', pretty stupid fix eventually.
                 let mut string = String::new();
