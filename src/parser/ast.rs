@@ -1,1 +1,64 @@
-struct Node {}
+#[derive(Debug)]
+pub enum BinaryOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    And,
+    Or,
+    Eq,
+    Neq,
+    Lt,
+    Gt,
+    Le,
+    Ge,
+}
+
+#[derive(Debug)]
+pub enum Expr {
+    // Data,
+    Number(f64),
+    Bool(bool),
+    String(String),
+    Variable(String),
+    // a + b, a - b, etc.
+    Binary {
+        op: BinaryOp,
+        left: Box<Expr>,
+        right: Box<Expr>,
+    },
+    // fn(args...)
+    Call {
+        function: Box<Expr>,
+        args: Vec<Expr>,
+    },
+}
+
+#[derive(Debug)]
+pub enum Statement {
+    Let {
+        name: String,
+        value: Expr,
+    },
+    Expr(Expr),
+    If {
+        condition: Expr,
+        then_branch: Vec<Statement>,
+        else_branch: Option<Vec<Statement>>,
+    },
+    While {
+        condition: Expr,
+        body: Vec<Statement>,
+    },
+    // TODO: Implement for.
+    For {
+        condition: Expr,
+        body: Vec<Statement>,
+    },
+    Block(Vec<Statement>),
+}
+
+#[derive(Debug)]
+pub struct Program {
+    pub body: Vec<Statement>,
+}

@@ -11,48 +11,89 @@ pub fn lex_input(input: &str) -> Vec<Token> {
 
     while let Some(char) = chars.next() {
         match char {
-            '|' => tokens.push(make_token(TokenKind::Pipe, "|".to_string())),
-            '&' => {
-                if chars.next().is_some() {
-                    tokens.push(make_token(TokenKind::And, "&&".to_string()));
+            '|' => {
+                if chars.peek().is_some_and(|next_char| next_char == &'|') {
+                    tokens.push(make_token(TokenKind::Or, 0));
                 } else {
-                    tokens.push(make_token(TokenKind::Ampersand, "&".to_string()));
+                    tokens.push(make_token(TokenKind::Pipe, 0));
                 }
             }
-            ';' => tokens.push(make_token(TokenKind::Semicolon, ';'.to_string())),
+            '&' => {
+                if chars.peek().is_some_and(|next_char| next_char == &'&') {
+                    tokens.push(make_token(TokenKind::And, 0));
+                } else {
+                    tokens.push(make_token(TokenKind::Ampersand, 0));
+                }
+            }
+            ';' => tokens.push(make_token(TokenKind::Semicolon, 0)),
             '=' => {
-                if chars.peek().is_some() {
-                    tokens.push(make_token(TokenKind::DoubleEquals, "==".to_string()));
+                if chars.peek().is_some_and(|next_char| next_char == &'=') {
+                    tokens.push(make_token(TokenKind::EqualsEquals, 0));
                     chars.next();
                 } else {
-                    tokens.push(make_token(TokenKind::Equals, "=".to_string()));
+                    tokens.push(make_token(TokenKind::Equals, 0));
                 }
             }
             '>' => {
                 if chars.peek().is_some() {
-                    tokens.push(make_token(TokenKind::GtEquals, ">=".to_string()));
+                    tokens.push(make_token(TokenKind::GtEquals, 0));
                     chars.next();
                 } else {
-                    tokens.push(make_token(TokenKind::GreaterThan, ">".to_string()));
+                    tokens.push(make_token(TokenKind::GreaterThan, 0));
                 }
             }
             '<' => {
                 if chars.peek().is_some() {
-                    tokens.push(make_token(TokenKind::LtEquals, "<=".to_string()));
+                    tokens.push(make_token(TokenKind::LtEquals, 0));
                     chars.next();
                 } else {
-                    tokens.push(make_token(TokenKind::LessThan, "<".to_string()));
+                    tokens.push(make_token(TokenKind::LessThan, 0));
                 }
             }
-            '{' => tokens.push(make_token(TokenKind::LeftCurly, "{".to_string())),
-            '}' => tokens.push(make_token(TokenKind::RightCurly, "}".to_string())),
-            '(' => tokens.push(make_token(TokenKind::LeftParen, "(".to_string())),
-            ')' => tokens.push(make_token(TokenKind::RightParen, ")".to_string())),
+            '!' => {
+                if chars.peek().is_some_and(|next_char| next_char == &'=') {
+                    tokens.push(make_token(TokenKind::NotEquals, 0));
+                } else {
+                    tokens.push(make_token(TokenKind::Not, 0));
+                }
+            }
+            '+' => {
+                if chars.peek().is_some_and(|next_char| next_char == &'=') {
+                    tokens.push(make_token(TokenKind::PlusEquals, 0));
+                } else {
+                    tokens.push(make_token(TokenKind::Plus, 0));
+                }
+            }
+            '-' => {
+                if chars.peek().is_some_and(|next_char| next_char == &'=') {
+                    tokens.push(make_token(TokenKind::MinusEquals, 0));
+                } else {
+                    tokens.push(make_token(TokenKind::Minus, 0));
+                }
+            }
+            '*' => {
+                if chars.peek().is_some_and(|next_char| next_char == &'=') {
+                    tokens.push(make_token(TokenKind::StarEquals, 0));
+                } else {
+                    tokens.push(make_token(TokenKind::Star, 0));
+                }
+            }
+            '/' => {
+                if chars.peek().is_some_and(|next_char| next_char == &'=') {
+                    tokens.push(make_token(TokenKind::SlashEquals, 0));
+                } else {
+                    tokens.push(make_token(TokenKind::Slash, 0));
+                }
+            }
+            '{' => tokens.push(make_token(TokenKind::LeftCurly, 0)),
+            '}' => tokens.push(make_token(TokenKind::RightCurly, 0)),
+            '(' => tokens.push(make_token(TokenKind::LeftParen, 0)),
+            ')' => tokens.push(make_token(TokenKind::RightParen, 0)),
             '"' => {
                 // NOTE: This is duplicated for ', pretty stupid fix eventually.
                 let mut string = String::new();
 
-                while let Some(str_char) = chars.next() {
+                for str_char in chars.by_ref() {
                     if str_char != '"' {
                         string.push(str_char);
                     } else {
@@ -60,12 +101,12 @@ pub fn lex_input(input: &str) -> Vec<Token> {
                     }
                 }
 
-                tokens.push(make_token(TokenKind::String, string));
+                tokens.push(make_token(TokenKind::String(string), 0));
             }
             '\'' => {
                 let mut string = String::new();
 
-                while let Some(str_char) = chars.next() {
+                for str_char in chars.by_ref() {
                     if str_char != '\'' {
                         string.push(str_char);
                     } else {
@@ -73,7 +114,7 @@ pub fn lex_input(input: &str) -> Vec<Token> {
                     }
                 }
 
-                tokens.push(make_token(TokenKind::String, string));
+                tokens.push(make_token(TokenKind::String(string), 0));
             }
             _ => {
                 if matches!(char, '_' | '-' | 'A'..='z') {
@@ -95,9 +136,9 @@ pub fn lex_input(input: &str) -> Vec<Token> {
                     }
 
                     if let Some(keyword_kind) = match_keyword(ident_string.as_str()) {
-                        tokens.push(make_token(keyword_kind, ident_string));
+                        tokens.push(make_token(keyword_kind, 0));
                     } else {
-                        tokens.push(make_token(TokenKind::String, ident_string));
+                        tokens.push(make_token(TokenKind::String(ident_string), 0));
                     }
                 } else if char.is_ascii_digit() {
                     // Character is a valid number starting character.
@@ -125,7 +166,9 @@ pub fn lex_input(input: &str) -> Vec<Token> {
                         }
                     }
 
-                    tokens.push(make_token(TokenKind::Number, num_str));
+                    let num: f64 = num_str.parse().expect("Failed to parse number.");
+
+                    tokens.push(make_token(TokenKind::Number(num), 0));
                 } else if !is_whitespace(&char) {
                     // This is the fallback case so if it is not whitespace, then it is an
                     // unexpected token.
@@ -134,6 +177,8 @@ pub fn lex_input(input: &str) -> Vec<Token> {
             }
         }
     }
+
+    tokens.push(make_token(TokenKind::EOF, 0));
 
     tokens
 }
@@ -144,7 +189,14 @@ fn is_whitespace(char: &char) -> bool {
 
 fn match_keyword(keyword: &str) -> Option<TokenKind> {
     match keyword {
+        "let" => Some(TokenKind::Let),
         "if" => Some(TokenKind::If),
+        "else" => Some(TokenKind::Else),
+        "for" => Some(TokenKind::For),
+        "while" => Some(TokenKind::While),
+        "fn" => Some(TokenKind::Fn),
+        "true" => Some(TokenKind::Bool(true)),
+        "false" => Some(TokenKind::Bool(false)),
         _ => None,
     }
 }

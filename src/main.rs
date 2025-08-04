@@ -1,12 +1,37 @@
+use std::io::{self, Write};
+
+use crate::parser::Parser;
+
 pub mod lexer;
 pub mod parser;
 
 fn main() {
-    let content = include_str!("../example.txt");
+    let mut cout = io::stdout();
+    let cin = io::stdin();
 
-    let tokens = lexer::lex_input(content);
+    loop {
+        println!("\n~");
+        print!("> ");
+        cout.flush().expect("Failed to flush");
 
-    for token in tokens {
-        println!("{token}");
+        let mut input = String::new();
+
+        cin.read_line(&mut input).expect("Failed to read input.");
+
+        if input == "q\n" {
+            return;
+        }
+
+        let tokens = lexer::lex_input(&input);
+
+        for token in &tokens {
+            println!("{token}");
+        }
+
+        let mut parser = Parser::new(tokens);
+
+        let prog = parser.parse_program();
+
+        println!("Parsing done");
     }
 }
