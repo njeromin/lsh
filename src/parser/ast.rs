@@ -27,15 +27,19 @@ pub enum Expr {
         left: Box<Expr>,
         right: Box<Expr>,
     },
+    Call {
+        identifier: String,
+        args: Vec<Expr>,
+    },
 }
 
 #[derive(Debug)]
 pub enum Statement {
+    Expr(Expr),
     Let {
         name: String,
         value: Expr,
     },
-    Expr(Expr),
     If {
         condition: Expr,
         then_branch: Vec<Statement>,
@@ -45,7 +49,6 @@ pub enum Statement {
         condition: Expr,
         body: Vec<Statement>,
     },
-    // TODO: Implement for.
     For {
         condition: Expr,
         body: Vec<Statement>,
