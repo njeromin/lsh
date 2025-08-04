@@ -58,17 +58,21 @@ pub fn lex_input(input: &str) -> Vec<Token> {
                 }
             }
             '+' => {
-                if chars.peek().is_some_and(|next_char| next_char == &'=') {
-                    tokens.push(make_token(TokenKind::PlusEquals, 0));
-                } else {
-                    tokens.push(make_token(TokenKind::Plus, 0));
+                if let Some(next_char) = chars.peek() {
+                    match next_char.to_owned() {
+                        '=' => tokens.push(make_token(TokenKind::PlusEquals, 0)),
+                        ' ' => tokens.push(make_token(TokenKind::Plus, 0)),
+                        _ => (),
+                    }
                 }
             }
             '-' => {
-                if chars.peek().is_some_and(|next_char| next_char == &'=') {
-                    tokens.push(make_token(TokenKind::MinusEquals, 0));
-                } else {
-                    tokens.push(make_token(TokenKind::Minus, 0));
+                if let Some(next_char) = chars.peek() {
+                    match next_char.to_owned() {
+                        '=' => tokens.push(make_token(TokenKind::MinusEquals, 0)),
+                        ' ' => tokens.push(make_token(TokenKind::Minus, 0)),
+                        _ => (),
+                    }
                 }
             }
             '*' => {
