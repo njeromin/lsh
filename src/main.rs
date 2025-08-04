@@ -11,7 +11,7 @@ fn main() {
 
     loop {
         println!("\n~");
-        print!("> ");
+        print!("› ");
         cout.flush().expect("Failed to flush");
 
         let mut input = String::new();

@@ -27,11 +27,6 @@ pub enum Expr {
         left: Box<Expr>,
         right: Box<Expr>,
     },
-    // fn(args...)
-    Call {
-        function: Box<Expr>,
-        args: Vec<Expr>,
-    },
 }
 
 #[derive(Debug)]

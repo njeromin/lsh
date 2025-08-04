@@ -89,25 +89,11 @@ pub fn lex_input(input: &str) -> Vec<Token> {
             '}' => tokens.push(make_token(TokenKind::RightCurly, 0)),
             '(' => tokens.push(make_token(TokenKind::LeftParen, 0)),
             ')' => tokens.push(make_token(TokenKind::RightParen, 0)),
-            '"' => {
-                // NOTE: This is duplicated for ', pretty stupid fix eventually.
+            '"' | '\'' => {
                 let mut string = String::new();
 
                 for str_char in chars.by_ref() {
-                    if str_char != '"' {
-                        string.push(str_char);
-                    } else {
-                        break;
-                    }
-                }
-
-                tokens.push(make_token(TokenKind::String(string), 0));
-            }
-            '\'' => {
-                let mut string = String::new();
-
-                for str_char in chars.by_ref() {
-                    if str_char != '\'' {
+                    if str_char != char {
                         string.push(str_char);
                     } else {
                         break;

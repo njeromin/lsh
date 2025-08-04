@@ -232,7 +232,7 @@ impl Parser {
     }
 
     fn parse_primary(&mut self) -> Expr {
-        match &self.advance().kind {
+        let expr = match &self.current().kind {
             TokenKind::Number(n) => Expr::Number(*n),
             // NOTE: What happens if this an identifier.
             TokenKind::String(s) => Expr::String(s.clone()),
@@ -243,8 +243,13 @@ impl Parser {
                 expr
             }
             other => panic!("Unexpected token in primary: {other}"),
-        }
+        };
+
+        self.advance();
+
+        expr
     }
+
     fn current(&self) -> &Token {
         self.tokens
             .get(self.index)
