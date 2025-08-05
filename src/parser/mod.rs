@@ -61,9 +61,10 @@ impl Parser {
             panic!("Expected identifier after 'let'");
         };
 
-        self.advance(); // Advance to next token which should be an '='.
-
+        // Advance to next token which should be an '=' and try to consume it.
+        self.advance();
         self.consume(&TokenKind::Equals, "Expected '=' after variable name.");
+
         let expr = self.parse_expr();
         Statement::Let { name, value: expr }
     }
@@ -133,6 +134,7 @@ impl Parser {
 
     fn parse_or(&mut self) -> Expr {
         let mut expr = self.parse_and();
+
         while self.match_token(&[TokenKind::Or]) {
             let right = self.parse_and();
             expr = Expr::Binary {
@@ -141,11 +143,13 @@ impl Parser {
                 right: Box::new(right),
             };
         }
+
         expr
     }
 
     fn parse_and(&mut self) -> Expr {
         let mut expr = self.parse_equality();
+
         while self.match_token(&[TokenKind::And]) {
             let right = self.parse_equality();
             expr = Expr::Binary {
@@ -154,6 +158,7 @@ impl Parser {
                 right: Box::new(right),
             };
         }
+
         expr
     }
 

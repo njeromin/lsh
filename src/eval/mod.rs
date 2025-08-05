@@ -1,9 +1,9 @@
 pub mod value;
 
-use std::{collections::HashMap, default};
+use std::collections::HashMap;
 
 use crate::{
-    executor::value::Value,
+    eval::value::Value,
     parser::ast::{Expr, Program, Statement},
 };
 
@@ -12,14 +12,14 @@ pub struct Scope {
     vars: HashMap<String, Value>,
 }
 
-pub struct Executor {
+pub struct Evaluator {
     global_scope: Scope,
     scopes: Vec<Scope>,
 }
 
-impl Executor {
-    pub fn new() -> Executor {
-        Executor {
+impl Evaluator {
+    pub fn new() -> Evaluator {
+        Evaluator {
             global_scope: Scope::default(),
             scopes: vec![],
         }
@@ -34,13 +34,13 @@ impl Executor {
             match statement {
                 Statement::Expr(expr) => {}
                 Statement::Let { name, value } => {
-                    // if let Some(some_scope) = scope {
-                    //     let val = self.evaluate_expr(value, Some(&mut *some_scope));
-                    //     some_scope.vars.insert(name, val);
-                    // } else {
-                    //     let val = self.evaluate_expr(value, None);
-                    //     self.global_scope.vars.insert(name, val);
-                    // }
+                    if let Some(some_scope) = scope {
+                        let val = self.evaluate_expr(value, Some(&some_scope));
+                        some_scope.vars.insert(name, val);
+                    } else {
+                        let val = self.evaluate_expr(value, None);
+                        self.global_scope.vars.insert(name, val);
+                    }
                 }
                 Statement::If {
                     condition,
@@ -58,12 +58,12 @@ impl Executor {
         }
     }
 
-    fn evaluate_expr(&self, expr: Expr, scope: Option<&mut Scope>) -> Value {
+    fn evaluate_expr(&self, expr: Expr, scope: Option<&Scope>) -> Value {
         Value::String("gurt".to_string())
     }
 }
 
-impl Default for Executor {
+impl Default for Evaluator {
     fn default() -> Self {
         Self::new()
     }

@@ -1,8 +1,8 @@
 use std::io::{self, Write};
 
-use crate::{executor::Executor, parser::Parser};
+use crate::{eval::Evaluator, parser::Parser};
 
-pub mod executor;
+pub mod eval;
 pub mod lexer;
 pub mod parser;
 
@@ -23,10 +23,6 @@ fn main() {
             continue;
         }
 
-        if input == "q\n" {
-            return;
-        }
-
         let tokens = lexer::lex_input(input.trim());
 
         for token in &tokens {
@@ -39,7 +35,7 @@ fn main() {
 
         println!("Parsing done");
 
-        let mut executor = Executor::new();
+        let mut executor = Evaluator::new();
 
         executor.execute(prog);
 
