@@ -1,3 +1,4 @@
+pub mod proc;
 pub mod value;
 
 use std::collections::HashMap;

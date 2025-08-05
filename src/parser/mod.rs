@@ -7,6 +7,10 @@ use crate::{
 
 pub mod ast;
 
+fn cmp_kinds(kind_x: &TokenKind, kind_y: &TokenKind) -> bool {
+    mem::discriminant(kind_x) == mem::discriminant(kind_y)
+}
+
 pub struct Parser {
     tokens: Vec<Token>,
     index: usize,
@@ -20,7 +24,7 @@ impl Parser {
     pub fn parse_program(&mut self) -> Program {
         let mut body = vec![];
 
-        while !self.check(&TokenKind::EOF) {
+        while !self.check_current(&TokenKind::EOF) {
             body.push(self.parse_statement());
         }
 
@@ -38,7 +42,7 @@ impl Parser {
 
                 let mut statements = vec![];
 
-                while !self.check(&TokenKind::RightCurly) {
+                while !self.check_current(&TokenKind::RightCurly) {
                     statements.push(self.parse_statement());
                 }
 
@@ -240,7 +244,18 @@ impl Parser {
         let expr = match &self.current().kind {
             TokenKind::Number(n) => Expr::Number(*n),
             // NOTE: What happens if this an identifier.
-            TokenKind::String(s) => Expr::String(s.clone()),
+            TokenKind::String(s) => {
+                if let Some(next_tok) = self.tokens.get(self.index + 1)
+                    && cmp_kinds(&next_tok.kind, &TokenKind::String(String::new()))
+                {
+                    Expr::Call {
+                        identifier: s.to_owned(),
+                        args: vec![],
+                    }
+                } else {
+                    Expr::String(s.clone())
+                }
+            }
             TokenKind::Bool(value) => Expr::Bool(*value),
             TokenKind::LeftParen => {
                 let expr = self.parse_expr();
@@ -270,13 +285,13 @@ impl Parser {
         self.current()
     }
 
-    fn check(&self, kind: &TokenKind) -> bool {
-        mem::discriminant(&self.current().kind) == mem::discriminant(kind)
+    fn check_current(&self, kind_y: &TokenKind) -> bool {
+        cmp_kinds(&self.current().kind, kind_y)
     }
 
     fn match_token(&mut self, kinds: &[TokenKind]) -> bool {
         for kind in kinds {
-            if self.check(kind) {
+            if self.check_current(kind) {
                 self.advance();
                 return true;
             }
@@ -286,7 +301,7 @@ impl Parser {
     }
 
     fn consume(&mut self, kind: &TokenKind, panic_msg: &str) -> Token {
-        if self.check(kind) {
+        if self.check_current(kind) {
             return self.advance().to_owned();
         }
 
