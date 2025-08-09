@@ -1,4 +1,7 @@
-use std::io::{self, Write};
+use std::{
+    io::{self, Write},
+    path::Path,
+};
 
 use crate::{eval::Evaluator, parser::Parser};
 
@@ -10,8 +13,13 @@ fn main() {
     let mut cout = io::stdout();
     let cin = io::stdin();
 
+    let cwd = Path::new("~");
+
     loop {
-        println!("\n~");
+        println!(
+            "\n{}",
+            cwd.to_str().expect("Failed to convert cwd to string.")
+        );
         print!("› ");
         cout.flush().expect("Failed to flush");
 
