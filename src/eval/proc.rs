@@ -1,5 +1,10 @@
 use std::process::Command;
 
-fn spawn_proc(cmd: &str, args: Vec<&str>) {
-    Command::new(cmd).args(args).spawn();
+pub fn spawn_proc(cmd: &str, args: Vec<String>) {
+    Command::new(cmd)
+        .args(args)
+        .spawn()
+        .expect("Ts not working")
+        .wait()
+        .expect("Ts not working");
 }

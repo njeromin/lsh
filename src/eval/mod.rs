@@ -1,7 +1,7 @@
 pub mod proc;
 pub mod value;
 
-use std::collections::HashMap;
+use std::{collections::HashMap, process};
 
 use crate::{
     eval::value::Value,
@@ -26,21 +26,32 @@ impl Evaluator {
         }
     }
 
-    pub fn execute(&mut self, prog: Program) {
-        self.execute_statements(prog.body, None);
+    pub fn evaluate(&mut self, prog: Program) {
+        self.evaluate_statements(prog.body, None);
     }
 
-    fn execute_statements(&mut self, statements: Vec<Statement>, scope: Option<&mut Scope>) {
+    fn evaluate_statements(&mut self, statements: Vec<Statement>, scope_index: Option<usize>) {
         for statement in statements {
             match statement {
-                Statement::Expr(expr) => {}
+                Statement::Expr(expr) => {
+                    self.evaluate_expr(&expr, scope_index);
+                }
                 Statement::Let { name, value } => {
-                    if let Some(some_scope) = scope {
-                        let val = self.evaluate_expr(value, Some(&some_scope));
-                        some_scope.vars.insert(name, val);
+                    // Handle let statement
+
+                    if let Some(some_scope_index) = scope_index {
+                        let expr = self.evaluate_expr(&value, Some(some_scope_index));
+
+                        let scope = self
+                            .scopes
+                            .get_mut(some_scope_index)
+                            .expect("Failed to get scope at index {some_scope_index}.");
+
+                        scope.vars.insert(name, expr);
                     } else {
-                        let val = self.evaluate_expr(value, None);
-                        self.global_scope.vars.insert(name, val);
+                        self.global_scope
+                            .vars
+                            .insert(name, self.evaluate_expr(&value, None));
                     }
                 }
                 Statement::If {
@@ -51,16 +62,37 @@ impl Evaluator {
                 Statement::While { condition, body } => {}
                 Statement::For { condition, body } => {}
                 Statement::Block(block) => {
-                    let mut block_scope = Scope::default();
-
-                    self.execute_statements(block, Some(&mut block_scope));
+                    let block_scope_index = self.make_scope();
+                    self.evaluate_statements(block, Some(block_scope_index));
                 }
             }
         }
     }
 
-    fn evaluate_expr(&self, expr: Expr, scope: Option<&Scope>) -> Value {
-        Value::String("gurt".to_string())
+    fn make_scope(&mut self) -> usize {
+        self.scopes.push(Scope::default());
+
+        self.scopes.len()
+    }
+
+    fn evaluate_expr(&self, expr: &Expr, scope_index: Option<usize>) -> Value {
+        match expr {
+            Expr::Call { identifier, args } => {
+                let string_args = args
+                    .iter()
+                    .map(|i| self.evaluate_expr(i, scope_index).to_string())
+                    .collect();
+
+                if identifier == "exit" {
+                    process::exit(0); // TODO: Make this cleaner
+                }
+
+                proc::spawn_proc(identifier, string_args);
+
+                Value::Null
+            }
+            _ => Value::String("Gurt".to_string()),
+        }
     }
 }
 

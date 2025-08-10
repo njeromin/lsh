@@ -13,6 +13,7 @@ fn main() {
     let mut cout = io::stdout();
     let cin = io::stdin();
 
+    let mut eval = Evaluator::new();
     let cwd = Path::new("~");
 
     loop {
@@ -43,9 +44,7 @@ fn main() {
 
         println!("Parsing done");
 
-        let mut executor = Evaluator::new();
-
-        executor.execute(prog);
+        eval.evaluate(prog);
 
         println!("Executing done");
     }
