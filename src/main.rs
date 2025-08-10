@@ -8,6 +8,7 @@ use crate::{eval::Evaluator, parser::Parser};
 pub mod eval;
 pub mod lexer;
 pub mod parser;
+pub mod ui;
 
 fn main() {
     let mut cout = io::stdout();

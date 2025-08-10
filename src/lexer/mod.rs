@@ -82,13 +82,14 @@ pub fn lex_input(input: &str) -> Vec<Token> {
                     tokens.push(make_token(TokenKind::Star, 0));
                 }
             }
-            '/' => {
-                if chars.peek().is_some_and(|next_char| next_char == &'=') {
-                    tokens.push(make_token(TokenKind::SlashEquals, 0));
-                } else {
-                    tokens.push(make_token(TokenKind::Slash, 0));
-                }
-            }
+            // TODO: Fix as this could also be part of a string/command
+            // '/' => {
+            //     if chars.peek().is_some_and(|next_char| next_char == &'=') {
+            //         tokens.push(make_token(TokenKind::SlashEquals, 0));
+            //     } else {
+            //         tokens.push(make_token(TokenKind::Slash, 0));
+            //     }
+            // }
             '{' => tokens.push(make_token(TokenKind::LeftCurly, 0)),
             '}' => tokens.push(make_token(TokenKind::RightCurly, 0)),
             '(' => tokens.push(make_token(TokenKind::LeftParen, 0)),
@@ -107,13 +108,13 @@ pub fn lex_input(input: &str) -> Vec<Token> {
                 tokens.push(make_token(TokenKind::String(string), 0));
             }
             _ => {
-                if matches!(char, '_' | '-' | 'A'..='z') {
+                if matches!(char, '/' | '_' | '-' | 'A'..='z') {
                     // Character is a valid identifier starting character.
 
                     let mut ident_string = String::from(char);
 
                     while let Some(ident_char) = chars.peek() {
-                        if matches!(ident_char, '_' | '-' | 'A'..='z' | '0'..='9') {
+                        if matches!(ident_char, '/' | '_' | '-' | 'A'..='z' | '0'..='9') {
                             // Character is a valid identifier character.
 
                             ident_string.push(ident_char.to_owned());
