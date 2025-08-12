@@ -7,7 +7,7 @@ use std::{
 
 use crate::{eval::Evaluator, paths, ui::informer};
 
-// TODO: Stop mixing str and string, stop repeating stdout calls
+// TODO: This could probably really just go in evaluator, stop mixing str and string, stop repeating stdout calls
 pub fn exec_cmd(evaluator: &mut Evaluator, input_cmd: &str, input_args: Vec<String>) {
     let unaliased_cmd = evaluator.resolve_alias(String::from(input_cmd));
     let (resolved_cmd, resolved_args) = resolve_cmd(&unaliased_cmd);
@@ -30,6 +30,11 @@ pub fn exec_cmd(evaluator: &mut Evaluator, input_cmd: &str, input_args: Vec<Stri
             } else {
                 informer::print_error(&mut stdout(), "An argument is required.");
             }
+        }
+        "aliases" => {
+            evaluator.aliases.iter().for_each(|(alias, cmd)| {
+                println!("{alias}: {cmd}");
+            });
         }
         "cd" => {
             // TODO: Implement cd correctly.
