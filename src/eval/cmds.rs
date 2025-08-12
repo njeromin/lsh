@@ -32,6 +32,7 @@ pub fn exec_cmd(evaluator: &mut Evaluator, input_cmd: &str, input_args: Vec<Stri
             }
         }
         "cd" => {
+            // TODO: Implement cd correctly.
             if args.len() > 1 {
                 informer::print_error(&mut stdout(), "Too many arguments.");
                 return;

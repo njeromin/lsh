@@ -3,6 +3,8 @@ use std::{
     io::{self, Write},
 };
 
+use which::which;
+
 use crate::{eval::Evaluator, parser::Parser};
 
 pub mod eval;
@@ -22,6 +24,11 @@ fn main() {
     let cin = io::stdin();
 
     let mut eval = Evaluator::new();
+
+    // TODO: Make this an option.
+    if which("eza").is_ok() {
+        eval.set_alias(String::from("ls"), String::from("eza --icons"));
+    }
 
     loop {
         ui::print_prompt(&mut cout);
