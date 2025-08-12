@@ -251,6 +251,7 @@ impl Parser {
                 // NOTE: This could just be peek?
                 while let Some(next_tok) = self.tokens.get(self.index + 1)
                     && !cmp_kinds(&next_tok.kind, &TokenKind::EOF)
+                    && !cmp_kinds(&next_tok.kind, &TokenKind::ExprSeparator)
                 {
                     // This should really just use some form of parse_primary/parse_expr.
                     let sub_expr = match &next_tok.kind {

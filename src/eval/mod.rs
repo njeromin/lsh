@@ -16,7 +16,6 @@ pub struct Scope {
 pub struct Evaluator {
     global_scope: Scope,
     scopes: Vec<Scope>,
-    environment: HashMap<String, String>,
     aliases: HashMap<String, String>,
 }
 
@@ -25,7 +24,6 @@ impl Evaluator {
         Evaluator {
             global_scope: Scope::default(),
             scopes: vec![],
-            environment: HashMap::new(),
             aliases: HashMap::new(),
         }
     }

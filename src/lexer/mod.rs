@@ -25,7 +25,7 @@ pub fn lex_input(input: &str) -> Vec<Token> {
                     tokens.push(make_token(TokenKind::Ampersand, 0));
                 }
             }
-            ';' => tokens.push(make_token(TokenKind::Semicolon, 0)),
+            ';' => tokens.push(make_token(TokenKind::ExprSeparator, 0)),
             '=' => {
                 if chars.peek().is_some_and(|next_char| next_char == &'=') {
                     tokens.push(make_token(TokenKind::EqualsEquals, 0));
@@ -137,6 +137,7 @@ pub fn lex_input(input: &str) -> Vec<Token> {
 
                 tokens.push(make_token(TokenKind::String(string), 0));
             }
+            '\n' => tokens.push(make_token(TokenKind::ExprSeparator, 0)),
             _ => {
                 if matches!(char, '~' | '.' | '/' | '_' | '-' | 'A'..='z') {
                     // Character is a valid identifier starting character.

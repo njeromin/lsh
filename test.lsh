@@ -1,0 +1,5 @@
+echo test
+
+alias gurt "echo gurt"
+
+gurt

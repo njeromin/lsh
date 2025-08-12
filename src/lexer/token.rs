@@ -18,7 +18,6 @@ pub enum TokenKind {
     Ampersand,
     And,
     Or,
-    Semicolon,
     Equals,
     EqualsEquals,
     GreaterThan,
@@ -37,6 +36,7 @@ pub enum TokenKind {
     RightCurly,
     LeftParen,
     RightParen,
+    ExprSeparator,
     EOF,
 }
 
@@ -63,7 +63,6 @@ impl fmt::Display for TokenKind {
                 Self::Ampersand => "Ampersand".to_string(),
                 Self::And => "And".to_string(),
                 Self::Or => "Or".to_string(),
-                Self::Semicolon => "Semicolon".to_string(),
                 Self::Equals => "Equals".to_string(),
                 Self::EqualsEquals => "EqualsEquals".to_string(),
                 Self::GreaterThan => "GreaterThan".to_string(),
@@ -82,6 +81,7 @@ impl fmt::Display for TokenKind {
                 Self::RightCurly => "RightCurly".to_string(),
                 Self::LeftParen => "LeftParen".to_string(),
                 Self::RightParen => "RightParen".to_string(),
+                Self::ExprSeparator => "ExprSeparator".to_string(),
                 Self::EOF => "EOF".to_string(),
             },
         )

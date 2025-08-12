@@ -1,11 +1,11 @@
 use std::{
-    env,
+    env, fs,
     io::{self, stdout},
     path::PathBuf,
     process::{self, Command},
 };
 
-use crate::{eval::Evaluator, paths, ui::informer};
+use crate::{eval::Evaluator, lexer, parser::Parser, paths, ui::informer};
 
 // TODO: This could probably really just go in evaluator, stop mixing str and string, stop repeating stdout calls
 pub fn exec_cmd(evaluator: &mut Evaluator, input_cmd: &str, input_args: Vec<String>) {
@@ -20,21 +20,64 @@ pub fn exec_cmd(evaluator: &mut Evaluator, input_cmd: &str, input_args: Vec<Stri
             // NOTE: This should not be how the shell exits, it should be cleaner.
             process::exit(0);
         }
-        "alias" => {
-            if let Some(arg1) = args.first() {
-                if let Some(arg2) = args.get(1) {
-                    evaluator.set_alias(arg1.to_string(), arg2.to_string());
-                } else {
-                    informer::print_error(&mut stdout(), "A second argument is required.");
+        "source" => {
+            if args.len() > 1 {
+                informer::print_error(&mut stdout(), "Too many arguments.");
+                return;
+            }
+
+            if let Some(arg) = args.first() {
+                // NOTE: Does this need to happen?
+                let path = paths::expand_path(PathBuf::from(arg));
+
+                match fs::read_to_string(path) {
+                    Ok(input) => {
+                        let tokens = lexer::lex_input(input.trim());
+
+                        let mut parser = Parser::new(tokens);
+
+                        let prog = parser.parse_program();
+
+                        evaluator.evaluate(prog);
+                    }
+                    Err(e) => {
+                        informer::print_error(&mut stdout(), e.to_string().as_str());
+                    }
                 }
             } else {
                 informer::print_error(&mut stdout(), "An argument is required.");
             }
         }
-        "aliases" => {
-            evaluator.aliases.iter().for_each(|(alias, cmd)| {
-                println!("{alias}: {cmd}");
-            });
+        // TODO: Rewrite some of this - so many branches for what.
+        "alias" => {
+            if let Some(subcmd) = args.first() {
+                match subcmd.as_str() {
+                    "list" => {
+                        evaluator.aliases.iter().for_each(|(alias, cmd)| {
+                            println!("{alias}: {cmd}");
+                        });
+                    }
+                    "set" => {
+                        if let Some(arg1) = args.get(1) {
+                            if let Some(arg2) = args.get(2) {
+                                evaluator.set_alias(arg1.to_string(), arg2.to_string());
+                            } else {
+                                informer::print_error(
+                                    &mut stdout(),
+                                    "A second argument is required.",
+                                );
+                            }
+                        } else {
+                            informer::print_error(&mut stdout(), "A second argument is required.");
+                        }
+                    }
+                    _ => {
+                        informer::print_error(&mut stdout(), "A subcommand (set/list) is required.")
+                    }
+                }
+            } else {
+                informer::print_error(&mut stdout(), "A subcommand (set/list) is required.");
+            }
         }
         "cd" => {
             // TODO: Implement cd correctly.
