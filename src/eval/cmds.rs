@@ -1,11 +1,13 @@
 use std::{
+    env,
     io::{self, stdout},
+    path::PathBuf,
     process::{self, Command},
 };
 
-use crate::{eval::Evaluator, ui::informer};
+use crate::{eval::Evaluator, paths, ui::informer};
 
-// TODO: Stop mixing str and string
+// TODO: Stop mixing str and string, stop repeating stdout calls
 pub fn exec_cmd(evaluator: &mut Evaluator, input_cmd: &str, input_args: Vec<String>) {
     let unaliased_cmd = evaluator.resolve_alias(String::from(input_cmd));
     let (resolved_cmd, resolved_args) = resolve_cmd(&unaliased_cmd);
@@ -23,10 +25,30 @@ pub fn exec_cmd(evaluator: &mut Evaluator, input_cmd: &str, input_args: Vec<Stri
                 if let Some(arg2) = args.get(1) {
                     evaluator.set_alias(arg1.to_string(), arg2.to_string());
                 } else {
-                    informer::print_error(&mut stdout(), "Unknown first argument.");
+                    informer::print_error(&mut stdout(), "A second argument is required.");
                 }
             } else {
-                informer::print_error(&mut stdout(), "Unknown first argument.");
+                informer::print_error(&mut stdout(), "An argument is required.");
+            }
+        }
+        "cd" => {
+            if args.len() > 1 {
+                informer::print_error(&mut stdout(), "Too many arguments.");
+                return;
+            }
+
+            if let Some(arg) = args.first() {
+                // NOTE: Does this need to happen?
+                let path = paths::expand_path(PathBuf::from(arg));
+
+                env::set_current_dir(&path).unwrap_or_else(|_| {
+                    informer::print_error(
+                        &mut stdout(),
+                        format!("Failed to change directory to '{arg}'").as_str(),
+                    );
+                });
+            } else {
+                informer::print_error(&mut stdout(), "An argument is required.");
             }
         }
         _ => {

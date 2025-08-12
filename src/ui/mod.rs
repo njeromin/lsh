@@ -30,8 +30,13 @@ fn fmt_cwd(cwd: PathBuf) -> String {
             .to_str()
             .expect("Failed to convert stripped current working directory to string.");
 
-        let mut tilded_value = String::from("~/");
-        tilded_value.push_str(stripped_cwd_str);
+        let mut tilded_value = String::from("~");
+
+        if !stripped_cwd_str.is_empty() {
+            tilded_value.push('/');
+            tilded_value.push_str(stripped_cwd_str);
+        }
+
         return tilded_value;
     }
 

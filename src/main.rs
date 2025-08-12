@@ -8,6 +8,7 @@ use crate::{eval::Evaluator, parser::Parser};
 pub mod eval;
 pub mod lexer;
 pub mod parser;
+pub mod paths;
 pub mod ui;
 
 fn main() {
