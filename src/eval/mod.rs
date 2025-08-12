@@ -1,11 +1,11 @@
-pub mod proc;
+pub mod cmds;
 pub mod value;
 
-use std::{collections::HashMap, process};
+use std::collections::HashMap;
 
 use crate::{
     eval::value::Value,
-    parser::ast::{Expr, Program, Statement},
+    parser::ast::{BinaryOp, Expr, Program, Statement},
 };
 
 #[derive(Default)]
@@ -16,6 +16,8 @@ pub struct Scope {
 pub struct Evaluator {
     global_scope: Scope,
     scopes: Vec<Scope>,
+    environment: HashMap<String, String>,
+    aliases: HashMap<String, String>,
 }
 
 impl Evaluator {
@@ -23,7 +25,22 @@ impl Evaluator {
         Evaluator {
             global_scope: Scope::default(),
             scopes: vec![],
+            environment: HashMap::new(),
+            aliases: HashMap::new(),
         }
+    }
+
+    // TODO: Rewrite better
+    pub fn resolve_alias(&self, cmd: String) -> String {
+        if let Some(resolved_alias) = self.aliases.get(cmd.as_str()) {
+            resolved_alias.to_owned()
+        } else {
+            cmd
+        }
+    }
+
+    pub fn set_alias(&mut self, name: String, value: String) -> Option<String> {
+        self.aliases.insert(name, value)
     }
 
     pub fn evaluate(&mut self, prog: Program) {
@@ -49,9 +66,8 @@ impl Evaluator {
 
                         scope.vars.insert(name, expr);
                     } else {
-                        self.global_scope
-                            .vars
-                            .insert(name, self.evaluate_expr(&value, None));
+                        let expr_res = self.evaluate_expr(&value, None);
+                        self.global_scope.vars.insert(name, expr_res);
                     }
                 }
                 Statement::If {
@@ -75,7 +91,7 @@ impl Evaluator {
         self.scopes.len()
     }
 
-    fn evaluate_expr(&self, expr: &Expr, scope_index: Option<usize>) -> Value {
+    fn evaluate_expr(&mut self, expr: &Expr, scope_index: Option<usize>) -> Value {
         match expr {
             Expr::Call { identifier, args } => {
                 let string_args = args
@@ -83,15 +99,44 @@ impl Evaluator {
                     .map(|i| self.evaluate_expr(i, scope_index).to_string())
                     .collect();
 
-                if identifier == "exit" {
-                    process::exit(0); // TODO: Make this cleaner
-                }
-
-                proc::spawn_proc(identifier, string_args);
+                cmds::exec_cmd(self, identifier, string_args);
 
                 Value::Null
             }
-            _ => Value::String("Gurt".to_string()),
+            Expr::Variable(var_name) => {
+                // TODO: Clean up.
+                if let Some(some_scope_index) = scope_index
+                    && let Some(scope) = self.scopes.get(some_scope_index)
+                    && let Some(var) = scope.vars.get(var_name)
+                {
+                    return var.to_owned();
+                }
+
+                if let Some(global_var) = self.global_scope.vars.get(var_name) {
+                    return global_var.to_owned();
+                }
+
+                panic!("Unknown variable {var_name}.");
+            }
+            Expr::Binary {
+                op,
+                left: left_box,
+                right: right_box,
+            } => {
+                // TODO: Implement.
+
+                let left_res = self.evaluate_expr(left_box, scope_index);
+                let right_res = self.evaluate_expr(right_box, scope_index);
+
+                // match op {
+                //     BinaryOp::Add => {}
+                // }
+
+                Value::Null
+            }
+            Expr::String(string) => Value::String(string.to_owned()),
+            Expr::Number(num) => Value::Number(*num),
+            Expr::Bool(bool) => Value::Bool(*bool),
         }
     }
 }

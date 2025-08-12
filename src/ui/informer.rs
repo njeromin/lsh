@@ -1,10 +1,15 @@
-use std::io::Stdout;
+use std::io::{Stdout, Write};
 
 use crossterm::{
-    queue,
+    cursor, queue,
     style::{PrintStyledContent, Stylize},
 };
 
 pub fn print_error(stdout: &mut Stdout, err_msg: &str) {
-    queue!(stdout, PrintStyledContent(err_msg.red())).expect("Ts broken");
+    queue!(
+        stdout,
+        PrintStyledContent(err_msg.red()),
+        cursor::MoveToNextLine(1)
+    )
+    .expect("Failed to print error");
 }

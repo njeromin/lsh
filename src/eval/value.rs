@@ -1,5 +1,6 @@
 use std::fmt;
 
+#[derive(Clone)]
 pub enum Value {
     String(String),
     Number(f64),
@@ -7,18 +8,14 @@ pub enum Value {
     Null,
 }
 
-impl fmt::Display for Value {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "{}",
-            match self {
-                Self::String(str) => str.to_owned(),
-                Self::Number(num) => num.to_string(),
-                Self::Bool(bool) => bool.to_string(),
-                Self::Null => "null".to_string(),
-            }
-        )
+impl ToString for Value {
+    fn to_string(&self) -> String {
+        match self {
+            Self::String(str) => str.to_owned(),
+            Self::Number(num) => num.to_string(),
+            Self::Bool(bool) => bool.to_string(),
+            Self::Null => "Null".to_string(),
+        }
     }
 }
 

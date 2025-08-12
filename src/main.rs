@@ -10,6 +10,8 @@ pub mod lexer;
 pub mod parser;
 pub mod ui;
 
+const DEBUG: bool = false;
+
 fn main() {
     let mut cout = io::stdout();
     let cin = io::stdin();
@@ -18,35 +20,42 @@ fn main() {
     let cwd = Path::new("~");
 
     loop {
-        println!(
-            "\n{}",
-            cwd.to_str().expect("Failed to convert cwd to string.")
+        ui::print_prompt(
+            &mut cout,
+            cwd.to_str().expect("Failed to convert path to str."),
         );
-        print!("› ");
+
         cout.flush().expect("Failed to flush");
 
         let mut input = String::new();
 
         cin.read_line(&mut input).expect("Failed to read input.");
 
+        // If input is empty, skip all following steps.
         if input.is_empty() {
             continue;
         }
 
         let tokens = lexer::lex_input(input.trim());
 
-        for token in &tokens {
-            println!("{token}");
+        if DEBUG {
+            for token in &tokens {
+                println!("{token}");
+            }
         }
 
         let mut parser = Parser::new(tokens);
 
         let prog = parser.parse_program();
 
-        println!("Parsing done");
+        if DEBUG {
+            println!("Parsing done");
+        }
 
         eval.evaluate(prog);
 
-        println!("Executing done");
+        if DEBUG {
+            println!("Executing done");
+        }
     }
 }

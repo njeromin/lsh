@@ -243,17 +243,30 @@ impl Parser {
     fn parse_primary(&mut self) -> Expr {
         let expr = match &self.current().kind {
             TokenKind::Number(n) => Expr::Number(*n),
-            // NOTE: What happens if this an identifier.
+            // NOTE: Do strings actually have to be handled separately to calls?
             TokenKind::String(s) => {
-                if let Some(next_tok) = self.tokens.get(self.index + 1)
-                    && cmp_kinds(&next_tok.kind, &TokenKind::String(String::new()))
+                let call_ident = s.to_owned();
+                let mut args = vec![];
+
+                // NOTE: This could just be peek?
+                while let Some(next_tok) = self.tokens.get(self.index + 1)
+                    && !cmp_kinds(&next_tok.kind, &TokenKind::EOF)
                 {
-                    Expr::Call {
-                        identifier: s.to_owned(),
-                        args: vec![],
-                    }
-                } else {
-                    Expr::String(s.clone())
+                    let sub_expr = match &next_tok.kind {
+                        TokenKind::String(s) => Expr::String(s.to_owned()),
+                        TokenKind::Number(n) => Expr::Number(*n),
+                        TokenKind::Bool(b) => Expr::Bool(*b),
+                        _ => break,
+                    };
+
+                    args.push(sub_expr);
+
+                    self.advance();
+                }
+
+                Expr::Call {
+                    identifier: call_ident,
+                    args,
                 }
             }
             TokenKind::Bool(value) => Expr::Bool(*value),
@@ -298,6 +311,13 @@ impl Parser {
         }
 
         false
+    }
+
+    fn is_valid_arg(&mut self, kind: &TokenKind) -> bool {
+        matches!(
+            kind,
+            TokenKind::String(_) | TokenKind::Number(_) | TokenKind::Bool(_)
+        )
     }
 
     fn consume(&mut self, kind: &TokenKind, panic_msg: &str) -> Token {
