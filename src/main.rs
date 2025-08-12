@@ -1,6 +1,6 @@
 use std::{
+    env,
     io::{self, Write},
-    path::Path,
 };
 
 use crate::{eval::Evaluator, parser::Parser};
@@ -10,20 +10,20 @@ pub mod lexer;
 pub mod parser;
 pub mod ui;
 
-const DEBUG: bool = false;
-
 fn main() {
+    let mut debug: bool = false;
+
+    if let Ok(debug_var) = env::var("DEBUG") {
+        debug = matches!(debug_var.as_str(), "1");
+    }
+
     let mut cout = io::stdout();
     let cin = io::stdin();
 
     let mut eval = Evaluator::new();
-    let cwd = Path::new("~");
 
     loop {
-        ui::print_prompt(
-            &mut cout,
-            cwd.to_str().expect("Failed to convert path to str."),
-        );
+        ui::print_prompt(&mut cout);
 
         cout.flush().expect("Failed to flush");
 
@@ -31,14 +31,14 @@ fn main() {
 
         cin.read_line(&mut input).expect("Failed to read input.");
 
-        // If input is empty, skip all following steps.
+        // If input is empty, skip all following steps as there won't be anything to execute.
         if input.is_empty() {
             continue;
         }
 
         let tokens = lexer::lex_input(input.trim());
 
-        if DEBUG {
+        if debug {
             for token in &tokens {
                 println!("{token}");
             }
@@ -48,13 +48,13 @@ fn main() {
 
         let prog = parser.parse_program();
 
-        if DEBUG {
+        if debug {
             println!("Parsing done");
         }
 
         eval.evaluate(prog);
 
-        if DEBUG {
+        if debug {
             println!("Executing done");
         }
     }

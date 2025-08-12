@@ -21,6 +21,7 @@ pub enum Expr {
     Bool(bool),
     String(String),
     Variable(String),
+    EnvVar(String),
     // a + b, a - b, etc.
     Binary {
         op: BinaryOp,

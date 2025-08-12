@@ -82,6 +82,36 @@ pub fn lex_input(input: &str) -> Vec<Token> {
                     tokens.push(make_token(TokenKind::Star, 0));
                 }
             }
+            '$' => {
+                if chars
+                    .peek()
+                    .is_some_and(|next_char| matches!(next_char, '_' | 'A'..='z'))
+                {
+                    let mut var_string = String::from(
+                        // Using expect here but this should never fail.
+                        chars
+                            .next()
+                            .expect("Failed to get starting character of environment variable."),
+                    );
+
+                    while let Some(var_char) = chars.peek() {
+                        if matches!(var_char, '_' | 'A'..='z') {
+                            // Character is a valid identifier character.
+
+                            var_string.push(var_char.to_owned());
+                            // Skip forward one character as only peek was used
+                            // previously.
+                            chars.next();
+                        } else {
+                            break;
+                        }
+                    }
+
+                    tokens.push(make_token(TokenKind::EnvVar(var_string), 0));
+                } else {
+                    panic!("Unexpected token");
+                }
+            }
             // TODO: Fix as this could also be part of a string/command
             // '/' => {
             //     if chars.peek().is_some_and(|next_char| next_char == &'=') {

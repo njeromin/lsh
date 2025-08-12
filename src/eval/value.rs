@@ -14,7 +14,7 @@ impl ToString for Value {
             Self::String(str) => str.to_owned(),
             Self::Number(num) => num.to_string(),
             Self::Bool(bool) => bool.to_string(),
-            Self::Null => "Null".to_string(),
+            Self::Null => "".to_string(),
         }
     }
 }

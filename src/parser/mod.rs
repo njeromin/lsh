@@ -252,10 +252,12 @@ impl Parser {
                 while let Some(next_tok) = self.tokens.get(self.index + 1)
                     && !cmp_kinds(&next_tok.kind, &TokenKind::EOF)
                 {
+                    // This should really just use some form of parse_primary/parse_expr.
                     let sub_expr = match &next_tok.kind {
                         TokenKind::String(s) => Expr::String(s.to_owned()),
                         TokenKind::Number(n) => Expr::Number(*n),
                         TokenKind::Bool(b) => Expr::Bool(*b),
+                        TokenKind::EnvVar(env_var) => Expr::EnvVar(env_var.to_owned()),
                         _ => break,
                     };
 
@@ -269,6 +271,7 @@ impl Parser {
                     args,
                 }
             }
+            TokenKind::EnvVar(env_var) => Expr::EnvVar(env_var.to_owned()),
             TokenKind::Bool(value) => Expr::Bool(*value),
             TokenKind::LeftParen => {
                 let expr = self.parse_expr();

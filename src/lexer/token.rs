@@ -2,6 +2,7 @@ use std::fmt;
 
 #[derive(Debug, Clone)]
 pub enum TokenKind {
+    EnvVar(String),
     String(String),
     Number(f64),
     Bool(bool),
@@ -46,6 +47,7 @@ impl fmt::Display for TokenKind {
             f,
             "TokenKind::{}",
             match self {
+                Self::EnvVar(var) => format!("EnvVar({var})"),
                 Self::String(str) => format!("String({str})"),
                 Self::Number(num) => format!("Number({num})"),
                 Self::Bool(bool) => format!("Bool({bool})"),

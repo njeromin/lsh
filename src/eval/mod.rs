@@ -1,7 +1,7 @@
 pub mod cmds;
 pub mod value;
 
-use std::collections::HashMap;
+use std::{collections::HashMap, env};
 
 use crate::{
     eval::value::Value,
@@ -117,6 +117,14 @@ impl Evaluator {
                 }
 
                 panic!("Unknown variable {var_name}.");
+            }
+            Expr::EnvVar(var_name) => {
+                if let Ok(env_var) = env::var(var_name) {
+                    // Environment variables are resolved into strings.
+                    Value::String(env_var)
+                } else {
+                    Value::Null
+                }
             }
             Expr::Binary {
                 op,
