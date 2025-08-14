@@ -107,7 +107,7 @@ pub fn lex_input(input: &str) -> Vec<Token> {
                         }
                     }
 
-                    tokens.push(make_token(TokenKind::EnvVar(var_string), 0));
+                    tokens.push(make_token(TokenKind::Variable(var_string), 0));
                 } else {
                     panic!("Unexpected token");
                 }

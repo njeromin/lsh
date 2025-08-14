@@ -102,21 +102,20 @@ impl Evaluator {
                 Value::Null
             }
             Expr::Variable(var_name) => {
-                // TODO: Clean up.
+                // Try to find local variable.
                 if let Some(some_scope_index) = scope_index
                     && let Some(scope) = self.scopes.get(some_scope_index)
-                    && let Some(var) = scope.vars.get(var_name)
+                    && let Some(some_value) = scope.vars.get(var_name)
                 {
-                    return var.to_owned();
+                    return some_value.to_owned();
                 }
 
-                if let Some(global_var) = self.global_scope.vars.get(var_name) {
-                    return global_var.to_owned();
+                // Try to find global variable.
+                if let Some(some_value) = self.global_scope.vars.get(var_name) {
+                    return some_value.to_owned();
                 }
 
-                panic!("Unknown variable {var_name}.");
-            }
-            Expr::EnvVar(var_name) => {
+                // Try to find environment variable.
                 if let Ok(env_var) = env::var(var_name) {
                     // Environment variables are resolved into strings.
                     Value::String(env_var)
