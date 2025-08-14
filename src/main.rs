@@ -5,7 +5,7 @@ use std::{
 
 use which::which;
 
-use crate::{eval::Evaluator, parser::Parser};
+use crate::{eval::Evaluator, parser::Parser, ui::informer};
 
 pub mod eval;
 pub mod lexer;
@@ -37,9 +37,13 @@ fn main() {
 
         let mut input = String::new();
 
-        cin.read_line(&mut input).expect("Failed to read input.");
+        if let Err(e) = cin.read_line(&mut input) {
+            informer::print_error(&mut cout, e.to_string().as_str());
+            return;
+        }
 
-        // If input is empty, skip all following steps as there won't be anything to execute.
+        // If input is empty, skip to next iteration of loop as there won't be anything to execute
+        // in the current one.
         if input.is_empty() {
             continue;
         }
