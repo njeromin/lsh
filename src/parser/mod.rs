@@ -62,7 +62,7 @@ impl Parser {
         let name = if let TokenKind::String(name) = self.advance().kind.clone() {
             name
         } else {
-            panic!("Expected identifier after 'let'");
+            panic!("Expected identifier after 'let'.");
         };
 
         // Advance to next token which should be an '=' and try to consume it.
@@ -76,9 +76,9 @@ impl Parser {
     fn parse_if(&mut self) -> Statement {
         self.advance();
 
-        self.consume(&TokenKind::LeftParen, "Expected '(' after 'if'");
+        self.consume(&TokenKind::LeftParen, "Expected '(' after 'if'.");
         let condition = self.parse_expr();
-        self.consume(&TokenKind::RightParen, "Expected ')' after condition");
+        self.consume(&TokenKind::RightParen, "Expected ')' after condition.");
 
         let then_branch = match self.parse_statement() {
             Statement::Block(stmts) => stmts,
@@ -249,10 +249,7 @@ impl Parser {
                 let mut args = vec![];
 
                 // NOTE: This could just be peek?
-                while let Some(next_tok) = self.tokens.get(self.index + 1)
-                    && !cmp_kinds(&next_tok.kind, &TokenKind::EOF)
-                    && !cmp_kinds(&next_tok.kind, &TokenKind::ExprSeparator)
-                {
+                while let Some(next_tok) = self.tokens.get(self.index + 1) {
                     // This should really just use some form of parse_primary/parse_expr.
                     let sub_expr = match &next_tok.kind {
                         TokenKind::String(s) => Expr::String(s.to_owned()),
@@ -315,13 +312,6 @@ impl Parser {
         }
 
         false
-    }
-
-    fn is_valid_arg(&mut self, kind: &TokenKind) -> bool {
-        matches!(
-            kind,
-            TokenKind::String(_) | TokenKind::Number(_) | TokenKind::Bool(_)
-        )
     }
 
     fn consume(&mut self, kind: &TokenKind, panic_msg: &str) -> Token {

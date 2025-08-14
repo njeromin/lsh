@@ -36,7 +36,7 @@ pub enum TokenKind {
     RightCurly,
     LeftParen,
     RightParen,
-    ExprSeparator,
+    Semicolon,
     EOF,
 }
 
@@ -81,7 +81,7 @@ impl fmt::Display for TokenKind {
                 Self::RightCurly => "RightCurly".to_string(),
                 Self::LeftParen => "LeftParen".to_string(),
                 Self::RightParen => "RightParen".to_string(),
-                Self::ExprSeparator => "ExprSeparator".to_string(),
+                Self::Semicolon => "Semicolon".to_string(),
                 Self::EOF => "EOF".to_string(),
             },
         )

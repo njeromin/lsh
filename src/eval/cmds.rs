@@ -32,13 +32,16 @@ pub fn exec_cmd(evaluator: &mut Evaluator, input_cmd: &str, input_args: Vec<Stri
 
                 match fs::read_to_string(path) {
                     Ok(input) => {
-                        let tokens = lexer::lex_input(input.trim());
+                        // TODO: What about blocks that take up multiple lines?
+                        for line in input.lines() {
+                            let tokens = lexer::lex_input(line.trim());
 
-                        let mut parser = Parser::new(tokens);
+                            let mut parser = Parser::new(tokens);
 
-                        let prog = parser.parse_program();
+                            let prog = parser.parse_program();
 
-                        evaluator.evaluate(prog);
+                            evaluator.evaluate(prog);
+                        }
                     }
                     Err(e) => {
                         informer::print_error(&mut stdout(), e.to_string().as_str());

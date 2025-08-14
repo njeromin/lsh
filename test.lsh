@@ -1,5 +1,3 @@
-echo test
+let test = 3
 
-alias gurt "echo gurt"
-
-gurt
+echo $test
