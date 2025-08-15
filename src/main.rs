@@ -28,6 +28,8 @@ fn main() {
     // TODO: Make this an option.
     if which("eza").is_ok() {
         eval.set_alias(String::from("ls"), String::from("eza --icons"));
+        eval.set_alias(String::from("la"), String::from("eza --icons --all"));
+        eval.set_alias(String::from("ll"), String::from("eza --icons --long"));
     }
 
     loop {
