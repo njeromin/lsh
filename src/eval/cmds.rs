@@ -5,7 +5,7 @@ use std::{
     process::{self, Command},
 };
 
-use crate::{eval::Evaluator, lexer, parser::Parser, paths, ui::informer};
+use crate::{debug, eval::Evaluator, lexer, parser::Parser, paths, ui::informer};
 
 // TODO: This could probably really just go in evaluator, stop mixing str and string, stop repeating stdout calls
 pub fn exec_cmd(evaluator: &mut Evaluator, input_cmd: &str, input_args: Vec<String>) {
@@ -26,12 +26,6 @@ pub fn exec_cmd(evaluator: &mut Evaluator, input_cmd: &str, input_args: Vec<Stri
                 return;
             }
 
-            let mut debug: bool = false;
-
-            if let Ok(debug_var) = env::var("DEBUG") {
-                debug = matches!(debug_var.as_str(), "1");
-            }
-
             if let Some(arg) = args.first() {
                 // NOTE: Does this need to happen?
                 let path = paths::expand_path(PathBuf::from(arg));
@@ -42,15 +36,12 @@ pub fn exec_cmd(evaluator: &mut Evaluator, input_cmd: &str, input_args: Vec<Stri
                         for line in input.lines() {
                             let tokens = lexer::lex_input(line.trim());
 
-                            if debug {
-                                for token in &tokens {
-                                    println!("{token}");
-                                }
-                            }
+                            debug::print_lexer(&tokens);
 
                             let mut parser = Parser::new(tokens);
-
                             let prog = parser.parse_program();
+
+                            debug::print_parser(&prog);
 
                             evaluator.evaluate(prog);
                         }

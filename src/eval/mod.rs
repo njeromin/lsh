@@ -146,32 +146,31 @@ impl Evaluator {
                 // TODO: Implement.
 
                 let left_res = self.evaluate_expr(left_box, scope_index);
-                let right_res_uncast = self.evaluate_expr(right_box, scope_index);
+                let right_res = self.evaluate_expr(right_box, scope_index);
 
                 let left_type = left_res.get_type();
-                let right_res = right_res_uncast.cast(left_type);
 
                 match *op {
-                    BinaryOp::Add => match (left_res, right_res) {
+                    BinaryOp::Add => match (left_res, right_res.cast(left_type)) {
                         (Value::Number(l), Value::Number(r)) => Value::Number(l + r),
                         (Value::String(l), Value::String(r)) => Value::String(l + &r),
-                        // allow string concat with number/bool by casting
-                        (Value::String(l), v) => Value::String(l + &v.to_string()),
-                        (v, Value::String(r)) => Value::String(v.to_string() + &r),
                         _ => Value::Null, // or error if you prefer
                     },
 
-                    BinaryOp::Sub => match (left_res, right_res) {
+                    BinaryOp::Sub => match (left_res, right_res.cast(left_type)) {
                         (Value::Number(l), Value::Number(r)) => Value::Number(l - r),
                         _ => Value::Null,
                     },
 
                     BinaryOp::Mul => match (left_res, right_res) {
                         (Value::Number(l), Value::Number(r)) => Value::Number(l * r),
+                        (Value::String(l), Value::Number(r)) => {
+                            Value::String(l.repeat(r.round() as usize))
+                        }
                         _ => Value::Null,
                     },
 
-                    BinaryOp::Div => match (left_res, right_res) {
+                    BinaryOp::Div => match (left_res, right_res.cast(left_type)) {
                         (Value::Number(l), Value::Number(r)) => Value::Number(l / r),
                         _ => Value::Null,
                     },
@@ -180,25 +179,25 @@ impl Evaluator {
 
                     BinaryOp::Neq => Value::Bool(!left_res.check_equality(&right_res)),
 
-                    BinaryOp::Gt => match (left_res, right_res) {
+                    BinaryOp::Gt => match (left_res, right_res.cast(left_type)) {
                         (Value::Number(l), Value::Number(r)) => Value::Bool(l > r),
                         (Value::String(l), Value::String(r)) => Value::Bool(l > r),
                         _ => Value::Null,
                     },
 
-                    BinaryOp::Lt => match (left_res, right_res) {
+                    BinaryOp::Lt => match (left_res, right_res.cast(left_type)) {
                         (Value::Number(l), Value::Number(r)) => Value::Bool(l < r),
                         (Value::String(l), Value::String(r)) => Value::Bool(l < r),
                         _ => Value::Null,
                     },
 
-                    BinaryOp::Ge => match (left_res, right_res) {
+                    BinaryOp::Ge => match (left_res, right_res.cast(left_type)) {
                         (Value::Number(l), Value::Number(r)) => Value::Bool(l >= r),
                         (Value::String(l), Value::String(r)) => Value::Bool(l >= r),
                         _ => Value::Null,
                     },
 
-                    BinaryOp::Le => match (left_res, right_res) {
+                    BinaryOp::Le => match (left_res, right_res.cast(left_type)) {
                         (Value::Number(l), Value::Number(r)) => Value::Bool(l <= r),
                         (Value::String(l), Value::String(r)) => Value::Bool(l <= r),
                         _ => Value::Null,
