@@ -1,15 +1,9 @@
-use std::mem;
-
 use crate::{
     lexer::token::{Token, TokenKind},
     parser::ast::{BinaryOp, Expr, Program, Statement},
 };
 
 pub mod ast;
-
-fn cmp_kinds(kind_x: &TokenKind, kind_y: &TokenKind) -> bool {
-    mem::discriminant(kind_x) == mem::discriminant(kind_y)
-}
 
 pub struct Parser {
     tokens: Vec<Token>,
@@ -21,6 +15,7 @@ impl Parser {
         Self { tokens, index: 0 }
     }
 
+    /// Parses all provided tokens and returns a program which can be evaluated by an Evaluator.
     pub fn parse_program(&mut self) -> Program {
         let mut body = vec![];
 
@@ -245,12 +240,10 @@ impl Parser {
     fn parse_primary(&mut self) -> Expr {
         let expr = match &self.current().kind {
             TokenKind::Number(n) => Expr::Number(*n),
-            // NOTE: Do strings actually have to be handled separately to calls?
             TokenKind::String(s) => {
                 let call_ident = s.to_owned();
                 let mut args = vec![];
 
-                // NOTE: This could just be peek?
                 while let Some(next_tok) = self.tokens.get(self.index + 1) {
                     // This should really just use some form of parse_primary/parse_expr.
                     let sub_expr = match &next_tok.kind {
@@ -302,7 +295,7 @@ impl Parser {
     }
 
     fn check_current(&self, kind_y: &TokenKind) -> bool {
-        cmp_kinds(&self.current().kind, kind_y)
+        self.current().kind.compare(kind_y)
     }
 
     fn match_token(&mut self, kinds: &[TokenKind]) -> bool {

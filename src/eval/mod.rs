@@ -86,7 +86,10 @@ impl Evaluator {
                         self.evaluate_statements(body, scope_index);
                     }
                 }
-                Statement::For { condition, body } => {
+                Statement::For {
+                    condition: _,
+                    body: _,
+                } => {
                     todo!("Implement"); // Why does this even take an expr as an input like that
                     // how is that even going to work.
                 }

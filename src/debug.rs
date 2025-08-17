@@ -2,10 +2,7 @@ use std::env;
 
 use crate::{
     lexer::token::Token,
-    parser::{
-        Parser,
-        ast::{Expr, Program, Statement},
-    },
+    parser::ast::{Expr, Program, Statement},
 };
 
 pub fn get_debug_env(name: &str) -> bool {
@@ -106,9 +103,6 @@ fn print_parser_expr(expr: &Expr) {
         }
         Expr::Call { identifier, args } => {
             println!("Call({identifier}, {} args)", args.len());
-        }
-        _ => {
-            println!("Other Expression");
         }
     }
 }

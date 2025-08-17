@@ -1,4 +1,4 @@
-use std::fmt;
+use std::{fmt, mem};
 
 #[derive(Debug, Clone)]
 pub enum TokenKind {
@@ -84,6 +84,26 @@ impl fmt::Display for TokenKind {
                 Self::Semicolon => "Semicolon".to_string(),
                 Self::EOF => "EOF".to_string(),
             },
+        )
+    }
+}
+
+impl TokenKind {
+    /// Compares two TokenKind instances for equality based on their discriminants.
+    pub fn compare(&self, other: &TokenKind) -> bool {
+        mem::discriminant(self) == mem::discriminant(other)
+    }
+
+    // TODO: Use this for deciding in parser if a token should be used a string e.g. in arguments
+    // for cmds.
+    pub fn can_be_string(&self) -> bool {
+        matches!(
+            self,
+            TokenKind::String(_)
+                | TokenKind::Number(_)
+                | TokenKind::Bool(_)
+                | TokenKind::Star
+                | TokenKind::Slash
         )
     }
 }

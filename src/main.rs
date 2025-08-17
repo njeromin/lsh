@@ -47,8 +47,9 @@ fn main() {
         debug::print_lexer(&tokens);
 
         let mut parser = Parser::new(tokens);
-
         let prog = parser.parse_program();
+
+        debug::print_parser(&prog);
 
         eval.evaluate(prog);
     }
