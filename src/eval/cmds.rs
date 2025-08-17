@@ -93,7 +93,6 @@ pub fn exec_cmd(evaluator: &mut Evaluator, input_cmd: &str, input_args: Vec<Stri
             }
 
             if let Some(arg) = args.first() {
-                // NOTE: Does this need to happen?
                 let path = paths::expand_path(PathBuf::from(arg));
 
                 env::set_current_dir(&path).unwrap_or_else(|_| {
