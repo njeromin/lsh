@@ -14,7 +14,7 @@ pub fn print_prompt(stdout: &mut Stdout) {
     queue!(
         stdout,
         cursor::MoveToNextLine(1),
-        style::PrintStyledContent(cwd_str.cyan()),
+        style::PrintStyledContent(cwd_str.blue()),
         cursor::MoveToNextLine(1),
         style::PrintStyledContent("› ".magenta())
     )
