@@ -42,39 +42,54 @@ impl Evaluator {
     }
 
     pub fn evaluate(&mut self, prog: Program) {
-        self.evaluate_statements(prog.body, None);
+        self.evaluate_statements(&prog.body, None);
     }
 
-    fn evaluate_statements(&mut self, statements: Vec<Statement>, scope_index: Option<usize>) {
+    fn evaluate_statements(&mut self, statements: &[Statement], scope_index: Option<usize>) {
         for statement in statements {
             match statement {
                 Statement::Expr(expr) => {
-                    self.evaluate_expr(&expr, scope_index);
+                    self.evaluate_expr(expr, scope_index);
                 }
                 Statement::Let { name, value } => {
                     // Handle let statement
 
                     if let Some(some_scope_index) = scope_index {
-                        let expr = self.evaluate_expr(&value, Some(some_scope_index));
+                        let expr = self.evaluate_expr(value, Some(some_scope_index));
 
                         let scope = self
                             .scopes
                             .get_mut(some_scope_index)
                             .expect("Failed to get scope at index {some_scope_index}.");
 
-                        scope.vars.insert(name, expr);
+                        scope.vars.insert(name.to_owned(), expr);
                     } else {
-                        let expr_res = self.evaluate_expr(&value, None);
-                        self.global_scope.vars.insert(name, expr_res);
+                        let expr_res = self.evaluate_expr(value, None);
+                        self.global_scope.vars.insert(name.to_owned(), expr_res);
                     }
                 }
                 Statement::If {
                     condition,
                     then_branch,
                     else_branch,
-                } => {}
-                Statement::While { condition, body } => {}
-                Statement::For { condition, body } => {}
+                } => {
+                    let cond_res = self.evaluate_expr(condition, scope_index);
+
+                    if cond_res.is_truthy() {
+                        self.evaluate_statements(then_branch, scope_index);
+                    } else if let Some(else_branch_statements) = else_branch {
+                        self.evaluate_statements(else_branch_statements, scope_index);
+                    }
+                }
+                Statement::While { condition, body } => {
+                    while self.evaluate_expr(condition, scope_index).is_truthy() {
+                        self.evaluate_statements(body, scope_index);
+                    }
+                }
+                Statement::For { condition, body } => {
+                    todo!("Implement"); // Why does this even take an expr as an input like that
+                    // how is that even going to work.
+                }
                 Statement::Block(block) => {
                     let block_scope_index = self.make_scope();
                     self.evaluate_statements(block, Some(block_scope_index));
@@ -131,13 +146,68 @@ impl Evaluator {
                 // TODO: Implement.
 
                 let left_res = self.evaluate_expr(left_box, scope_index);
-                let right_res = self.evaluate_expr(right_box, scope_index);
+                let right_res_uncast = self.evaluate_expr(right_box, scope_index);
 
-                // match op {
-                //     BinaryOp::Add => {}
-                // }
+                let left_type = left_res.get_type();
+                let right_res = right_res_uncast.cast(left_type);
 
-                Value::Null
+                match *op {
+                    BinaryOp::Add => match (left_res, right_res) {
+                        (Value::Number(l), Value::Number(r)) => Value::Number(l + r),
+                        (Value::String(l), Value::String(r)) => Value::String(l + &r),
+                        // allow string concat with number/bool by casting
+                        (Value::String(l), v) => Value::String(l + &v.to_string()),
+                        (v, Value::String(r)) => Value::String(v.to_string() + &r),
+                        _ => Value::Null, // or error if you prefer
+                    },
+
+                    BinaryOp::Sub => match (left_res, right_res) {
+                        (Value::Number(l), Value::Number(r)) => Value::Number(l - r),
+                        _ => Value::Null,
+                    },
+
+                    BinaryOp::Mul => match (left_res, right_res) {
+                        (Value::Number(l), Value::Number(r)) => Value::Number(l * r),
+                        _ => Value::Null,
+                    },
+
+                    BinaryOp::Div => match (left_res, right_res) {
+                        (Value::Number(l), Value::Number(r)) => Value::Number(l / r),
+                        _ => Value::Null,
+                    },
+
+                    BinaryOp::Eq => Value::Bool(left_res.check_equality(&right_res)),
+
+                    BinaryOp::Neq => Value::Bool(!left_res.check_equality(&right_res)),
+
+                    BinaryOp::Gt => match (left_res, right_res) {
+                        (Value::Number(l), Value::Number(r)) => Value::Bool(l > r),
+                        (Value::String(l), Value::String(r)) => Value::Bool(l > r),
+                        _ => Value::Null,
+                    },
+
+                    BinaryOp::Lt => match (left_res, right_res) {
+                        (Value::Number(l), Value::Number(r)) => Value::Bool(l < r),
+                        (Value::String(l), Value::String(r)) => Value::Bool(l < r),
+                        _ => Value::Null,
+                    },
+
+                    BinaryOp::Ge => match (left_res, right_res) {
+                        (Value::Number(l), Value::Number(r)) => Value::Bool(l >= r),
+                        (Value::String(l), Value::String(r)) => Value::Bool(l >= r),
+                        _ => Value::Null,
+                    },
+
+                    BinaryOp::Le => match (left_res, right_res) {
+                        (Value::Number(l), Value::Number(r)) => Value::Bool(l <= r),
+                        (Value::String(l), Value::String(r)) => Value::Bool(l <= r),
+                        _ => Value::Null,
+                    },
+
+                    BinaryOp::And => Value::Bool(left_res.is_truthy() && right_res.is_truthy()),
+
+                    BinaryOp::Or => Value::Bool(left_res.is_truthy() || right_res.is_truthy()),
+                }
             }
             Expr::String(string) => Value::String(string.to_owned()),
             Expr::Number(num) => Value::Number(*num),

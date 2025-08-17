@@ -1,3 +1,7 @@
-let test = 3
+let foo = true
+let bar = false
+let foobar = $foo == $bar
 
-echo $test
+echo "foo == bar =" $foobar
+
+if ($foobar) { echo Yes } else { echo No }

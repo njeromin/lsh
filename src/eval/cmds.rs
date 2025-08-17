@@ -26,6 +26,12 @@ pub fn exec_cmd(evaluator: &mut Evaluator, input_cmd: &str, input_args: Vec<Stri
                 return;
             }
 
+            let mut debug: bool = false;
+
+            if let Ok(debug_var) = env::var("DEBUG") {
+                debug = matches!(debug_var.as_str(), "1");
+            }
+
             if let Some(arg) = args.first() {
                 // NOTE: Does this need to happen?
                 let path = paths::expand_path(PathBuf::from(arg));
@@ -35,6 +41,12 @@ pub fn exec_cmd(evaluator: &mut Evaluator, input_cmd: &str, input_args: Vec<Stri
                         // TODO: What about blocks that take up multiple lines?
                         for line in input.lines() {
                             let tokens = lexer::lex_input(line.trim());
+
+                            if debug {
+                                for token in &tokens {
+                                    println!("{token}");
+                                }
+                            }
 
                             let mut parser = Parser::new(tokens);
 
