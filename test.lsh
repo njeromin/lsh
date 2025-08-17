@@ -4,6 +4,4 @@ let foobar = $foo == $bar
 
 echo "foo == bar =" $foobar
 
-echo (3 * 3)
-
 if ($foobar) { echo Yes } else { echo No }

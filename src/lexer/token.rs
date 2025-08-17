@@ -100,6 +100,8 @@ impl fmt::Display for Token {
     }
 }
 
-pub fn make_token(kind: TokenKind, offset: usize) -> Token {
-    Token { kind, offset }
+impl Token {
+    pub fn new(kind: TokenKind, offset: usize) -> Self {
+        Token { kind, offset }
+    }
 }
