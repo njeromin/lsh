@@ -117,7 +117,7 @@ impl Evaluator {
 
     fn evaluate_expr(&mut self, expr: &Expr, scope_index: Option<usize>) -> Value {
         match expr {
-            Expr::Call { identifier, args } => {
+            Expr::CallOrString { identifier, args } => {
                 let (res_cmd, res_args) = self.resolve_command(identifier.to_owned());
 
                 if res_args.is_empty() && !cmds::is_valid_cmd(&res_cmd) {

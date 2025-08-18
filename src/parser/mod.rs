@@ -259,7 +259,7 @@ impl Parser {
                     self.advance();
                 }
 
-                Expr::Call {
+                Expr::CallOrString {
                     identifier: call_ident,
                     args,
                 }

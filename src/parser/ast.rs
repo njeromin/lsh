@@ -29,7 +29,7 @@ pub enum Expr {
         right: Box<Expr>,
     },
     // cmd arg1 arg2...
-    Call {
+    CallOrString {
         identifier: String,
         args: Vec<Expr>,
     },

@@ -101,8 +101,8 @@ fn print_parser_expr(expr: &Expr) {
         Expr::Binary { left, op, right } => {
             println!("Binary Expression({left:?} {op:?} {right:?})");
         }
-        Expr::Call { identifier, args } => {
-            println!("Call({identifier}, {} args)", args.len());
+        Expr::CallOrString { identifier, args } => {
+            println!("CallOrString({identifier}, {} args)", args.len());
         }
         Expr::Typeof(expr) => {
             println!("Typeof({expr:?})");
