@@ -57,13 +57,13 @@ impl Evaluator {
         for statement in statements {
             match statement {
                 Statement::Expr(expr) => {
-                    self.evaluate_expr(expr, scope_index);
+                    self.evaluate_expr(expr, false, scope_index);
                 }
                 Statement::Let { name, value } => {
                     // Handle let statement
 
                     if let Some(some_scope_index) = scope_index {
-                        let expr = self.evaluate_expr(value, Some(some_scope_index));
+                        let expr = self.evaluate_expr(value, true, Some(some_scope_index));
 
                         let scope = self
                             .scopes
@@ -72,7 +72,7 @@ impl Evaluator {
 
                         scope.vars.insert(name.to_owned(), expr);
                     } else {
-                        let expr_res = self.evaluate_expr(value, None);
+                        let expr_res = self.evaluate_expr(value, true, None);
                         self.global_scope.vars.insert(name.to_owned(), expr_res);
                     }
                 }
@@ -81,7 +81,7 @@ impl Evaluator {
                     then_branch,
                     else_branch,
                 } => {
-                    let cond_res = self.evaluate_expr(condition, scope_index);
+                    let cond_res = self.evaluate_expr(condition, true, scope_index);
 
                     if cond_res.is_truthy() {
                         self.evaluate_statements(then_branch, scope_index);
@@ -90,16 +90,9 @@ impl Evaluator {
                     }
                 }
                 Statement::While { condition, body } => {
-                    while self.evaluate_expr(condition, scope_index).is_truthy() {
+                    while self.evaluate_expr(condition, true, scope_index).is_truthy() {
                         self.evaluate_statements(body, scope_index);
                     }
-                }
-                Statement::For {
-                    condition: _,
-                    body: _,
-                } => {
-                    todo!("Implement"); // Why does this even take an expr as an input like that
-                    // how is that even going to work.
                 }
                 Statement::Block(block) => {
                     let block_scope_index = self.make_scope();
@@ -115,18 +108,23 @@ impl Evaluator {
         self.scopes.len()
     }
 
-    fn evaluate_expr(&mut self, expr: &Expr, scope_index: Option<usize>) -> Value {
+    fn evaluate_expr(
+        &mut self,
+        expr: &Expr,
+        is_secondary: bool,
+        scope_index: Option<usize>,
+    ) -> Value {
         match expr {
             Expr::CallOrString { identifier, args } => {
                 let (res_cmd, res_args) = self.resolve_command(identifier.to_owned());
 
-                if res_args.is_empty() && !cmds::is_valid_cmd(&res_cmd) {
+                if (res_args.is_empty() && !cmds::is_valid_cmd(&res_cmd)) || is_secondary {
                     return Value::String(identifier.to_owned());
                 }
 
                 let string_args = args
                     .iter()
-                    .map(|i| self.evaluate_expr(i, scope_index).to_string())
+                    .map(|i| self.evaluate_expr(i, true, scope_index).to_string())
                     .collect();
 
                 // Concatenate arguments from the input cmd with the provided arguments from the evaluator.
@@ -163,10 +161,8 @@ impl Evaluator {
                 left: left_box,
                 right: right_box,
             } => {
-                // TODO: Implement.
-
-                let left_res = self.evaluate_expr(left_box, scope_index);
-                let right_res = self.evaluate_expr(right_box, scope_index);
+                let left_res = self.evaluate_expr(left_box, true, scope_index);
+                let right_res = self.evaluate_expr(right_box, true, scope_index);
 
                 let left_type = left_res.get_type();
 
@@ -230,7 +226,7 @@ impl Evaluator {
             }
             Expr::Typeof(expr) => {
                 // Evaluate the expression and return its type as a string.
-                let evaluated_value = self.evaluate_expr(expr, scope_index);
+                let evaluated_value = self.evaluate_expr(expr, true, scope_index);
                 Value::String(evaluated_value.get_type().to_string())
             }
             Expr::String(string) => Value::String(string.to_owned()),

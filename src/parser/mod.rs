@@ -31,7 +31,6 @@ impl Parser {
             TokenKind::Let => self.parse_let(),
             TokenKind::If => self.parse_if(),
             TokenKind::While => self.parse_while(),
-            TokenKind::For => self.parse_for(),
             TokenKind::LeftCurly => {
                 // Handle blocks.
 
@@ -112,21 +111,6 @@ impl Parser {
         };
 
         Statement::While { condition, body }
-    }
-
-    fn parse_for(&mut self) -> Statement {
-        self.advance();
-
-        self.consume(&TokenKind::LeftParen, "Expected '(' after 'for'");
-        let condition = self.parse_expr();
-        self.consume(&TokenKind::RightParen, "Expected ')' after condition");
-
-        let body = match self.parse_statement() {
-            Statement::Block(stmts) => stmts,
-            stmt => vec![stmt],
-        };
-
-        Statement::For { condition, body }
     }
 
     fn parse_expr(&mut self) -> Expr {

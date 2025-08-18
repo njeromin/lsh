@@ -52,10 +52,6 @@ pub enum Statement {
         condition: Expr,
         body: Vec<Statement>,
     },
-    For {
-        condition: Expr,
-        body: Vec<Statement>,
-    },
     Block(Vec<Statement>),
 }
 
