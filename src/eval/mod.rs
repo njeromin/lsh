@@ -29,23 +29,20 @@ impl Evaluator {
     }
 
     pub fn resolve_command(&self, cmd: String) -> (String, Vec<String>) {
-        // Unalias cmd.
-        let unaliased_cmd = if let Some(resolved_alias) = self.aliases.get(cmd.as_str()) {
-            resolved_alias.to_owned()
+        if let Some(resolved_alias) = self.aliases.get(cmd.as_str()) {
+            // Split the unsplit command by spaces, take out the command itself, and return the rest of the
+            // parts as arguments.
+            let mut split_cmd = resolved_alias.split(" ");
+            let resolved_cmd = split_cmd
+                .next()
+                .expect("Failed to get first command.")
+                .to_string();
+            let args: Vec<String> = split_cmd.map(|arg| arg.to_string()).collect();
+
+            (resolved_cmd, args)
         } else {
-            cmd
-        };
-
-        // Split the unsplit command by spaces, take out the command itself, and return the rest of the
-        // parts as arguments.
-        let mut split_cmd = unaliased_cmd.split(" ");
-        let resolved_cmd = split_cmd
-            .next()
-            .expect("Failed to get first command.")
-            .to_string();
-        let args: Vec<String> = split_cmd.map(|arg| arg.to_string()).collect();
-
-        (resolved_cmd, args)
+            (cmd, vec![])
+        }
     }
 
     pub fn set_alias(&mut self, name: String, value: String) -> Option<String> {
