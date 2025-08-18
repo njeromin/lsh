@@ -7,7 +7,14 @@ use std::{
 
 use which::which;
 
-use crate::{debug, eval::Evaluator, lexer, parser::Parser, paths, ui::informer};
+use crate::{
+    debug,
+    eval::Evaluator,
+    lexer::{self},
+    parser::Parser,
+    paths,
+    ui::informer,
+};
 
 // TODO: Is there a better way to do this?
 pub fn is_valid_cmd(cmd: &str) -> bool {
@@ -39,19 +46,16 @@ pub fn exec_cmd(evaluator: &mut Evaluator, cmd: &str, args: Vec<String>) {
 
                 match fs::read_to_string(path) {
                     Ok(input) => {
-                        // TODO: What about blocks that take up multiple lines?
-                        for line in input.lines() {
-                            let tokens = lexer::lex_input(line.trim());
+                        let tokens = lexer::lex_input(input.as_str());
 
-                            debug::print_lexer(&tokens);
+                        debug::print_lexer(&tokens);
 
-                            let mut parser = Parser::new(tokens);
-                            let prog = parser.parse_program();
+                        let mut parser = Parser::new(tokens);
+                        let prog = parser.parse_program();
 
-                            debug::print_parser(&prog);
+                        debug::print_parser(&prog);
 
-                            evaluator.evaluate(prog);
-                        }
+                        evaluator.evaluate(prog);
                     }
                     Err(e) => {
                         informer::print_error(&mut stdout(), e.to_string().as_str());

@@ -147,6 +147,16 @@ pub fn lex_input(input: &str) -> Vec<Token> {
 
                 tokens.push(Token::new(TokenKind::String(string), 0));
             }
+            '\n' => {
+                if chars
+                    .size_hint()
+                    .1
+                    .expect("lexer: Failed to retrieve length of input iterator.")
+                    != 0
+                {
+                    tokens.push(Token::new(TokenKind::NewLine, 0))
+                }
+            }
             _ => {
                 if lex_identifier(&mut tokens, char, &mut chars).is_some() {
                     continue;

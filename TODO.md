@@ -2,7 +2,8 @@
 
 - [ ] Remove all expects and replace with proper error handling.
 - [ ] parse_primary needs to handle files properly rather than just evaluating
-      line by line.
+      line by line. (semi-fixed)
 - [ ] Scopes only have access to their scope index rather than all parents
       including them.
-- [ ] Strings won't actually be useable as the parser recognises all strings as commands.
+- [ ] Strings won't actually be useable as the parser recognises all strings as
+      commands. (semi-fixed)
