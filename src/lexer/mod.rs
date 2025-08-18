@@ -241,6 +241,7 @@ fn match_keyword(keyword: &str) -> Option<TokenKind> {
         "for" => Some(TokenKind::For),
         "while" => Some(TokenKind::While),
         "fn" => Some(TokenKind::Fn),
+        "typeof" => Some(TokenKind::Typeof),
         "true" => Some(TokenKind::Bool(true)),
         "false" => Some(TokenKind::Bool(false)),
         _ => None,

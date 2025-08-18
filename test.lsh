@@ -1,7 +1,9 @@
 let foo = true
 let bar = false
 let foobar = $foo == $bar
+let foobar_t = typeof $foobar
 
 echo "foo == bar =" $foobar
+echo $foobar_t
 
 if ($foobar) { echo Yes } else { echo No }

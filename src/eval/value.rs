@@ -33,7 +33,7 @@ impl fmt::Display for Value {
             Self::String(str) => write!(f, "{str}"),
             Self::Number(num) => write!(f, "{num}"),
             Self::Bool(bool) => write!(f, "{bool}"),
-            Self::Null => write!(f, "null"),
+            Self::Null => write!(f, ""),
         }
     }
 }

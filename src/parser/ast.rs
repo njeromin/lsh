@@ -22,16 +22,18 @@ pub enum Expr {
     String(String),
     Variable(String),
 
-    // a + b, a - b, etc.
+    // a + b, a - b, ...
     Binary {
         op: BinaryOp,
         left: Box<Expr>,
         right: Box<Expr>,
     },
+    // cmd arg1 arg2...
     Call {
         identifier: String,
         args: Vec<Expr>,
     },
+    Typeof(Box<Expr>),
 }
 
 #[derive(Debug)]

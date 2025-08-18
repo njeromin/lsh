@@ -28,13 +28,24 @@ impl Evaluator {
         }
     }
 
-    // TODO: Rewrite better
-    pub fn resolve_alias(&self, cmd: String) -> String {
-        if let Some(resolved_alias) = self.aliases.get(cmd.as_str()) {
+    pub fn resolve_command(&self, cmd: String) -> (String, Vec<String>) {
+        // Unalias cmd.
+        let unaliased_cmd = if let Some(resolved_alias) = self.aliases.get(cmd.as_str()) {
             resolved_alias.to_owned()
         } else {
             cmd
-        }
+        };
+
+        // Split the unsplit command by spaces, take out the command itself, and return the rest of the
+        // parts as arguments.
+        let mut split_cmd = unaliased_cmd.split(" ");
+        let resolved_cmd = split_cmd
+            .next()
+            .expect("Failed to get first command.")
+            .to_string();
+        let args: Vec<String> = split_cmd.map(|arg| arg.to_string()).collect();
+
+        (resolved_cmd, args)
     }
 
     pub fn set_alias(&mut self, name: String, value: String) -> Option<String> {
@@ -110,12 +121,21 @@ impl Evaluator {
     fn evaluate_expr(&mut self, expr: &Expr, scope_index: Option<usize>) -> Value {
         match expr {
             Expr::Call { identifier, args } => {
+                let (res_cmd, res_args) = self.resolve_command(identifier.to_owned());
+
+                if res_args.is_empty() && !cmds::is_valid_cmd(&res_cmd) {
+                    return Value::String(identifier.to_owned());
+                }
+
                 let string_args = args
                     .iter()
                     .map(|i| self.evaluate_expr(i, scope_index).to_string())
                     .collect();
 
-                cmds::exec_cmd(self, identifier, string_args);
+                // Concatenate arguments from the input cmd with the provided arguments from the evaluator.
+                let args = [res_args, string_args].concat();
+
+                cmds::exec_cmd(self, &res_cmd, args);
 
                 Value::Null
             }
@@ -210,6 +230,11 @@ impl Evaluator {
 
                     BinaryOp::Or => Value::Bool(left_res.is_truthy() || right_res.is_truthy()),
                 }
+            }
+            Expr::Typeof(expr) => {
+                // Evaluate the expression and return its type as a string.
+                let evaluated_value = self.evaluate_expr(expr, scope_index);
+                Value::String(evaluated_value.get_type().to_string())
             }
             Expr::String(string) => Value::String(string.to_owned()),
             Expr::Number(num) => Value::Number(*num),

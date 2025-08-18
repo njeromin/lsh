@@ -1,8 +1,4 @@
-use std::{
-    env,
-    io::Stdout,
-    path::{Path, PathBuf},
-};
+use std::{env, io::Stdout, path::Path};
 
 use crossterm::{
     cursor, queue,

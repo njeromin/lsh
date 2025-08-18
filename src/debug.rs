@@ -86,9 +86,6 @@ fn print_parser_statement(stmt: &Statement) {
 
 fn print_parser_expr(expr: &Expr) {
     match expr {
-        Expr::Binary { left, op, right } => {
-            println!("Binary Expression({left:?} {op:?} {right:?})");
-        }
         Expr::String(str) => {
             println!("String({str})");
         }
@@ -101,8 +98,14 @@ fn print_parser_expr(expr: &Expr) {
         Expr::Variable(var) => {
             println!("Variable({var})");
         }
+        Expr::Binary { left, op, right } => {
+            println!("Binary Expression({left:?} {op:?} {right:?})");
+        }
         Expr::Call { identifier, args } => {
             println!("Call({identifier}, {} args)", args.len());
+        }
+        Expr::Typeof(expr) => {
+            println!("Typeof({expr:?})");
         }
     }
 }

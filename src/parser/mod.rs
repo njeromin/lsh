@@ -266,6 +266,13 @@ impl Parser {
             }
             TokenKind::Variable(var) => Expr::Variable(var.to_owned()),
             TokenKind::Bool(value) => Expr::Bool(*value),
+            TokenKind::Typeof => {
+                self.advance(); // Skip past 'typeof'.
+
+                let expr = self.parse_expr();
+
+                Expr::Typeof(Box::new(expr))
+            }
             TokenKind::LeftParen => {
                 let expr = self.parse_expr();
                 self.consume(&TokenKind::RightParen, "Expected ')' after expression.");
