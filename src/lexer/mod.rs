@@ -74,8 +74,9 @@ pub fn lex_input(input: &str) -> Vec<Token> {
                             tokens.push(Token::new(TokenKind::PlusEquals, 0));
                             chars.next();
                         }
+                        ' ' => tokens.push(Token::new(TokenKind::Plus, 0)),
                         _ => {
-                            if lex_identifier(&mut tokens, '-', &mut chars).is_none() {
+                            if lex_identifier(&mut tokens, '+', &mut chars).is_none() {
                                 tokens.push(Token::new(TokenKind::Plus, 0))
                             }
                         }
@@ -89,6 +90,7 @@ pub fn lex_input(input: &str) -> Vec<Token> {
                             tokens.push(Token::new(TokenKind::MinusEquals, 0));
                             chars.next();
                         }
+                        ' ' => tokens.push(Token::new(TokenKind::Minus, 0)),
                         _ => {
                             if lex_number(&mut tokens, char, &mut chars).is_none()
                                 && lex_identifier(&mut tokens, '-', &mut chars).is_none()

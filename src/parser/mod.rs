@@ -260,8 +260,12 @@ impl Parser {
                 Expr::Typeof(Box::new(expr))
             }
             TokenKind::LeftParen => {
+                self.advance(); // Skip past '('.
+
                 let expr = self.parse_expr();
+
                 self.consume(&TokenKind::RightParen, "Expected ')' after expression.");
+
                 expr
             }
             TokenKind::NewLine | TokenKind::Semicolon => self.parse_expr(),
