@@ -148,12 +148,15 @@ pub fn lex_input(input: &str) -> Vec<Token> {
                 tokens.push(Token::new(TokenKind::String(string), 0));
             }
             '\n' => {
-                if chars
+                let is_eof = chars
                     .size_hint()
                     .1
                     .expect("lexer: Failed to retrieve length of input iterator.")
-                    != 0
-                {
+                    == 0;
+
+                // Only add newline token if not at end of file, and the next char is not a }.
+                // TODO: Look at making the } checking cleaner, maybe implement in parser.
+                if !is_eof && !chars.peek().is_some_and(|next_char| *next_char == '}') {
                     tokens.push(Token::new(TokenKind::NewLine, 0))
                 }
             }
