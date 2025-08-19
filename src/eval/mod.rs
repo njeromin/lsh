@@ -66,8 +66,6 @@ impl Evaluator {
                     self.evaluate_expr(expr, false, scope_indices);
                 }
                 Statement::Let { name, value } => {
-                    // Handle let statement
-
                     let expr = self.evaluate_expr(value, true, scope_indices);
 
                     if let Some(last_scope_index) = scope_indices.last()

@@ -7,3 +7,5 @@
       including them.
 - [ ] Strings won't actually be useable as the parser recognises all strings as
       commands. (semi-fixed)
+- [ ] Implement unary/ternary operators.
+- [ ] Implement +=, -=, ... operators.
