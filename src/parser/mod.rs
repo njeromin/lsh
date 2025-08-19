@@ -76,9 +76,7 @@ impl Parser {
     fn parse_if(&mut self) -> Statement {
         self.advance(); // Advance past 'if'.
 
-        self.consume(&TokenKind::LeftParen, "Expected '(' after 'if'.");
         let condition = self.parse_expr();
-        self.consume(&TokenKind::RightParen, "Expected ')' after condition.");
 
         let then_branch = match self.parse_statement() {
             Statement::Block(stmts) => stmts,

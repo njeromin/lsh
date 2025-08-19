@@ -6,7 +6,7 @@ let value2 = $1
 echo Value 1 is $value1
 echo Value 2 is $value2
 
-if ($value1 == $value2) {
+if $value1 == $value2 {
   echo "Value 1 is equal to value 2"
 } else {
   echo "Value 1 is not equal to value 2"

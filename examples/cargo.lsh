@@ -1,0 +1,11 @@
+#!./target/debug/lsh
+
+let subcmd = $0
+
+if $subcmd == "run" {
+  cargo run
+} else if $subcmd == "build" {
+  cargo build
+} else {
+  echo "Unknown command:" $subcmd
+}
