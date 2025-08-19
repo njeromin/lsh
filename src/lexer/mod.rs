@@ -9,6 +9,17 @@ pub fn lex_input(input: &str) -> Vec<Token> {
 
     let mut chars = input.chars().peekable();
 
+    // Handle shebang line.
+    if chars.next_if(|&char| char == '#').is_some() && chars.next_if(|&char| char == '!').is_some()
+    {
+        // Go through all characters in shebang line until newline is hit.
+        for char in chars.by_ref() {
+            if char == '\n' {
+                break;
+            }
+        }
+    }
+
     while let Some(char) = chars.next() {
         match char {
             '|' => {
@@ -135,10 +146,12 @@ pub fn lex_input(input: &str) -> Vec<Token> {
             '(' => tokens.push(Token::new(TokenKind::LeftParen, 0)),
             ')' => tokens.push(Token::new(TokenKind::RightParen, 0)),
             '"' | '\'' => {
+                let delim = char;
+
                 let mut string = String::new();
 
                 for str_char in chars.by_ref() {
-                    if str_char != char {
+                    if str_char != delim {
                         string.push(str_char);
                     } else {
                         break;
@@ -146,17 +159,6 @@ pub fn lex_input(input: &str) -> Vec<Token> {
                 }
 
                 tokens.push(Token::new(TokenKind::String(string), 0));
-            }
-            '#' => {
-                if chars.peek().is_some_and(|next_char| next_char == &'!') {
-                    loop {
-                        if let Some(char) = chars.next()
-                            && char == '\n'
-                        {
-                            break;
-                        }
-                    }
-                }
             }
             '\n' => {
                 let is_eof = chars

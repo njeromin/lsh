@@ -1,4 +1,4 @@
-#!./target/debug/lsh test.lsh
+#!./target/debug/lsh
 
 echo First argument is $1
 echo Second argument is $2
