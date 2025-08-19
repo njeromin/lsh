@@ -25,14 +25,14 @@ pub fn lex_input(input: &str) -> Vec<Token> {
     while let Some(char) = chars.next() {
         match char {
             '|' => {
-                if chars.peek().is_some_and(|next_char| next_char == &'|') {
+                if chars.next_if(|next_char| next_char == &'|').is_some() {
                     tokens.push(Token::new(TokenKind::Or, 0));
                 } else {
                     tokens.push(Token::new(TokenKind::Pipe, 0));
                 }
             }
             '&' => {
-                if chars.peek().is_some_and(|next_char| next_char == &'&') {
+                if chars.next_if(|next_char| next_char == &'&').is_some() {
                     tokens.push(Token::new(TokenKind::And, 0));
                 } else {
                     tokens.push(Token::new(TokenKind::Ampersand, 0));
@@ -40,31 +40,28 @@ pub fn lex_input(input: &str) -> Vec<Token> {
             }
             ';' => tokens.push(Token::new(TokenKind::Semicolon, 0)),
             '=' => {
-                if chars.peek().is_some_and(|next_char| next_char == &'=') {
+                if chars.next_if(|next_char| next_char == &'=').is_some() {
                     tokens.push(Token::new(TokenKind::EqualsEquals, 0));
-                    chars.next();
                 } else {
                     tokens.push(Token::new(TokenKind::Equals, 0));
                 }
             }
             '>' => {
-                if chars.peek().is_some() {
+                if chars.next_if(|next_char| next_char == &'=').is_some() {
                     tokens.push(Token::new(TokenKind::GtEquals, 0));
-                    chars.next();
                 } else {
                     tokens.push(Token::new(TokenKind::GreaterThan, 0));
                 }
             }
             '<' => {
-                if chars.peek().is_some() {
+                if chars.next_if(|next_char| next_char == &'=').is_some() {
                     tokens.push(Token::new(TokenKind::LtEquals, 0));
-                    chars.next();
                 } else {
                     tokens.push(Token::new(TokenKind::LessThan, 0));
                 }
             }
             '!' => {
-                if chars.peek().is_some_and(|next_char| next_char == &'=') {
+                if chars.next_if(|next_char| next_char == &'=').is_some() {
                     tokens.push(Token::new(TokenKind::NotEquals, 0));
                 } else {
                     tokens.push(Token::new(TokenKind::Not, 0));
@@ -73,7 +70,10 @@ pub fn lex_input(input: &str) -> Vec<Token> {
             '+' => {
                 if let Some(next_char) = chars.peek() {
                     match *next_char {
-                        '=' => tokens.push(Token::new(TokenKind::PlusEquals, 0)),
+                        '=' => {
+                            tokens.push(Token::new(TokenKind::PlusEquals, 0));
+                            chars.next();
+                        }
                         _ => {
                             if lex_identifier(&mut tokens, '-', &mut chars).is_none() {
                                 tokens.push(Token::new(TokenKind::Plus, 0))
@@ -85,7 +85,10 @@ pub fn lex_input(input: &str) -> Vec<Token> {
             '-' => {
                 if let Some(next_char) = chars.peek() {
                     match *next_char {
-                        '=' => tokens.push(Token::new(TokenKind::MinusEquals, 0)),
+                        '=' => {
+                            tokens.push(Token::new(TokenKind::MinusEquals, 0));
+                            chars.next();
+                        }
                         _ => {
                             if lex_number(&mut tokens, char, &mut chars).is_none()
                                 && lex_identifier(&mut tokens, '-', &mut chars).is_none()
@@ -97,7 +100,7 @@ pub fn lex_input(input: &str) -> Vec<Token> {
                 }
             }
             '*' => {
-                if chars.peek().is_some_and(|next_char| next_char == &'=') {
+                if chars.next_if(|next_char| next_char == &'=').is_some() {
                     tokens.push(Token::new(TokenKind::StarEquals, 0));
                 } else {
                     tokens.push(Token::new(TokenKind::Star, 0));
