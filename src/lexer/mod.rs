@@ -1,13 +1,15 @@
-use std::{char, iter::Peekable};
+use std::{char, iter::Peekable, str::Chars};
 
 use crate::lexer::token::{Token, TokenKind};
 
 pub mod token;
 
+type CharIter<'a> = Peekable<Chars<'a>>;
+
 pub fn lex_input(input: &str) -> Vec<Token> {
     let mut tokens = vec![];
 
-    let mut chars = input.chars().peekable();
+    let mut chars: CharIter = input.chars().peekable();
 
     // Handle shebang line.
     if chars.next_if(|&char| char == '#').is_some() && chars.next_if(|&char| char == '!').is_some()
@@ -85,7 +87,9 @@ pub fn lex_input(input: &str) -> Vec<Token> {
                     match *next_char {
                         '=' => tokens.push(Token::new(TokenKind::MinusEquals, 0)),
                         _ => {
-                            if lex_identifier(&mut tokens, '-', &mut chars).is_none() {
+                            if lex_number(&mut tokens, char, &mut chars).is_none()
+                                && lex_identifier(&mut tokens, '-', &mut chars).is_none()
+                            {
                                 tokens.push(Token::new(TokenKind::Minus, 0))
                             }
                         }
@@ -167,46 +171,16 @@ pub fn lex_input(input: &str) -> Vec<Token> {
                     .expect("lexer: Failed to retrieve length of input iterator.")
                     == 0;
 
-                // Only add newline token if not at end of file, and the next char is not a }.
-                // TODO: Look at making the } checking cleaner, maybe implement in parser.
+                // Only add newline token if not at end of file, and the next char is not a '}'.
                 if !is_eof && chars.peek().is_none_or(|next_char| *next_char != '}') {
                     tokens.push(Token::new(TokenKind::NewLine, 0))
                 }
             }
             _ => {
-                if lex_identifier(&mut tokens, char, &mut chars).is_some() {
+                if lex_number(&mut tokens, char, &mut chars).is_some()
+                    || lex_identifier(&mut tokens, char, &mut chars).is_some()
+                {
                     continue;
-                }
-
-                if char.is_ascii_digit() {
-                    // Character is a valid number starting character.
-
-                    let mut num_str = String::from(char);
-                    let mut has_decimal_separator = false;
-
-                    while let Some(ident_char) = chars.peek() {
-                        if ident_char.is_ascii_digit() {
-                            // Character is a valid digit.
-
-                            num_str.push(ident_char.to_owned());
-                            chars.next(); // Increment chars iter.
-                        } else if ident_char == &'.' {
-                            if !has_decimal_separator {
-                                has_decimal_separator = true;
-
-                                num_str.push('.');
-                                chars.next(); // Increment chars iter.
-                            } else {
-                                panic!("A number cannot have more than one decimal separator.");
-                            }
-                        } else {
-                            break;
-                        }
-                    }
-
-                    let num: f64 = num_str.parse().expect("Failed to parse number.");
-
-                    tokens.push(Token::new(TokenKind::Number(num), 0));
                 } else if !is_whitespace(&char) {
                     // This is the fallback case so if it is not whitespace, then it is an
                     // unexpected token.
@@ -221,11 +195,7 @@ pub fn lex_input(input: &str) -> Vec<Token> {
     tokens
 }
 
-fn lex_identifier(
-    tokens: &mut Vec<Token>,
-    start_char: char,
-    chars: &mut Peekable<impl Iterator<Item = char>>,
-) -> Option<()> {
+fn lex_identifier(tokens: &mut Vec<Token>, start_char: char, chars: &mut CharIter) -> Option<()> {
     // First, check if starting character is a valid for the start of a string.
     if matches!(start_char, '~' | '.' | '/' | '_' | '-' | 'A'..='z') {
         let mut ident_string = String::from(start_char);
@@ -248,6 +218,43 @@ fn lex_identifier(
         } else {
             tokens.push(Token::new(TokenKind::String(ident_string), 0));
         }
+
+        return Some(());
+    }
+
+    None
+}
+
+fn lex_number(tokens: &mut Vec<Token>, start_char: char, chars: &mut CharIter) -> Option<()> {
+    if start_char.is_ascii_digit() || start_char == '-' {
+        // Character is a valid number starting character.
+
+        let mut num_str = String::from(start_char);
+        let mut has_decimal_separator = false;
+
+        while let Some(ident_char) = chars.peek() {
+            if ident_char.is_ascii_digit() {
+                // Character is a valid digit.
+
+                num_str.push(ident_char.to_owned());
+                chars.next(); // Increment chars iter.
+            } else if ident_char == &'.' {
+                if !has_decimal_separator {
+                    has_decimal_separator = true;
+
+                    num_str.push('.');
+                    chars.next(); // Increment chars iter.
+                } else {
+                    panic!("A number cannot have more than one decimal separator.");
+                }
+            } else {
+                break;
+            }
+        }
+
+        let num: f64 = num_str.parse().expect("Failed to parse number.");
+
+        tokens.push(Token::new(TokenKind::Number(num), 0));
 
         return Some(());
     }
