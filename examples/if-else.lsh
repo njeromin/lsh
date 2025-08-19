@@ -1,0 +1,10 @@
+#!./target/debug/lsh
+
+let value1 = 10
+let value2 = 10
+
+if ($value1 < $value2) {
+  echo "Value 1 is equal to value 2"
+} else {
+  echo "Value 1 is not equal to value 2"
+}

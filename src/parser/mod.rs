@@ -46,7 +46,7 @@ impl Parser {
 
                 Statement::Block(statements)
             }
-            TokenKind::NewLine => {
+            TokenKind::NewLine | TokenKind::Semicolon => {
                 self.advance(); // Skip newline.
                 self.parse_statement()
             }
@@ -266,7 +266,7 @@ impl Parser {
                 self.consume(&TokenKind::RightParen, "Expected ')' after expression.");
                 expr
             }
-            TokenKind::NewLine => self.parse_expr(),
+            TokenKind::NewLine | TokenKind::Semicolon => self.parse_expr(),
             other => panic!("Unexpected token in primary: {other}"),
         };
 
