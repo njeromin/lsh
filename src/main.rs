@@ -1,8 +1,16 @@
-use std::io::{self, Write};
+use std::{
+    env,
+    io::{self, Write},
+    path::PathBuf,
+};
 
 use which::which;
 
-use crate::{eval::Evaluator, parser::Parser, ui::informer};
+use crate::{
+    eval::{Evaluator, cmds::exec_file, value::Value},
+    parser::Parser,
+    ui::informer,
+};
 
 pub mod debug;
 pub mod eval;
@@ -11,18 +19,9 @@ pub mod parser;
 pub mod paths;
 pub mod ui;
 
-fn main() {
+fn interactive_session(eval: &mut Evaluator) {
     let mut cout = io::stdout();
     let cin = io::stdin();
-
-    let mut eval = Evaluator::new();
-
-    // TODO: Make this an option.
-    if which("eza").is_ok() {
-        eval.set_alias(String::from("ls"), String::from("eza --icons"));
-        eval.set_alias(String::from("la"), String::from("eza --icons --all"));
-        eval.set_alias(String::from("ll"), String::from("eza --icons --long"));
-    }
 
     loop {
         ui::print_prompt(&mut cout);
@@ -52,5 +51,30 @@ fn main() {
         debug::print_parser(&prog);
 
         eval.evaluate(prog);
+    }
+}
+
+fn main() {
+    let mut eval = Evaluator::new();
+
+    // TODO: Make this an option.
+    if which("eza").is_ok() {
+        eval.set_alias(String::from("ls"), String::from("eza --icons"));
+        eval.set_alias(String::from("la"), String::from("eza --icons --all"));
+        eval.set_alias(String::from("ll"), String::from("eza --icons --long"));
+    }
+
+    let mut args = env::args();
+    args.next();
+
+    // TODO: Improve this
+    if let Some(file_path) = args.next() {
+        for (i, arg) in args.enumerate() {
+            eval.push_var(0, i.to_string(), Value::String(arg.to_owned()));
+        }
+
+        exec_file(&mut eval, PathBuf::from(file_path));
+    } else {
+        interactive_session(&mut eval);
     }
 }

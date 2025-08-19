@@ -9,7 +9,7 @@ use which::which;
 
 use crate::{
     debug,
-    eval::Evaluator,
+    eval::{Evaluator, value::Value},
     lexer::{self},
     parser::Parser,
     paths,
@@ -21,6 +21,7 @@ pub fn is_valid_cmd(cmd: &str) -> bool {
     match cmd {
         "exit" => true,
         "source" => true,
+        "exec" => true,
         "alias" => true,
         "cd" => true,
         _ => which(cmd).is_ok(),
@@ -40,27 +41,25 @@ pub fn exec_cmd(evaluator: &mut Evaluator, cmd: &str, args: Vec<String>) {
                 return;
             }
 
-            if let Some(arg) = args.first() {
-                // NOTE: Does this need to happen?
-                let path = paths::expand_path(PathBuf::from(arg));
+            if let Some(path_arg) = args.first() {
+                let path = paths::expand_path(PathBuf::from(path_arg));
 
-                match fs::read_to_string(path) {
-                    Ok(input) => {
-                        let tokens = lexer::lex_input(input.as_str());
+                exec_file(evaluator, path);
+            } else {
+                informer::print_error(&mut stdout(), "An argument is required.");
+            }
+        }
+        "exec" => {
+            if let Some(path_arg) = args.first() {
+                let path = paths::expand_path(PathBuf::from(path_arg));
 
-                        debug::print_lexer(&tokens);
+                let mut exec_evaluator = Evaluator::new();
 
-                        let mut parser = Parser::new(tokens);
-                        let prog = parser.parse_program();
-
-                        debug::print_parser(&prog);
-
-                        evaluator.evaluate(prog);
-                    }
-                    Err(e) => {
-                        informer::print_error(&mut stdout(), e.to_string().as_str());
-                    }
+                for (i, arg) in args.iter().enumerate() {
+                    exec_evaluator.push_var(0, i.to_string(), Value::String(arg.to_owned()));
                 }
+
+                exec_file(&mut exec_evaluator, path);
             } else {
                 informer::print_error(&mut stdout(), "An argument is required.");
             }
@@ -131,5 +130,25 @@ pub fn spawn_proc(cmd: &str, args: Vec<String>) {
             Err(e) => informer::print_error(&mut io::stdout(), e.to_string().as_str()),
         },
         Err(e) => informer::print_error(&mut io::stdout(), e.to_string().as_str()),
+    }
+}
+
+pub fn exec_file(evaluator: &mut Evaluator, path: PathBuf) {
+    match fs::read_to_string(path) {
+        Ok(input) => {
+            let tokens = lexer::lex_input(input.as_str());
+
+            debug::print_lexer(&tokens);
+
+            let mut parser = Parser::new(tokens);
+            let prog = parser.parse_program();
+
+            debug::print_parser(&prog);
+
+            evaluator.evaluate(prog);
+        }
+        Err(e) => {
+            informer::print_error(&mut stdout(), e.to_string().as_str());
+        }
     }
 }

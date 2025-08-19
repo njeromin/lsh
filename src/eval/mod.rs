@@ -14,7 +14,6 @@ pub struct Scope {
 }
 
 pub struct Evaluator {
-    global_scope: Scope,
     scopes: Vec<Scope>,
     aliases: HashMap<String, String>,
 }
@@ -22,9 +21,16 @@ pub struct Evaluator {
 impl Evaluator {
     pub fn new() -> Evaluator {
         Evaluator {
-            global_scope: Scope::default(),
-            scopes: vec![],
+            scopes: vec![Scope::default()],
             aliases: HashMap::new(),
+        }
+    }
+
+    pub fn push_var(&mut self, scope_index: usize, name: String, value: Value) {
+        if let Some(scope) = self.scopes.get_mut(scope_index) {
+            scope.vars.insert(name, value);
+        } else {
+            panic!("Failed to retrieve scope {scope_index}.");
         }
     }
 
@@ -50,30 +56,26 @@ impl Evaluator {
     }
 
     pub fn evaluate(&mut self, prog: Program) {
-        self.evaluate_statements(&prog.body, None);
+        self.evaluate_statements(&prog.body, &mut vec![0]);
     }
 
-    fn evaluate_statements(&mut self, statements: &[Statement], scope_index: Option<usize>) {
+    fn evaluate_statements(&mut self, statements: &[Statement], scope_indices: &mut Vec<usize>) {
         for statement in statements {
             match statement {
                 Statement::Expr(expr) => {
-                    self.evaluate_expr(expr, false, scope_index);
+                    self.evaluate_expr(expr, false, scope_indices);
                 }
                 Statement::Let { name, value } => {
                     // Handle let statement
 
-                    if let Some(some_scope_index) = scope_index {
-                        let expr = self.evaluate_expr(value, true, Some(some_scope_index));
+                    let expr = self.evaluate_expr(value, true, scope_indices);
 
-                        let scope = self
-                            .scopes
-                            .get_mut(some_scope_index)
-                            .expect("Failed to get scope at index {some_scope_index}.");
-
+                    if let Some(last_scope_index) = scope_indices.last()
+                        && let Some(scope) = self.scopes.get_mut(*last_scope_index)
+                    {
                         scope.vars.insert(name.to_owned(), expr);
                     } else {
-                        let expr_res = self.evaluate_expr(value, true, None);
-                        self.global_scope.vars.insert(name.to_owned(), expr_res);
+                        panic!("Failed to get current scope.");
                     }
                 }
                 Statement::If {
@@ -81,22 +83,27 @@ impl Evaluator {
                     then_branch,
                     else_branch,
                 } => {
-                    let cond_res = self.evaluate_expr(condition, true, scope_index);
+                    let cond_res = self.evaluate_expr(condition, true, scope_indices);
 
                     if cond_res.is_truthy() {
-                        self.evaluate_statements(then_branch, scope_index);
+                        self.evaluate_statements(then_branch, scope_indices);
                     } else if let Some(else_branch_statements) = else_branch {
-                        self.evaluate_statements(else_branch_statements, scope_index);
+                        self.evaluate_statements(else_branch_statements, scope_indices);
                     }
                 }
                 Statement::While { condition, body } => {
-                    while self.evaluate_expr(condition, true, scope_index).is_truthy() {
-                        self.evaluate_statements(body, scope_index);
+                    while self
+                        .evaluate_expr(condition, true, scope_indices)
+                        .is_truthy()
+                    {
+                        self.evaluate_statements(body, scope_indices);
                     }
                 }
                 Statement::Block(block) => {
                     let block_scope_index = self.make_scope();
-                    self.evaluate_statements(block, Some(block_scope_index));
+                    scope_indices.push(block_scope_index);
+
+                    self.evaluate_statements(block, scope_indices);
                 }
             }
         }
@@ -112,19 +119,20 @@ impl Evaluator {
         &mut self,
         expr: &Expr,
         is_secondary: bool,
-        scope_index: Option<usize>,
+        scope_indices: &mut Vec<usize>,
     ) -> Value {
         match expr {
             Expr::CallOrString { identifier, args } => {
                 let (res_cmd, res_args) = self.resolve_command(identifier.to_owned());
 
-                if (res_args.is_empty() && !cmds::is_valid_cmd(&res_cmd)) || is_secondary {
+                // What if someone wants to set a value to the result of a command?
+                if is_secondary {
                     return Value::String(identifier.to_owned());
                 }
 
                 let string_args = args
                     .iter()
-                    .map(|i| self.evaluate_expr(i, true, scope_index).to_string())
+                    .map(|i| self.evaluate_expr(i, true, scope_indices).to_string())
                     .collect();
 
                 // Concatenate arguments from the input cmd with the provided arguments from the evaluator.
@@ -135,20 +143,18 @@ impl Evaluator {
                 Value::Null
             }
             Expr::Variable(var_name) => {
-                // Try to find local variable.
-                if let Some(some_scope_index) = scope_index
-                    && let Some(scope) = self.scopes.get(some_scope_index)
-                    && let Some(some_value) = scope.vars.get(var_name)
-                {
-                    return some_value.to_owned();
+                // Try to find variable in scopes.
+                for scope_indices in scope_indices.iter().rev() {
+                    if let Some(scope) = self.scopes.get(*scope_indices) {
+                        if let Some(value) = scope.vars.get(var_name) {
+                            return value.to_owned();
+                        }
+                    } else {
+                        panic!("Failed to retrieve scope {scope_indices}.");
+                    }
                 }
 
-                // Try to find global variable.
-                if let Some(some_value) = self.global_scope.vars.get(var_name) {
-                    return some_value.to_owned();
-                }
-
-                // Try to find environment variable.
+                // Try to find variable in environment.
                 if let Ok(env_var) = env::var(var_name) {
                     // Environment variables are resolved into strings.
                     Value::String(env_var)
@@ -161,8 +167,8 @@ impl Evaluator {
                 left: left_box,
                 right: right_box,
             } => {
-                let left_res = self.evaluate_expr(left_box, true, scope_index);
-                let right_res = self.evaluate_expr(right_box, true, scope_index);
+                let left_res = self.evaluate_expr(left_box, true, scope_indices);
+                let right_res = self.evaluate_expr(right_box, true, scope_indices);
 
                 let left_type = left_res.get_type();
 
@@ -226,7 +232,7 @@ impl Evaluator {
             }
             Expr::Typeof(expr) => {
                 // Evaluate the expression and return its type as a string.
-                let evaluated_value = self.evaluate_expr(expr, true, scope_index);
+                let evaluated_value = self.evaluate_expr(expr, true, scope_indices);
                 Value::String(evaluated_value.get_type().to_string())
             }
             Expr::String(string) => Value::String(string.to_owned()),

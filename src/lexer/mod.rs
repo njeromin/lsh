@@ -91,7 +91,7 @@ pub fn lex_input(input: &str) -> Vec<Token> {
             '$' => {
                 if chars
                     .peek()
-                    .is_some_and(|next_char| matches!(next_char, '_' | 'A'..='z'))
+                    .is_some_and(|next_char| matches!(next_char, '_' | 'A'..='z' | '0'..='9'))
                 {
                     let mut var_string = String::from(
                         // Using expect here but this should never fail.
@@ -101,7 +101,7 @@ pub fn lex_input(input: &str) -> Vec<Token> {
                     );
 
                     while let Some(var_char) = chars.peek() {
-                        if matches!(var_char, '_' | 'A'..='z') {
+                        if matches!(var_char, '_' | 'A'..='z' | '0'..='9') {
                             // Character is a valid identifier character.
 
                             var_string.push(var_char.to_owned());
@@ -147,6 +147,17 @@ pub fn lex_input(input: &str) -> Vec<Token> {
 
                 tokens.push(Token::new(TokenKind::String(string), 0));
             }
+            '#' => {
+                if chars.peek().is_some_and(|next_char| next_char == &'!') {
+                    loop {
+                        if let Some(char) = chars.next()
+                            && char == '\n'
+                        {
+                            break;
+                        }
+                    }
+                }
+            }
             '\n' => {
                 let is_eof = chars
                     .size_hint()
@@ -156,7 +167,7 @@ pub fn lex_input(input: &str) -> Vec<Token> {
 
                 // Only add newline token if not at end of file, and the next char is not a }.
                 // TODO: Look at making the } checking cleaner, maybe implement in parser.
-                if !is_eof && !chars.peek().is_some_and(|next_char| *next_char == '}') {
+                if !is_eof && chars.peek().is_none_or(|next_char| *next_char != '}') {
                     tokens.push(Token::new(TokenKind::NewLine, 0))
                 }
             }
@@ -197,7 +208,7 @@ pub fn lex_input(input: &str) -> Vec<Token> {
                 } else if !is_whitespace(&char) {
                     // This is the fallback case so if it is not whitespace, then it is an
                     // unexpected token.
-                    panic!("Unexpected token");
+                    panic!("Unexpected token {char}.");
                 }
             }
         }

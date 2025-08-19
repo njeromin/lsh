@@ -1,5 +1,10 @@
+#!./target/debug/lsh test.lsh
+
+echo First argument is $1
+echo Second argument is $2
+
 let foo = true
-let bar = false
+let bar = true
 let foobar = $foo == $bar
 let foobar_t = typeof $foobar
 
@@ -7,7 +12,7 @@ echo "foo == bar =" $foobar
 echo $foobar_t
 
 if ($foobar) {
-  echo Yes
+  echo Yes $foobar
 } else {
   echo No
 }
