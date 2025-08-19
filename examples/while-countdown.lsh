@@ -1,0 +1,9 @@
+#!./target/debug/lsh
+
+let count = 10
+
+while $count > 0 {
+  echo $count
+
+  let count = $count - 1
+}

@@ -103,9 +103,7 @@ impl Parser {
     fn parse_while(&mut self) -> Statement {
         self.advance();
 
-        self.consume(&TokenKind::LeftParen, "Expected '(' after 'while'");
         let condition = self.parse_expr();
-        self.consume(&TokenKind::RightParen, "Expected ')' after condition");
 
         let body = match self.parse_statement() {
             Statement::Block(stmts) => stmts,
