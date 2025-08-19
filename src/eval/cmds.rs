@@ -23,6 +23,8 @@ pub fn exec_cmd(evaluator: &mut Evaluator, cmd: &str, args: Vec<String>) {
 }
 
 pub fn spawn_proc(cmd: &str, args: Vec<String>) {
+    let mut stdout = io::stdout();
+
     let maybe_cmd = Command::new(cmd).args(args).spawn();
 
     match maybe_cmd {
@@ -30,6 +32,13 @@ pub fn spawn_proc(cmd: &str, args: Vec<String>) {
             Ok(_) => {}
             Err(e) => informer::print_error(&mut io::stdout(), e.to_string().as_str()),
         },
-        Err(e) => informer::print_error(&mut io::stdout(), e.to_string().as_str()),
+        Err(e) => {
+            // If cmd cannot be found, do custom error message, otherwise just print the message.
+            if e.kind() == io::ErrorKind::NotFound {
+                informer::print_error(&mut stdout, format!("Command '{cmd}' not found.").as_str());
+            } else {
+                informer::print_error(&mut stdout, e.to_string().as_str())
+            }
+        }
     }
 }
