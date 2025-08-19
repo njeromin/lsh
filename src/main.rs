@@ -7,11 +7,12 @@ use std::{
 use which::which;
 
 use crate::{
-    eval::{Evaluator, cmds::exec_file, value::Value},
+    eval::{Evaluator, exec::exec_file, value::Value},
     parser::Parser,
     ui::informer,
 };
 
+pub mod builtins;
 pub mod debug;
 pub mod eval;
 pub mod lexer;

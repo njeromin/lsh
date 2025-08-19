@@ -1,4 +1,5 @@
 pub mod cmds;
+pub mod exec;
 pub mod value;
 
 use std::{collections::HashMap, env};
@@ -53,6 +54,10 @@ impl Evaluator {
 
     pub fn set_alias(&mut self, name: String, value: String) -> Option<String> {
         self.aliases.insert(name, value)
+    }
+
+    pub fn get_aliases(&self) -> &HashMap<String, String> {
+        &self.aliases
     }
 
     pub fn evaluate(&mut self, prog: Program) {
