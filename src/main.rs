@@ -4,6 +4,7 @@ use std::{
     path::PathBuf,
 };
 
+use crossterm::{cursor, queue};
 use which::which;
 
 use crate::{
@@ -23,6 +24,10 @@ pub mod ui;
 fn interactive_session(eval: &mut Evaluator) {
     let mut cout = io::stdout();
     let cin = io::stdin();
+
+    if let Err(e) = queue!(cout, cursor::SetCursorStyle::BlinkingBar) {
+        informer::print_error(&mut cout, e.to_string().as_str());
+    }
 
     loop {
         ui::print_prompt(&mut cout);
