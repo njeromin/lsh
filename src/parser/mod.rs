@@ -226,20 +226,43 @@ impl Parser {
     fn parse_postfix(&mut self) -> Expr {
         let mut expr = self.parse_primary();
 
-        while self.check_current(&TokenKind::LeftBracket) {
-            self.advance(); // Skip '['.
+        loop {
+            if self.check_current(&TokenKind::LeftBracket) {
+                self.advance(); // Skip '['.
 
-            let index_expr = self.parse_expr();
+                let index_expr = self.parse_expr();
 
-            self.consume(
-                &TokenKind::RightBracket,
-                "Expected ']' after object index expression.",
-            );
+                self.consume(
+                    &TokenKind::RightBracket,
+                    "Expected ']' after object index expression.",
+                );
 
-            expr = Expr::Index {
-                object: Box::new(expr),
-                index: Box::new(index_expr),
-            };
+                expr = Expr::Index {
+                    object: Box::new(expr),
+                    index: Box::new(index_expr),
+                };
+            } else if let TokenKind::String(member_access) = &self.current().kind {
+                if member_access.starts_with('.') {
+                    // `.foo.bar` is syntax sugar for `["foo"]["bar"]`.
+                    let member_access = member_access.clone();
+                    self.advance();
+
+                    for key in member_access
+                        .split('.')
+                        .skip(1)
+                        .filter(|part| !part.is_empty())
+                    {
+                        expr = Expr::Index {
+                            object: Box::new(expr),
+                            index: Box::new(Expr::String(key.to_string())),
+                        };
+                    }
+                } else {
+                    break;
+                }
+            } else {
+                break;
+            }
         }
 
         expr
@@ -271,29 +294,7 @@ impl Parser {
                         TokenKind::Variable(var) => {
                             self.advance(); // Move to variable.
 
-                            let mut sub_expr = Expr::Variable(var);
-
-                            while self
-                                .tokens
-                                .get(self.index + 1)
-                                .is_some_and(|tok| tok.kind.compare(&TokenKind::LeftBracket))
-                            {
-                                self.advance(); // Move to '['.
-                                self.advance(); // Skip '['.
-
-                                let index_expr = self.parse_expr();
-
-                                self.consume(
-                                    &TokenKind::RightBracket,
-                                    "Expected ']' after object index expression.",
-                                );
-
-                                sub_expr = Expr::Index {
-                                    object: Box::new(sub_expr),
-                                    index: Box::new(index_expr),
-                                };
-                            }
-
+                            let sub_expr = self.parse_postfix_from_seed(Expr::Variable(var));
                             args.push(sub_expr);
                         }
                         _ => break,
@@ -359,7 +360,7 @@ impl Parser {
                     expr_map.insert(key, value);
 
                     if !self.check_current(&TokenKind::RightCurly) {
-                        self.advance(); // Skip past ','.
+                        self.consume(&TokenKind::Comma, "Expected ',' between object fields.");
                     }
                 }
                 self.advance(); // Skip past '}'.
@@ -377,6 +378,57 @@ impl Parser {
         };
 
         self.advance();
+
+        expr
+    }
+
+    fn parse_postfix_from_seed(&mut self, mut expr: Expr) -> Expr {
+        loop {
+            if self
+                .tokens
+                .get(self.index + 1)
+                .is_some_and(|tok| tok.kind.compare(&TokenKind::LeftBracket))
+            {
+                self.advance(); // Move to '['.
+                self.advance(); // Skip '['.
+
+                let index_expr = self.parse_expr();
+
+                self.consume(
+                    &TokenKind::RightBracket,
+                    "Expected ']' after object index expression.",
+                );
+
+                expr = Expr::Index {
+                    object: Box::new(expr),
+                    index: Box::new(index_expr),
+                };
+            } else if let Some(Token {
+                kind: TokenKind::String(member_access),
+                ..
+            }) = self.tokens.get(self.index + 1)
+            {
+                if member_access.starts_with('.') {
+                    let member_access = member_access.to_owned();
+                    self.advance(); // Move to `.foo` token.
+
+                    for key in member_access
+                        .split('.')
+                        .skip(1)
+                        .filter(|part| !part.is_empty())
+                    {
+                        expr = Expr::Index {
+                            object: Box::new(expr),
+                            index: Box::new(Expr::String(key.to_string())),
+                        };
+                    }
+                } else {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
 
         expr
     }

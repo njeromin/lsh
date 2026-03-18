@@ -39,6 +39,7 @@ pub fn lex_input(input: &str) -> Vec<Token> {
                 }
             }
             ';' => tokens.push(Token::new(TokenKind::Semicolon, 0)),
+            ',' => tokens.push(Token::new(TokenKind::Comma, 0)),
             ':' => tokens.push(Token::new(TokenKind::Colon, 0)),
             '=' => {
                 if chars.next_if(|next_char| next_char == &'=').is_some() {
