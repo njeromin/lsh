@@ -107,5 +107,8 @@ fn print_parser_expr(expr: &Expr) {
         Expr::Typeof(expr) => {
             println!("Typeof({expr:?})");
         }
+        Expr::CommandSub(expr) => {
+            println!("CommandSub({expr:?})");
+        }
     }
 }

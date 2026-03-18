@@ -109,31 +109,35 @@ pub fn lex_input(input: &str) -> Vec<Token> {
                 }
             }
             '$' => {
-                if chars
-                    .peek()
-                    .is_some_and(|next_char| matches!(next_char, '_' | 'A'..='z' | '0'..='9'))
-                {
-                    let mut var_string = String::from(
-                        // Using expect here but this should never fail.
-                        chars
-                            .next()
-                            .expect("Failed to get starting character of environment variable."),
-                    );
+                if let Some(next_char) = chars.peek() {
+                    if matches!(next_char, '_' | 'A'..='z' | '0'..='9') {
+                        let mut var_string = String::from(
+                            // Using expect here but this should never fail.
+                            chars.next().expect(
+                                "Failed to get starting character of environment variable.",
+                            ),
+                        );
 
-                    while let Some(var_char) = chars.peek() {
-                        if matches!(var_char, '_' | 'A'..='z' | '0'..='9') {
-                            // Character is a valid identifier character.
+                        while let Some(var_char) = chars.peek() {
+                            if matches!(var_char, '_' | 'A'..='z' | '0'..='9') {
+                                // Character is a valid identifier character.
 
-                            var_string.push(var_char.to_owned());
-                            // Skip forward one character as only peek was used
-                            // previously.
-                            chars.next();
-                        } else {
-                            break;
+                                var_string.push(var_char.to_owned());
+                                // Skip forward one character as only peek was used
+                                // previously.
+                                chars.next();
+                            } else {
+                                break;
+                            }
                         }
-                    }
 
-                    tokens.push(Token::new(TokenKind::Variable(var_string), 0));
+                        tokens.push(Token::new(TokenKind::Variable(var_string), 0));
+                    } else if next_char == &'(' {
+                        tokens.push(Token::new(TokenKind::DollarLeftParen, 0));
+                        chars.next();
+                    } else {
+                        panic!("Unexpected token");
+                    }
                 } else {
                     panic!("Unexpected token");
                 }
@@ -141,9 +145,20 @@ pub fn lex_input(input: &str) -> Vec<Token> {
             '/' => {
                 if let Some(next_char) = chars.peek() {
                     match *next_char {
-                        '=' => tokens.push(Token::new(TokenKind::SlashEquals, 0)),
+                        '=' => {
+                            chars.next();
+                            tokens.push(Token::new(TokenKind::SlashEquals, 0))
+                        }
+                        '/' => {
+                            // Skip single line comments.
+                            while let Some(char) = chars.next() {
+                                if char == '\n' {
+                                    break;
+                                }
+                            }
+                        }
                         _ => {
-                            if lex_identifier(&mut tokens, '-', &mut chars).is_none() {
+                            if lex_identifier(&mut tokens, '/', &mut chars).is_none() {
                                 tokens.push(Token::new(TokenKind::Slash, 0))
                             }
                         }

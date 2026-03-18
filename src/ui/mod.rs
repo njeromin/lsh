@@ -1,4 +1,4 @@
-use std::{env, io::Stdout, path::Path};
+use std::{env, io, path::Path};
 
 use crossterm::{
     cursor, queue,
@@ -8,14 +8,14 @@ use git2::Repository;
 
 pub mod informer;
 
-pub fn print_prompt(stdout: &mut Stdout) {
+pub fn print_prompt<W: io::Write>(stdout: &mut W) {
     let cwd = env::current_dir().expect("Failed to get current working directory.");
     let cwd_str = fmt_cwd(&cwd);
     let branch = get_branch(stdout, &cwd);
 
     queue!(
         stdout,
-        cursor::MoveToNextLine(1),
+        style::Print("\n"),
         style::PrintStyledContent(cwd_str.blue()),
     )
     .expect("Failed to print prompt level 1.");
@@ -32,14 +32,14 @@ pub fn print_prompt(stdout: &mut Stdout) {
 
     queue!(
         stdout,
-        cursor::MoveToNextLine(1),
+        style::Print("\n"),
         style::PrintStyledContent("› ".magenta())
     )
     .expect("Failed to print prompt level 2.")
 }
 
 // TODO: Look over, might be a better way to implement.
-fn get_branch(stdout: &mut Stdout, cwd: &Path) -> Option<String> {
+fn get_branch<W: io::Write>(stdout: &mut W, cwd: &Path) -> Option<String> {
     if let Ok(repo) = Repository::open(cwd) {
         match repo.head() {
             Ok(head) => {

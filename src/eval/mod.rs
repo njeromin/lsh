@@ -2,7 +2,11 @@ pub mod cmds;
 pub mod exec;
 pub mod value;
 
-use std::{collections::HashMap, env};
+use std::{
+    collections::HashMap,
+    env,
+    io::{self, Stderr, Stdin, Stdout},
+};
 
 use crate::{
     eval::value::Value,
@@ -107,6 +111,8 @@ impl Evaluator {
                     scope_indices.push(block_scope_index);
 
                     self.evaluate_statements(block, scope_indices);
+
+                    scope_indices.pop();
                 }
             }
         }
@@ -115,7 +121,7 @@ impl Evaluator {
     fn make_scope(&mut self) -> usize {
         self.scopes.push(Scope::default());
 
-        self.scopes.len()
+        self.scopes.len() - 1
     }
 
     fn evaluate_expr(
@@ -141,7 +147,10 @@ impl Evaluator {
                 // Concatenate arguments from the input cmd with the provided arguments from the evaluator.
                 let args = [res_args, string_args].concat();
 
-                cmds::exec_cmd(self, &res_cmd, args);
+                let mut io = lsh::IoCtx::<io::Stdin, io::Stdout, io::Stderr>::default();
+
+                // TODO: Use a shared io::Stdout reference.
+                cmds::exec_cmd(self, &res_cmd, args, &mut io);
 
                 Value::Null
             }
@@ -241,6 +250,40 @@ impl Evaluator {
             Expr::String(string) => Value::String(string.to_owned()),
             Expr::Number(num) => Value::Number(*num),
             Expr::Bool(bool) => Value::Bool(*bool),
+            Expr::CommandSub(expr) => {
+                match expr.as_ref() {
+                    Expr::CallOrString { identifier, args } => {
+                        let (res_cmd, res_args) = self.resolve_command(identifier.to_owned());
+
+                        let string_args: Vec<String> = args
+                            .iter()
+                            .map(|arg| self.evaluate_expr(arg, true, scope_indices).to_string())
+                            .collect();
+
+                        let all_args = [res_args, string_args].concat();
+
+                        let mut io = lsh::IoCtx {
+                            input: io::empty(),
+                            out: Vec::<u8>::new(),
+                            err: Vec::<u8>::new(),
+                            input_mode: lsh::IoStreamMode::Pipe,
+                            out_mode: lsh::IoStreamMode::Pipe,
+                            err_mode: lsh::IoStreamMode::Pipe,
+                        };
+
+                        cmds::exec_cmd(self, &res_cmd, all_args, &mut io);
+
+                        let output = String::from_utf8(io.out).unwrap_or_default();
+
+                        Value::String(output)
+                    }
+                    other => {
+                        // Fallback: allow non-command expressions inside $(...)
+                        let value = self.evaluate_expr(other, true, scope_indices);
+                        Value::String(value.to_string())
+                    }
+                }
+            }
         }
     }
 }

@@ -1,15 +1,19 @@
-use std::{io::Stdout, process};
+use std::{io, process};
 
 use crate::{eval::Evaluator, ui::informer};
 
-pub fn exit(_: &mut Evaluator, stdout: &mut Stdout, args: Vec<String>) {
+pub fn exit<R: io::Read, W: io::Write, WE: io::Write>(
+    _: &mut Evaluator,
+    io: &mut lsh::IoCtx<R, W, WE>,
+    args: Vec<String>,
+) {
     process::exit(if args.is_empty() {
         0
     } else {
         match args[0].parse::<i32>() {
             Ok(code) => code,
             Err(_) => {
-                informer::print_error(stdout, "Invalid exit code.");
+                informer::print_error(&mut io.out, "Invalid exit code.");
                 1
             }
         }

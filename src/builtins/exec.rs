@@ -1,4 +1,4 @@
-use std::{io::Stdout, path::PathBuf};
+use std::{io, path::PathBuf};
 
 use crate::{
     eval::{Evaluator, exec::exec_file, value::Value},
@@ -6,7 +6,11 @@ use crate::{
     ui::informer,
 };
 
-pub fn exec(_: &mut Evaluator, stdout: &mut Stdout, args: Vec<String>) {
+pub fn exec<R: io::Read, W: io::Write, WE: io::Write>(
+    _: &mut Evaluator,
+    io: &mut lsh::IoCtx<R, W, WE>,
+    args: Vec<String>,
+) {
     if let Some(path_arg) = args.first() {
         let path = paths::expand_path(PathBuf::from(path_arg));
 
@@ -18,6 +22,6 @@ pub fn exec(_: &mut Evaluator, stdout: &mut Stdout, args: Vec<String>) {
 
         exec_file(&mut exec_evaluator, path);
     } else {
-        informer::print_error(stdout, "An argument is required.");
+        informer::print_error(&mut io.out, "An argument is required.");
     }
 }

@@ -1,10 +1,14 @@
-use std::{env, io::Stdout, path::PathBuf};
+use std::{env, io, path::PathBuf};
 
 use crate::{eval::Evaluator, paths, ui::informer};
 
-pub fn cd(_: &mut Evaluator, stdout: &mut Stdout, args: Vec<String>) {
+pub fn cd<R: io::Read, W: io::Write, WE: io::Write>(
+    _: &mut Evaluator,
+    io: &mut lsh::IoCtx<R, W, WE>,
+    args: Vec<String>,
+) {
     if args.len() > 1 {
-        informer::print_error(stdout, "Too many arguments.");
+        informer::print_error(&mut io.out, "Too many arguments.");
         return;
     }
 
@@ -13,11 +17,11 @@ pub fn cd(_: &mut Evaluator, stdout: &mut Stdout, args: Vec<String>) {
 
         env::set_current_dir(&path).unwrap_or_else(|_| {
             informer::print_error(
-                stdout,
+                &mut io.out,
                 format!("Failed to change directory to '{arg}'.").as_str(),
             );
         });
     } else {
-        informer::print_error(stdout, "An argument is required.");
+        informer::print_error(&mut io.out, "An argument is required.");
     }
 }

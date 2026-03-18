@@ -34,6 +34,7 @@ pub enum Expr {
         args: Vec<Expr>,
     },
     Typeof(Box<Expr>),
+    CommandSub(Box<Expr>),
 }
 
 #[derive(Debug)]

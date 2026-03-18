@@ -1,4 +1,4 @@
-use std::{io::Stdout, path::PathBuf};
+use std::{io, path::PathBuf};
 
 use crate::{
     eval::{Evaluator, exec::exec_file},
@@ -6,9 +6,13 @@ use crate::{
     ui::informer,
 };
 
-pub fn source(eval: &mut Evaluator, stdout: &mut Stdout, args: Vec<String>) {
+pub fn source<R: io::Read, W: io::Write, WE: io::Write>(
+    eval: &mut Evaluator,
+    io: &mut lsh::IoCtx<R, W, WE>,
+    args: Vec<String>,
+) {
     if args.len() > 1 {
-        informer::print_error(stdout, "Too many arguments.");
+        informer::print_error(&mut io.err, "Too many arguments.");
         return;
     }
 
@@ -17,7 +21,6 @@ pub fn source(eval: &mut Evaluator, stdout: &mut Stdout, args: Vec<String>) {
 
         exec_file(eval, path);
     } else {
-        informer::print_error(stdout, "An argument is required.");
+        informer::print_error(&mut io.err, "An argument is required.");
     }
 }
-

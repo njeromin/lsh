@@ -63,13 +63,6 @@ fn interactive_session(eval: &mut Evaluator) {
 fn main() {
     let mut eval = Evaluator::new();
 
-    // TODO: Make this an option.
-    if which("eza").is_ok() {
-        eval.set_alias(String::from("ls"), String::from("eza --icons"));
-        eval.set_alias(String::from("la"), String::from("eza --icons --all"));
-        eval.set_alias(String::from("ll"), String::from("eza --icons --long"));
-    }
-
     let mut args = env::args();
     args.next();
 

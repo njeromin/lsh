@@ -262,11 +262,33 @@ impl Parser {
 
                 let expr = self.parse_expr();
 
-                self.consume(&TokenKind::RightParen, "Expected ')' after expression.");
+                if !self.check_current(&TokenKind::RightParen) {
+                    panic!("Parser error: expected ')', found {}", self.current().kind);
+                }
 
                 expr
             }
-            TokenKind::NewLine | TokenKind::Semicolon => self.parse_expr(),
+            TokenKind::DollarLeftParen => {
+                self.advance(); // Skip past '$('.
+
+                let expr = self.parse_expr();
+
+                if !self.check_current(&TokenKind::RightParen) {
+                    panic!(
+                        "Parser error: expected ')' after expression, found {}",
+                        self.current().kind
+                    );
+                }
+
+                Expr::CommandSub(Box::new(expr))
+            }
+            TokenKind::NewLine | TokenKind::Semicolon => {
+                let expr = self.parse_expr();
+
+                self.advance();
+
+                expr
+            }
             other => panic!("Unexpected token in primary: {other}"),
         };
 

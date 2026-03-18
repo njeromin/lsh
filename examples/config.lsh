@@ -1,0 +1,12 @@
+// If we have eza, set up ls aliases.
+if $(which eza) != "" {
+    echo "[O] Eza found, setting aliases."
+
+    alias set ls "eza --icons"
+    alias set la "eza --icons --all"
+    alias set ll "eza --icons --long"
+} else {
+    echo "[-] Eza not found, not setting aliases."
+}
+
+echo "[O] Config loaded"
