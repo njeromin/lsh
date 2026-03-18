@@ -206,20 +206,42 @@ impl Parser {
     }
 
     fn parse_factor(&mut self) -> Expr {
-        let mut expr = self.parse_primary();
+        let mut expr = self.parse_postfix();
         while let Some(op) = match self.current().kind {
             TokenKind::Star => Some(BinaryOp::Mul),
             TokenKind::Slash => Some(BinaryOp::Div),
             _ => None,
         } {
             self.advance();
-            let right = self.parse_primary();
+            let right = self.parse_postfix();
             expr = Expr::Binary {
                 op,
                 left: Box::new(expr),
                 right: Box::new(right),
             };
         }
+        expr
+    }
+
+    fn parse_postfix(&mut self) -> Expr {
+        let mut expr = self.parse_primary();
+
+        while self.check_current(&TokenKind::LeftBracket) {
+            self.advance(); // Skip '['.
+
+            let index_expr = self.parse_expr();
+
+            self.consume(
+                &TokenKind::RightBracket,
+                "Expected ']' after object index expression.",
+            );
+
+            expr = Expr::Index {
+                object: Box::new(expr),
+                index: Box::new(index_expr),
+            };
+        }
+
         expr
     }
 
@@ -230,19 +252,52 @@ impl Parser {
                 let call_ident = s.to_owned();
                 let mut args = vec![];
 
-                while let Some(next_tok) = self.tokens.get(self.index + 1) {
+                while let Some(next_kind) = self.tokens.get(self.index + 1).map(|t| t.kind.clone())
+                {
                     // This should really just use some form of parse_primary/parse_expr.
-                    let sub_expr = match &next_tok.kind {
-                        TokenKind::String(s) => Expr::String(s.to_owned()),
-                        TokenKind::Number(n) => Expr::Number(*n),
-                        TokenKind::Bool(b) => Expr::Bool(*b),
-                        TokenKind::Variable(var) => Expr::Variable(var.to_owned()),
+                    match next_kind {
+                        TokenKind::String(s) => {
+                            args.push(Expr::String(s));
+                            self.advance();
+                        }
+                        TokenKind::Number(n) => {
+                            args.push(Expr::Number(n));
+                            self.advance();
+                        }
+                        TokenKind::Bool(b) => {
+                            args.push(Expr::Bool(b));
+                            self.advance();
+                        }
+                        TokenKind::Variable(var) => {
+                            self.advance(); // Move to variable.
+
+                            let mut sub_expr = Expr::Variable(var);
+
+                            while self
+                                .tokens
+                                .get(self.index + 1)
+                                .is_some_and(|tok| tok.kind.compare(&TokenKind::LeftBracket))
+                            {
+                                self.advance(); // Move to '['.
+                                self.advance(); // Skip '['.
+
+                                let index_expr = self.parse_expr();
+
+                                self.consume(
+                                    &TokenKind::RightBracket,
+                                    "Expected ']' after object index expression.",
+                                );
+
+                                sub_expr = Expr::Index {
+                                    object: Box::new(sub_expr),
+                                    index: Box::new(index_expr),
+                                };
+                            }
+
+                            args.push(sub_expr);
+                        }
                         _ => break,
-                    };
-
-                    args.push(sub_expr);
-
-                    self.advance();
+                    }
                 }
 
                 Expr::CallOrString {
@@ -292,6 +347,7 @@ impl Parser {
                     let key = match &self.current().kind {
                         TokenKind::String(s) => s.clone(),
                         TokenKind::Variable(v) => v.clone(),
+                        TokenKind::Number(n) => n.to_string(),
                         _ => panic!("Expected object key"),
                     };
 

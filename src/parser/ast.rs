@@ -31,6 +31,10 @@ pub enum Expr {
         left: Box<Expr>,
         right: Box<Expr>,
     },
+    Index {
+        object: Box<Expr>,
+        index: Box<Expr>,
+    },
     // cmd arg1 arg2...
     CallOrString {
         identifier: String,

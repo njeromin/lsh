@@ -2,11 +2,7 @@ pub mod cmds;
 pub mod exec;
 pub mod value;
 
-use std::{
-    collections::HashMap,
-    env,
-    io::{self, Stderr, Stdin, Stdout},
-};
+use std::{collections::HashMap, env, io};
 
 use crate::{
     eval::value::Value,
@@ -139,6 +135,14 @@ impl Evaluator {
         self.scopes.len() - 1
     }
 
+    fn object_index_key(value: Value) -> Option<String> {
+        match value {
+            Value::String(s) => Some(s),
+            Value::Number(n) => Some(n.to_string()),
+            _ => None,
+        }
+    }
+
     fn evaluate_expr(
         &mut self,
         expr: &Expr,
@@ -255,6 +259,17 @@ impl Evaluator {
                     BinaryOp::And => Value::Bool(left_res.is_truthy() && right_res.is_truthy()),
 
                     BinaryOp::Or => Value::Bool(left_res.is_truthy() || right_res.is_truthy()),
+                }
+            }
+            Expr::Index { object, index } => {
+                let object_value = self.evaluate_expr(object, true, scope_indices);
+                let index_value = self.evaluate_expr(index, true, scope_indices);
+
+                match (object_value, Self::object_index_key(index_value)) {
+                    (Value::Object(map), Some(key)) => {
+                        map.get(&key).cloned().unwrap_or(Value::Null)
+                    }
+                    _ => Value::Null,
                 }
             }
             Expr::TypeOf(expr) => {

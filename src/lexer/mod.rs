@@ -111,7 +111,7 @@ pub fn lex_input(input: &str) -> Vec<Token> {
             }
             '$' => {
                 if let Some(next_char) = chars.peek() {
-                    if matches!(next_char, '_' | 'A'..='z' | '0'..='9') {
+                    if *next_char == '_' || next_char.is_ascii_alphanumeric() {
                         let mut var_string = String::from(
                             // Using expect here but this should never fail.
                             chars.next().expect(
@@ -120,7 +120,7 @@ pub fn lex_input(input: &str) -> Vec<Token> {
                         );
 
                         while let Some(var_char) = chars.peek() {
-                            if matches!(var_char, '_' | 'A'..='z' | '0'..='9') {
+                            if *var_char == '_' || var_char.is_ascii_alphanumeric() {
                                 // Character is a valid identifier character.
 
                                 var_string.push(var_char.to_owned());
@@ -170,6 +170,8 @@ pub fn lex_input(input: &str) -> Vec<Token> {
             '}' => tokens.push(Token::new(TokenKind::RightCurly, 0)),
             '(' => tokens.push(Token::new(TokenKind::LeftParen, 0)),
             ')' => tokens.push(Token::new(TokenKind::RightParen, 0)),
+            '[' => tokens.push(Token::new(TokenKind::LeftBracket, 0)),
+            ']' => tokens.push(Token::new(TokenKind::RightBracket, 0)),
             '"' | '\'' => {
                 let delim = char;
 
@@ -218,11 +220,13 @@ pub fn lex_input(input: &str) -> Vec<Token> {
 
 fn lex_identifier(tokens: &mut Vec<Token>, start_char: char, chars: &mut CharIter) -> Option<()> {
     // First, check if starting character is a valid for the start of a string.
-    if matches!(start_char, '~' | '.' | '/' | '_' | '-' | 'A'..='z') {
+    if matches!(start_char, '~' | '.' | '/' | '_' | '-') || start_char.is_ascii_alphabetic() {
         let mut ident_string = String::from(start_char);
 
         while let Some(ident_char) = chars.peek() {
-            if matches!(ident_char, '~' | '.' | '/' | '_' | '-' | 'A'..='z' | '0'..='9') {
+            if matches!(ident_char, '~' | '.' | '/' | '_' | '-')
+                || ident_char.is_ascii_alphanumeric()
+            {
                 // Character is a valid identifier character.
 
                 ident_string.push(ident_char.to_owned());

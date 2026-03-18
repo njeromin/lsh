@@ -104,6 +104,9 @@ fn print_parser_expr(expr: &Expr) {
         Expr::Binary { left, op, right } => {
             println!("Binary Expression({left:?} {op:?} {right:?})");
         }
+        Expr::Index { object, index } => {
+            println!("Index({object:?}[{index:?}])");
+        }
         Expr::CallOrString { identifier, args } => {
             println!("CallOrString({identifier}, {} args)", args.len());
         }
