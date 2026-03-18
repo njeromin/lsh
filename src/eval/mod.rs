@@ -68,6 +68,26 @@ impl Evaluator {
         self.evaluate_statements(&prog.body, &mut vec![0]);
     }
 
+    fn evaluate_in_new_scope(&mut self, statements: &[Statement], scope_indices: &mut Vec<usize>) {
+        let scope_index = self.make_scope();
+        scope_indices.push(scope_index);
+
+        self.evaluate_statements(statements, scope_indices);
+
+        let popped_scope_index = scope_indices
+            .pop()
+            .expect("Failed to pop scope index after scoped evaluation.");
+        if popped_scope_index != scope_index {
+            panic!(
+                "Scope stack mismatch: expected to pop scope {scope_index}, popped {popped_scope_index}."
+            );
+        }
+
+        self.scopes
+            .pop()
+            .expect("Failed to pop evaluator scope after scoped evaluation.");
+    }
+
     fn evaluate_statements(&mut self, statements: &[Statement], scope_indices: &mut Vec<usize>) {
         for statement in statements {
             match statement {
@@ -93,9 +113,9 @@ impl Evaluator {
                     let cond_res = self.evaluate_expr(condition, true, scope_indices);
 
                     if cond_res.is_truthy() {
-                        self.evaluate_statements(then_branch, scope_indices);
+                        self.evaluate_in_new_scope(then_branch, scope_indices);
                     } else if let Some(else_branch_statements) = else_branch {
-                        self.evaluate_statements(else_branch_statements, scope_indices);
+                        self.evaluate_in_new_scope(else_branch_statements, scope_indices);
                     }
                 }
                 Statement::While { condition, body } => {
@@ -103,16 +123,11 @@ impl Evaluator {
                         .evaluate_expr(condition, true, scope_indices)
                         .is_truthy()
                     {
-                        self.evaluate_statements(body, scope_indices);
+                        self.evaluate_in_new_scope(body, scope_indices);
                     }
                 }
                 Statement::Block(block) => {
-                    let block_scope_index = self.make_scope();
-                    scope_indices.push(block_scope_index);
-
-                    self.evaluate_statements(block, scope_indices);
-
-                    scope_indices.pop();
+                    self.evaluate_in_new_scope(block, scope_indices);
                 }
             }
         }
