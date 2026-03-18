@@ -242,7 +242,7 @@ impl Evaluator {
                     BinaryOp::Or => Value::Bool(left_res.is_truthy() || right_res.is_truthy()),
                 }
             }
-            Expr::Typeof(expr) => {
+            Expr::TypeOf(expr) => {
                 // Evaluate the expression and return its type as a string.
                 let evaluated_value = self.evaluate_expr(expr, true, scope_indices);
                 Value::String(evaluated_value.get_type().to_string())
@@ -283,6 +283,14 @@ impl Evaluator {
                         Value::String(value.to_string())
                     }
                 }
+            }
+            Expr::Object(expr_map) => {
+                let mut obj = HashMap::new();
+                for (key, value) in expr_map {
+                    let value_value = self.evaluate_expr(&value, true, scope_indices);
+                    obj.insert(key.to_string(), value_value);
+                }
+                Value::Object(obj)
             }
         }
     }

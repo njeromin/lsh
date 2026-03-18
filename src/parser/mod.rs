@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use crate::{
     lexer::token::{Token, TokenKind},
     parser::ast::{BinaryOp, Expr, Program, Statement},
@@ -255,7 +257,7 @@ impl Parser {
 
                 let expr = self.parse_expr();
 
-                Expr::Typeof(Box::new(expr))
+                Expr::TypeOf(Box::new(expr))
             }
             TokenKind::LeftParen => {
                 self.advance(); // Skip past '('.
@@ -281,6 +283,32 @@ impl Parser {
                 }
 
                 Expr::CommandSub(Box::new(expr))
+            }
+            TokenKind::LeftCurly => {
+                self.advance(); // Skip past '{'.
+
+                let mut expr_map = HashMap::new();
+                while !self.check_current(&TokenKind::RightCurly) {
+                    let key = match &self.current().kind {
+                        TokenKind::String(s) => s.clone(),
+                        TokenKind::Variable(v) => v.clone(),
+                        _ => panic!("Expected object key"),
+                    };
+
+                    self.advance();
+                    self.consume(&TokenKind::Colon, "Expected ':' after object key");
+
+                    let value = self.parse_expr();
+
+                    expr_map.insert(key, value);
+
+                    if !self.check_current(&TokenKind::RightCurly) {
+                        self.advance(); // Skip past ','.
+                    }
+                }
+                self.advance(); // Skip past '}'.
+
+                Expr::Object(expr_map)
             }
             TokenKind::NewLine | TokenKind::Semicolon => {
                 let expr = self.parse_expr();

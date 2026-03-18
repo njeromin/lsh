@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 #[derive(Debug)]
 pub enum BinaryOp {
     Add,
@@ -20,6 +22,7 @@ pub enum Expr {
     Number(f64),
     Bool(bool),
     String(String),
+    Object(HashMap<String, Expr>),
     Variable(String),
 
     // a + b, a - b, ...
@@ -33,7 +36,7 @@ pub enum Expr {
         identifier: String,
         args: Vec<Expr>,
     },
-    Typeof(Box<Expr>),
+    TypeOf(Box<Expr>),
     CommandSub(Box<Expr>),
 }
 

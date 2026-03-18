@@ -95,6 +95,9 @@ fn print_parser_expr(expr: &Expr) {
         Expr::Bool(b) => {
             println!("Bool({b})");
         }
+        Expr::Object(map) => {
+            println!("Object({map:?})");
+        }
         Expr::Variable(var) => {
             println!("Variable({var})");
         }
@@ -104,7 +107,7 @@ fn print_parser_expr(expr: &Expr) {
         Expr::CallOrString { identifier, args } => {
             println!("CallOrString({identifier}, {} args)", args.len());
         }
-        Expr::Typeof(expr) => {
+        Expr::TypeOf(expr) => {
             println!("Typeof({expr:?})");
         }
         Expr::CommandSub(expr) => {

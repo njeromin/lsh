@@ -38,6 +38,7 @@ pub enum TokenKind {
     LeftParen,
     RightParen,
     Semicolon,
+    Colon,
     NewLine,
     EOF,
 }
@@ -85,6 +86,7 @@ impl fmt::Display for TokenKind {
                 Self::LeftParen => "LeftParen".to_string(),
                 Self::RightParen => "RightParen".to_string(),
                 Self::Semicolon => "Semicolon".to_string(),
+                Self::Colon => "Colon".to_string(),
                 Self::NewLine => "NewLine".to_string(),
                 Self::EOF => "EOF".to_string(),
             },

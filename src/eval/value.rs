@@ -1,10 +1,11 @@
-use std::fmt;
+use std::{collections::HashMap, fmt};
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub enum ValueType {
     String,
     Number,
     Bool,
+    Object,
     Null,
 }
 
@@ -14,6 +15,7 @@ impl fmt::Display for ValueType {
             Self::String => write!(f, "string"),
             Self::Number => write!(f, "number"),
             Self::Bool => write!(f, "bool"),
+            Self::Object => write!(f, "object"),
             Self::Null => write!(f, "null"),
         }
     }
@@ -24,6 +26,7 @@ pub enum Value {
     String(String),
     Number(f64),
     Bool(bool),
+    Object(HashMap<String, Value>),
     Null,
 }
 
@@ -33,6 +36,16 @@ impl fmt::Display for Value {
             Self::String(str) => write!(f, "{str}"),
             Self::Number(num) => write!(f, "{num}"),
             Self::Bool(bool) => write!(f, "{bool}"),
+            Self::Object(map) => {
+                // TODO: Proper recursive object printing.
+                write!(f, "{{\n")?;
+
+                for (key, value) in map {
+                    write!(f, "  {key}: {value}\n")?;
+                }
+
+                write!(f, "}}\n")
+            }
             Self::Null => write!(f, ""),
         }
     }
@@ -44,6 +57,7 @@ impl Value {
             Self::String(_) => ValueType::String,
             Self::Number(_) => ValueType::Number,
             Self::Bool(_) => ValueType::Bool,
+            Self::Object(_) => ValueType::Object,
             Self::Null => ValueType::Null,
         }
     }
@@ -52,8 +66,9 @@ impl Value {
         match self {
             Self::Bool(b) => *b,
             Self::Number(n) => *n != 0.0,
-            Value::String(s) => !s.is_empty(),
-            Value::Null => false,
+            Self::String(s) => !s.is_empty(),
+            Self::Object(map) => !map.is_empty(),
+            Self::Null => false,
         }
     }
 
@@ -64,9 +79,14 @@ impl Value {
                 Self::String(s) => s.parse::<f64>().map_or(Self::Null, Self::Number),
                 Self::Number(n) => Self::Number(*n),
                 Self::Bool(b) => Self::Number(if *b { 1.0 } else { 0.0 }),
+                Self::Object(_) => Self::Null,
                 Self::Null => Self::Null,
             },
             ValueType::Bool => Self::Bool(self.is_truthy()),
+            ValueType::Object => match self {
+                Self::Object(map) => Self::Object(map.clone()),
+                _ => Self::Object(HashMap::new()),
+            },
             ValueType::Null => Self::Null,
         }
     }
