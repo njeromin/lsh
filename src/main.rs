@@ -5,7 +5,6 @@ use std::{
 };
 
 use crossterm::{cursor, queue};
-use which::which;
 
 use crate::{
     eval::{Evaluator, exec::exec_file, value::Value},

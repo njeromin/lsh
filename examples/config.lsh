@@ -1,5 +1,5 @@
 // If we have eza, set up ls aliases.
-if $(which eza) != "" {
+if $(which eza).code == 0 {
     echo "[O] Eza found, setting aliases."
 
     alias set ls "eza --icons"

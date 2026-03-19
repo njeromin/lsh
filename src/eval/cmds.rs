@@ -22,19 +22,35 @@ pub fn exec_cmd<R: io::Read, W: io::Write, WE: io::Write>(
     cmd: &str,
     args: Vec<String>,
     ctx: &mut lsh::IoCtx<R, W, WE>,
-) {
+) -> i32 {
     match cmd {
-        "exit" => builtins::exit::exit(evaluator, ctx, args),
-        "source" => builtins::source::source(evaluator, ctx, args),
-        "exec" => builtins::exec::exec(evaluator, ctx, args),
-        "alias" => builtins::alias::alias(evaluator, ctx, args),
-        "cd" => builtins::cd::cd(evaluator, ctx, args),
-        _ => {
-            // TODO: Handle error.
-            if let Err(e) = spawn_proc(cmd, args, ctx) {
-                informer::print_error(&mut ctx.err, &e.to_string());
-            }
+        "exit" => {
+            builtins::exit::exit(evaluator, ctx, args);
+            0
         }
+        "source" => {
+            builtins::source::source(evaluator, ctx, args);
+            0
+        }
+        "exec" => {
+            builtins::exec::exec(evaluator, ctx, args);
+            0
+        }
+        "alias" => {
+            builtins::alias::alias(evaluator, ctx, args);
+            0
+        }
+        "cd" => {
+            builtins::cd::cd(evaluator, ctx, args);
+            0
+        }
+        _ => match spawn_proc(cmd, args, ctx) {
+            Ok(status) => status,
+            Err(e) => {
+                informer::print_error(&mut ctx.err, &e.to_string());
+                return -1;
+            }
+        },
     }
 }
 
@@ -82,7 +98,7 @@ pub fn spawn_proc<R: io::Read, W: io::Write, WE: io::Write>(
                 }
             }
 
-            Ok(child.wait()?.code().unwrap_or(1))
+            Ok(child.wait()?.code().unwrap_or(0))
         }
         Err(e) => {
             // TODO: Errors could probably be handled more cleanly.

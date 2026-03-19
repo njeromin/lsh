@@ -301,11 +301,21 @@ impl Evaluator {
                             err_mode: lsh::IoStreamMode::Pipe,
                         };
 
-                        cmds::exec_cmd(self, &res_cmd, all_args, &mut io);
+                        let exit_status = cmds::exec_cmd(self, &res_cmd, all_args, &mut io);
 
-                        let output = String::from_utf8(io.out).unwrap_or_default();
+                        let mut res = HashMap::new();
 
-                        Value::String(output)
+                        res.insert(String::from("code"), Value::Number(exit_status as f64));
+                        res.insert(
+                            String::from("out"),
+                            Value::String(String::from_utf8(io.out).unwrap_or_default()),
+                        );
+                        res.insert(
+                            String::from("err"),
+                            Value::String(String::from_utf8(io.err).unwrap_or_default()),
+                        );
+
+                        Value::Object(res)
                     }
                     other => {
                         // Fallback: allow non-command expressions inside $(...)
