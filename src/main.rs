@@ -21,6 +21,14 @@ pub mod parser;
 pub mod paths;
 pub mod ui;
 
+fn get_prompt(eval: &Evaluator) -> &str {
+    if let Some(Value::String(prompt)) = eval.get_var(0, "prompt") {
+        prompt
+    } else {
+        "\x1b[35m›\x1b[0m "
+    }
+}
+
 fn interactive_session(eval: &mut Evaluator) -> rustyline::Result<()> {
     let mut cout = io::stdout();
 
@@ -28,7 +36,6 @@ fn interactive_session(eval: &mut Evaluator) -> rustyline::Result<()> {
         informer::print_error(&mut cout, e.to_string().as_str());
     }
 
-    // TODO: Use rustyline
     let mut editor = DefaultEditor::new()?;
     // #[cfg(feature = "with-file-history")]
     // if rl.load_history("history.txt").is_err() {
@@ -42,12 +49,7 @@ fn interactive_session(eval: &mut Evaluator) -> rustyline::Result<()> {
 
         let mut input = String::new();
 
-        // if let Err(e) = cin.read_line(&mut input) {
-        //     informer::print_error(&mut cout, e.to_string().as_str());
-        //     return Ok(());
-        // }
-
-        let readline = editor.readline("› ");
+        let readline = editor.readline(get_prompt(eval));
 
         match readline {
             Ok(line) => {

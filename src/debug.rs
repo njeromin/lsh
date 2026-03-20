@@ -111,7 +111,7 @@ fn print_parser_expr(expr: &Expr) {
             println!("CallOrString({identifier}, {} args)", args.len());
         }
         Expr::TypeOf(expr) => {
-            println!("Typeof({expr:?})");
+            println!("TypeOf({expr:?})");
         }
         Expr::CommandSub(expr) => {
             println!("CommandSub({expr:?})");

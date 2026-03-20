@@ -30,12 +30,7 @@ pub fn print_prompt<W: io::Write>(stdout: &mut W) {
         .expect("Failed to print prompt level 1 decoration.");
     }
 
-    queue!(
-        stdout,
-        style::Print("\n"),
-        style::PrintStyledContent("› ".magenta())
-    )
-    .expect("Failed to print prompt level 2.")
+    queue!(stdout, style::Print("\n")).expect("Failed to print end.")
 }
 
 // TODO: Look over, might be a better way to implement.

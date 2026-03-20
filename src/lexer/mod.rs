@@ -145,24 +145,22 @@ pub fn lex_input(input: &str) -> Vec<Token> {
                 }
             }
             '/' => {
-                if let Some(next_char) = chars.peek() {
-                    match *next_char {
-                        '=' => {
-                            chars.next();
-                            tokens.push(Token::new(TokenKind::SlashEquals, 0))
-                        }
-                        '/' => {
-                            // Skip single line comments.
-                            while let Some(char) = chars.next() {
-                                if char == '\n' {
-                                    break;
-                                }
+                match chars.peek().copied() {
+                    Some('=') => {
+                        chars.next();
+                        tokens.push(Token::new(TokenKind::SlashEquals, 0))
+                    }
+                    Some('/') => {
+                        // Skip single line comments.
+                        while let Some(char) = chars.next() {
+                            if char == '\n' {
+                                break;
                             }
                         }
-                        _ => {
-                            if lex_identifier(&mut tokens, '/', &mut chars).is_none() {
-                                tokens.push(Token::new(TokenKind::Slash, 0))
-                            }
+                    }
+                    Some(_) | None => {
+                        if lex_identifier(&mut tokens, '/', &mut chars).is_none() {
+                            tokens.push(Token::new(TokenKind::Slash, 0))
                         }
                     }
                 }
