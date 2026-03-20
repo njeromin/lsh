@@ -41,7 +41,7 @@ impl fmt::Display for Value {
                 write!(f, "{{\n")?;
 
                 for (key, value) in map {
-                    write!(f, "  {}: {}\n", key, value.to_string())?;
+                    write!(f, "  {}: {:?}\n", key, value.to_string())?;
                 }
 
                 write!(f, "}}\n")

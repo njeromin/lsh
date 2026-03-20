@@ -64,6 +64,16 @@ impl Evaluator {
         ]));
         scope.vars.insert(String::from("palette"), palette);
 
+        let logical_pwd = env::var("PWD").unwrap_or_else(|_| {
+            env::current_dir()
+                .ok()
+                .and_then(|cwd| cwd.to_str().map(ToOwned::to_owned))
+                .unwrap_or_else(|| String::from("."))
+        });
+        scope
+            .vars
+            .insert(String::from("PWD"), Value::String(logical_pwd));
+
         self
     }
 

@@ -43,7 +43,7 @@ fn interactive_session(eval: &mut Evaluator) -> rustyline::Result<()> {
     // }
 
     loop {
-        ui::print_prompt(&mut cout);
+        ui::print_prompt(&mut cout, eval);
 
         cout.flush().expect("Failed to flush");
 

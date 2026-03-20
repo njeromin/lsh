@@ -1,4 +1,7 @@
-use std::{env, io, path::Path};
+use std::{
+    env, io,
+    path::{Path, PathBuf},
+};
 
 use crossterm::{
     cursor, queue,
@@ -6,12 +9,14 @@ use crossterm::{
 };
 use git2::Repository;
 
+use crate::eval::{Evaluator, value::Value};
+
 pub mod informer;
 
-pub fn print_prompt<W: io::Write>(stdout: &mut W) {
-    let cwd = env::current_dir().expect("Failed to get current working directory.");
-    let cwd_str = fmt_cwd(&cwd);
-    let branch = get_branch(stdout, &cwd);
+pub fn print_prompt<W: io::Write>(stdout: &mut W, eval: &Evaluator) {
+    let cwd = get_logical_cwd(eval);
+    let cwd_str = fmt_cwd(cwd.as_path());
+    let branch = get_branch(stdout, cwd.as_path());
 
     queue!(
         stdout,
@@ -31,6 +36,14 @@ pub fn print_prompt<W: io::Write>(stdout: &mut W) {
     }
 
     queue!(stdout, style::Print("\n")).expect("Failed to print end.")
+}
+
+fn get_logical_cwd(eval: &Evaluator) -> PathBuf {
+    if let Some(Value::String(pwd)) = eval.get_var(0, "PWD") {
+        PathBuf::from(pwd)
+    } else {
+        env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+    }
 }
 
 // TODO: Look over, might be a better way to implement.

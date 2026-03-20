@@ -3,6 +3,15 @@ use std::path::PathBuf;
 use dirs;
 
 pub fn expand_path(path: PathBuf) -> PathBuf {
+    let mut expanded_path = expand_tilde(path);
+
+    // Normalize the path to remove any redundant components.
+    expanded_path = expanded_path.canonicalize().unwrap_or(expanded_path);
+
+    expanded_path
+}
+
+pub fn expand_tilde(path: PathBuf) -> PathBuf {
     let mut expanded_path = path;
 
     // Expand the home directory if it starts with '~'.
@@ -11,9 +20,6 @@ pub fn expand_path(path: PathBuf) -> PathBuf {
     {
         expanded_path = home_dir.join(stripped);
     }
-
-    // Normalize the path to remove any redundant components.
-    expanded_path = expanded_path.canonicalize().unwrap_or(expanded_path);
 
     expanded_path
 }
