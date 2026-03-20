@@ -85,24 +85,24 @@ pub fn lex_input(input: &str) -> Vec<Token> {
                     }
                 }
             }
-            '-' => {
-                if let Some(next_char) = chars.peek() {
-                    match *next_char {
-                        '=' => {
-                            tokens.push(Token::new(TokenKind::MinusEquals, 0));
-                            chars.next();
-                        }
-                        ' ' => tokens.push(Token::new(TokenKind::Minus, 0)),
-                        _ => {
-                            if lex_number(&mut tokens, char, &mut chars).is_none()
-                                && lex_identifier(&mut tokens, '-', &mut chars).is_none()
-                            {
-                                tokens.push(Token::new(TokenKind::Minus, 0))
-                            }
-                        }
+            '-' => match chars.peek() {
+                Some(&'=') => {
+                    tokens.push(Token::new(TokenKind::MinusEquals, 0));
+                    chars.next();
+                }
+                Some(&' ') => tokens.push(Token::new(TokenKind::Minus, 0)),
+                Some(c) if c.is_ascii_digit() => {
+                    if lex_number(&mut tokens, char, &mut chars).is_none() {
+                        tokens.push(Token::new(TokenKind::Minus, 0));
                     }
                 }
-            }
+                Some(_) => {
+                    if lex_identifier(&mut tokens, '-', &mut chars).is_none() {
+                        tokens.push(Token::new(TokenKind::Minus, 0))
+                    }
+                }
+                None => tokens.push(Token::new(TokenKind::Minus, 0)),
+            },
             '*' => {
                 if chars.next_if(|next_char| next_char == &'=').is_some() {
                     tokens.push(Token::new(TokenKind::StarEquals, 0));
@@ -252,7 +252,9 @@ fn lex_identifier(tokens: &mut Vec<Token>, start_char: char, chars: &mut CharIte
 }
 
 fn lex_number(tokens: &mut Vec<Token>, start_char: char, chars: &mut CharIter) -> Option<()> {
-    if start_char.is_ascii_digit() || start_char == '-' {
+    if start_char.is_ascii_digit()
+        || (start_char == '-' && chars.peek().is_some_and(|c| c.is_ascii_digit()))
+    {
         // Character is a valid number starting character.
 
         let mut num_str = String::from(start_char);

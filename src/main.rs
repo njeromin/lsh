@@ -5,6 +5,7 @@ use std::{
 };
 
 use crossterm::{cursor, queue};
+use rustyline::{DefaultEditor, error::ReadlineError};
 
 use crate::{
     eval::{Evaluator, exec::exec_file, value::Value},
@@ -20,13 +21,19 @@ pub mod parser;
 pub mod paths;
 pub mod ui;
 
-fn interactive_session(eval: &mut Evaluator) {
+fn interactive_session(eval: &mut Evaluator) -> rustyline::Result<()> {
     let mut cout = io::stdout();
-    let cin = io::stdin();
 
     if let Err(e) = queue!(cout, cursor::SetCursorStyle::BlinkingBar) {
         informer::print_error(&mut cout, e.to_string().as_str());
     }
+
+    // TODO: Use rustyline
+    let mut editor = DefaultEditor::new()?;
+    // #[cfg(feature = "with-file-history")]
+    // if rl.load_history("history.txt").is_err() {
+    //     println!("No previous history.");
+    // }
 
     loop {
         ui::print_prompt(&mut cout);
@@ -35,9 +42,23 @@ fn interactive_session(eval: &mut Evaluator) {
 
         let mut input = String::new();
 
-        if let Err(e) = cin.read_line(&mut input) {
-            informer::print_error(&mut cout, e.to_string().as_str());
-            return;
+        // if let Err(e) = cin.read_line(&mut input) {
+        //     informer::print_error(&mut cout, e.to_string().as_str());
+        //     return Ok(());
+        // }
+
+        let readline = editor.readline("› ");
+
+        match readline {
+            Ok(line) => {
+                input = line;
+            }
+            Err(e) => match e {
+                ReadlineError::Interrupted => continue,
+                _ => {
+                    informer::print_error(&mut cout, e.to_string().as_str());
+                }
+            },
         }
 
         // If input is empty, skip to next iteration of loop as there won't be anything to execute
@@ -60,7 +81,7 @@ fn interactive_session(eval: &mut Evaluator) {
 }
 
 fn main() {
-    let mut eval = Evaluator::new();
+    let mut eval = Evaluator::new().with_globals();
 
     let mut args = env::args();
     args.next();
@@ -73,6 +94,8 @@ fn main() {
 
         exec_file(&mut eval, PathBuf::from(file_path));
     } else {
-        interactive_session(&mut eval);
+        if let Err(e) = interactive_session(&mut eval) {
+            informer::print_error(&mut io::stderr(), e.to_string().as_str());
+        }
     }
 }

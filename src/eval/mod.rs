@@ -19,12 +19,48 @@ pub struct Evaluator {
     aliases: HashMap<String, String>,
 }
 
+fn fill_globals(scope: &mut Scope) {
+    let colours = Value::Object(HashMap::from([
+        (String::from("red"), Value::String(String::from("\x1b[31m"))),
+        (
+            String::from("green"),
+            Value::String(String::from("\x1b[32m")),
+        ),
+        (
+            String::from("yellow"),
+            Value::String(String::from("\x1b[33m")),
+        ),
+        (
+            String::from("blue"),
+            Value::String(String::from("\x1b[34m")),
+        ),
+        (
+            String::from("magenta"),
+            Value::String(String::from("\x1b[35m")),
+        ),
+        (
+            String::from("cyan"),
+            Value::String(String::from("\x1b[36m")),
+        ),
+        (
+            String::from("reset"),
+            Value::String(String::from("\x1b[0m")),
+        ),
+    ]));
+    scope.vars.insert(String::from("colours"), colours);
+}
+
 impl Evaluator {
     pub fn new() -> Evaluator {
         Evaluator {
             scopes: vec![Scope::default()],
             aliases: HashMap::new(),
         }
+    }
+
+    pub fn with_globals(mut self) -> Evaluator {
+        fill_globals(&mut self.scopes[0]);
+        self
     }
 
     pub fn push_var(&mut self, scope_index: usize, name: String, value: Value) {

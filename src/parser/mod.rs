@@ -291,6 +291,14 @@ impl Parser {
                             args.push(Expr::Bool(b));
                             self.advance();
                         }
+                        TokenKind::Star => {
+                            args.push(Expr::String("*".to_string()));
+                            self.advance();
+                        }
+                        TokenKind::Slash => {
+                            args.push(Expr::String("/".to_string()));
+                            self.advance();
+                        }
                         TokenKind::Variable(var) => {
                             self.advance(); // Move to variable.
 
