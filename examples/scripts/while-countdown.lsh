@@ -4,8 +4,8 @@ let count = 10
 
 while $count > 0 {
   echo $count
-
-  let count = $count - 1
-
-  sleep 1
+  $count = $count - 1
+  sleep 0.2
 }
+
+echo "Done"

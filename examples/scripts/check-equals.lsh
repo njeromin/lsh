@@ -3,11 +3,17 @@
 let value1 = $0
 let value2 = $1
 
-echo Value 1 is $value1
-echo Value 2 is $value2
+if $value1 == "" || $value2 == "" {
+  echo "Usage: ./examples/scripts/check-equals.lsh <value1> <value2>"
+  return
+}
+
+echo "Value 1:" $value1
+echo "Value 2:" $value2
+echo "Types:" $(typeof $value1) $(typeof $value2)
 
 if $value1 == $value2 {
-  echo "Value 1 is equal to value 2"
+  echo "Value 1 is equal to value 2."
 } else {
-  echo "Value 1 is not equal to value 2"
+  echo "Value 1 is not equal to value 2."
 }

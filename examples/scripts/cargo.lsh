@@ -2,10 +2,14 @@
 
 let subcmd = $0
 
-if $subcmd == "run" {
+if $subcmd == "" || $subcmd == "help" {
+  echo "Usage: ./examples/scripts/cargo.lsh <run|build|test>"
+} else if $subcmd == "run" {
   cargo run
 } else if $subcmd == "build" {
   cargo build
+} else if $subcmd == "test" {
+  cargo test -q
 } else {
   echo "Unknown command:" $subcmd
 }

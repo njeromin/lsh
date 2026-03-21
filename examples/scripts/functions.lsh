@@ -4,8 +4,10 @@ fn add(a, b) {
     return $a + $b;
 }
 
-let result = add 2 3
+fn greet(name) {
+    return "Hello, " + $name
+}
 
-echo $result
-
-echo $(add 2 3)
+echo "add 2 3 ->" $(add 2 3).out
+echo "add 10 5 ->" $(add 10 5).out
+echo $(greet "lsh").out
