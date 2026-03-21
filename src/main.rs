@@ -59,17 +59,14 @@ fn interactive_session(eval: &mut Evaluator, config_dir: &Path) -> rustyline::Re
         informer::print_error(&mut cout, e.to_string().as_str());
     }
 
+    let history_path = config_dir.join("history.txt");
+
     let mut editor = DefaultEditor::new()?;
-    if editor
-        .load_history(&config_dir.join("history.txt"))
-        .is_err()
-    {
+    if editor.load_history(&history_path).is_err() {
         println!("No previous history.");
     }
 
     loop {
-        print!("\n");
-
         let mut input = String::new();
 
         let readline = editor.readline(get_prompt(eval));
@@ -103,10 +100,12 @@ fn interactive_session(eval: &mut Evaluator, config_dir: &Path) -> rustyline::Re
         debug::print_parser(&prog);
 
         eval.evaluate(prog);
-    }
 
-    #[cfg(feature = "with-file-history")]
-    rl.save_history("history.txt");
+        // TODO: This should be done after exiting the program, not on every iteration.
+        // if let Err(e) = editor.save_history(&history_path) {
+        //     informer::print_error(&mut cout, &e.to_string());
+        // }
+    }
 }
 
 fn main() {

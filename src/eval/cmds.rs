@@ -44,6 +44,10 @@ pub fn exec_cmd<R: io::Read, W: io::Write, WE: io::Write>(
             builtins::cd::cd(evaluator, ctx, args);
             0
         }
+        "fmt-cwd" => {
+            builtins::fmt_cwd::fmt_cwd(evaluator, ctx, args);
+            0
+        }
         _ => match spawn_proc(cmd, args, ctx) {
             Ok(status) => status,
             Err(e) => {
