@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum BinaryOp {
     Add,
     Sub,
@@ -16,7 +16,7 @@ pub enum BinaryOp {
     Ge,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Expr {
     // Data,
     Number(f64),
@@ -44,7 +44,7 @@ pub enum Expr {
     CommandSub(Box<Expr>),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Statement {
     Expr(Expr),
     Let {
@@ -60,6 +60,12 @@ pub enum Statement {
         condition: Expr,
         body: Vec<Statement>,
     },
+    FunctionDeclaration {
+        name: String,
+        params: Vec<String>,
+        body: Vec<Statement>,
+    },
+    Return(Option<Expr>),
     Block(Vec<Statement>),
 }
 

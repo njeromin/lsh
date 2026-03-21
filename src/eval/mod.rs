@@ -5,9 +5,19 @@ pub mod value;
 use std::{collections::HashMap, env, io};
 
 use crate::{
-    eval::value::Value,
+    eval::value::{FunctionValue, Value},
     parser::ast::{BinaryOp, Expr, Program, Statement},
 };
+
+#[derive(Debug)]
+pub enum EvalError {
+    ScopeNotFound,
+}
+
+enum EvalFlow {
+    Continue,
+    Return(Value),
+}
 
 #[derive(Default)]
 pub struct Scope {
@@ -102,6 +112,13 @@ impl Evaluator {
         }
     }
 
+    pub fn set_var(&mut self, scope: usize, name: &str, value: Value) -> Result<(), EvalError> {
+        let scope = self.scopes.get_mut(scope).ok_or(EvalError::ScopeNotFound)?;
+        scope.vars.insert(name.to_string(), value);
+
+        Ok(())
+    }
+
     pub fn get_var(&self, scope: usize, name: &str) -> Option<&Value> {
         let scope = self.scopes.get(scope)?;
         scope.vars.get(name)
@@ -116,14 +133,18 @@ impl Evaluator {
     }
 
     pub fn evaluate(&mut self, prog: Program) {
-        self.evaluate_statements(&prog.body, &mut vec![0]);
+        let _ = self.evaluate_statements(&prog.body, &mut vec![0]);
     }
 
-    fn evaluate_in_new_scope(&mut self, statements: &[Statement], scope_indices: &mut Vec<usize>) {
+    fn evaluate_in_new_scope(
+        &mut self,
+        statements: &[Statement],
+        scope_indices: &mut Vec<usize>,
+    ) -> EvalFlow {
         let scope_index = self.make_scope();
         scope_indices.push(scope_index);
 
-        self.evaluate_statements(statements, scope_indices);
+        let flow = self.evaluate_statements(statements, scope_indices);
 
         let popped_scope_index = scope_indices
             .pop()
@@ -137,9 +158,15 @@ impl Evaluator {
         self.scopes
             .pop()
             .expect("Failed to pop evaluator scope after scoped evaluation.");
+
+        flow
     }
 
-    fn evaluate_statements(&mut self, statements: &[Statement], scope_indices: &mut Vec<usize>) {
+    fn evaluate_statements(
+        &mut self,
+        statements: &[Statement],
+        scope_indices: &mut Vec<usize>,
+    ) -> EvalFlow {
         for statement in statements {
             match statement {
                 Statement::Expr(expr) => {
@@ -164,9 +191,17 @@ impl Evaluator {
                     let cond_res = self.evaluate_expr(condition, true, scope_indices);
 
                     if cond_res.is_truthy() {
-                        self.evaluate_in_new_scope(then_branch, scope_indices);
+                        if let EvalFlow::Return(value) =
+                            self.evaluate_in_new_scope(then_branch, scope_indices)
+                        {
+                            return EvalFlow::Return(value);
+                        }
                     } else if let Some(else_branch_statements) = else_branch {
-                        self.evaluate_in_new_scope(else_branch_statements, scope_indices);
+                        if let EvalFlow::Return(value) =
+                            self.evaluate_in_new_scope(else_branch_statements, scope_indices)
+                        {
+                            return EvalFlow::Return(value);
+                        }
                     }
                 }
                 Statement::While { condition, body } => {
@@ -174,14 +209,41 @@ impl Evaluator {
                         .evaluate_expr(condition, true, scope_indices)
                         .is_truthy()
                     {
-                        self.evaluate_in_new_scope(body, scope_indices);
+                        if let EvalFlow::Return(value) =
+                            self.evaluate_in_new_scope(body, scope_indices)
+                        {
+                            return EvalFlow::Return(value);
+                        }
                     }
                 }
+                Statement::FunctionDeclaration { name, params, body } => {
+                    let func_value = Value::Function(FunctionValue {
+                        params: params.clone(),
+                        body: body.clone(),
+                    });
+                    self.set_var(scope_indices.last().copied().unwrap_or(0), name, func_value)
+                        .expect("Failed to store function declaration in current scope.");
+                }
+                Statement::Return(maybe_expr) => {
+                    let result = if let Some(expr) = maybe_expr {
+                        self.evaluate_expr(expr, true, scope_indices)
+                    } else {
+                        Value::Null
+                    };
+
+                    return EvalFlow::Return(result);
+                }
                 Statement::Block(block) => {
-                    self.evaluate_in_new_scope(block, scope_indices);
+                    if let EvalFlow::Return(value) =
+                        self.evaluate_in_new_scope(block, scope_indices)
+                    {
+                        return EvalFlow::Return(value);
+                    }
                 }
             }
         }
+
+        EvalFlow::Continue
     }
 
     fn make_scope(&mut self) -> usize {
@@ -198,6 +260,67 @@ impl Evaluator {
         }
     }
 
+    fn scoped_var(&self, var_name: &str, scope_indices: &[usize]) -> Option<Value> {
+        for scope_index in scope_indices.iter().rev() {
+            if let Some(scope) = self.scopes.get(*scope_index) {
+                if let Some(value) = scope.vars.get(var_name) {
+                    return Some(value.to_owned());
+                }
+            } else {
+                panic!("Failed to retrieve scope {scope_index}.");
+            }
+        }
+
+        None
+    }
+
+    fn call_user_function(
+        &mut self,
+        func: &FunctionValue,
+        args: &[Expr],
+        scope_indices: &mut Vec<usize>,
+    ) -> Value {
+        let evaluated_args: Vec<Value> = args
+            .iter()
+            .map(|arg| self.evaluate_expr(arg, true, scope_indices))
+            .collect();
+
+        let scope_index = self.make_scope();
+        scope_indices.push(scope_index);
+
+        if let Some(scope) = self.scopes.get_mut(scope_index) {
+            for (param_index, param_name) in func.params.iter().enumerate() {
+                let value = evaluated_args
+                    .get(param_index)
+                    .cloned()
+                    .unwrap_or(Value::Null);
+                scope.vars.insert(param_name.to_owned(), value);
+            }
+        } else {
+            panic!("Failed to create function call scope.");
+        }
+
+        let flow = self.evaluate_statements(&func.body, scope_indices);
+
+        let popped_scope_index = scope_indices
+            .pop()
+            .expect("Failed to pop scope index after function call.");
+        if popped_scope_index != scope_index {
+            panic!(
+                "Scope stack mismatch: expected to pop scope {scope_index}, popped {popped_scope_index}."
+            );
+        }
+
+        self.scopes
+            .pop()
+            .expect("Failed to pop evaluator scope after function call.");
+
+        match flow {
+            EvalFlow::Continue => Value::Null,
+            EvalFlow::Return(value) => value,
+        }
+    }
+
     fn evaluate_expr(
         &mut self,
         expr: &Expr,
@@ -206,6 +329,10 @@ impl Evaluator {
     ) -> Value {
         match expr {
             Expr::CallOrString { identifier, args } => {
+                if let Some(Value::Function(func)) = self.scoped_var(identifier, scope_indices) {
+                    return self.call_user_function(&func, args, scope_indices);
+                }
+
                 let (res_cmd, res_args) = self.resolve_command(identifier.to_owned());
 
                 // What if someone wants to set a value to the result of a command?
@@ -229,15 +356,8 @@ impl Evaluator {
                 Value::Null
             }
             Expr::Variable(var_name) => {
-                // Try to find variable in scopes.
-                for scope_indices in scope_indices.iter().rev() {
-                    if let Some(scope) = self.scopes.get(*scope_indices) {
-                        if let Some(value) = scope.vars.get(var_name) {
-                            return value.to_owned();
-                        }
-                    } else {
-                        panic!("Failed to retrieve scope {scope_indices}.");
-                    }
+                if let Some(value) = self.scoped_var(var_name, scope_indices) {
+                    return value;
                 }
 
                 // Try to find variable in environment.
@@ -338,6 +458,13 @@ impl Evaluator {
             Expr::CommandSub(expr) => {
                 match expr.as_ref() {
                     Expr::CallOrString { identifier, args } => {
+                        if let Some(Value::Function(func)) =
+                            self.scoped_var(identifier, scope_indices)
+                        {
+                            let value = self.call_user_function(&func, args, scope_indices);
+                            return Value::String(value.to_string());
+                        }
+
                         let (res_cmd, res_args) = self.resolve_command(identifier.to_owned());
 
                         let string_args: Vec<String> = args

@@ -33,6 +33,8 @@ impl Parser {
             TokenKind::Let => self.parse_let(),
             TokenKind::If => self.parse_if(),
             TokenKind::While => self.parse_while(),
+            TokenKind::Fn => self.parse_function(),
+            TokenKind::Return => self.parse_return(),
             TokenKind::LeftCurly => {
                 // Handle blocks.
 
@@ -113,6 +115,69 @@ impl Parser {
         };
 
         Statement::While { condition, body }
+    }
+
+    fn parse_function(&mut self) -> Statement {
+        self.advance(); // Skip 'fn'.
+
+        let name = match &self.current().kind {
+            TokenKind::String(s) => s.clone(),
+            other => panic!("Expected function name, got {:?}", other),
+        };
+        self.advance(); // Move past the function name.
+
+        self.consume(&TokenKind::LeftParen, "Expected '(' after function name");
+
+        let mut params = vec![];
+
+        if !self.check_current(&TokenKind::RightParen) {
+            loop {
+                match &self.current().kind {
+                    TokenKind::String(p) => params.push(p.clone()),
+                    other => panic!("Expected parameter name, found {other}"),
+                }
+                self.advance();
+
+                if self.check_current(&TokenKind::Comma) {
+                    self.advance(); // Skip comma and continue.
+                } else {
+                    break;
+                }
+            }
+        }
+
+        self.consume(
+            &TokenKind::RightParen,
+            "Expected ')' after function parameters",
+        );
+
+        let body = match self.parse_statement() {
+            Statement::Block(stmts) => stmts,
+            stmt => vec![stmt],
+        };
+
+        Statement::FunctionDeclaration { name, params, body }
+    }
+
+    fn parse_return(&mut self) -> Statement {
+        self.advance(); // Skip `return`.
+
+        let value = if self.check_current(&TokenKind::Semicolon)
+            || self.check_current(&TokenKind::NewLine)
+            || self.check_current(&TokenKind::RightCurly)
+            || self.check_current(&TokenKind::EOF)
+        {
+            None
+        } else {
+            Some(self.parse_expr())
+        };
+
+        // Optional semicolon after return value (or bare return).
+        if self.check_current(&TokenKind::Semicolon) {
+            self.advance();
+        }
+
+        Statement::Return(value)
     }
 
     fn parse_expr(&mut self) -> Expr {
@@ -305,6 +370,10 @@ impl Parser {
                             let sub_expr = self.parse_postfix_from_seed(Expr::Variable(var));
                             args.push(sub_expr);
                         }
+                        TokenKind::DollarLeftParen => {
+                            self.advance(); // Move to '$('.
+                            args.push(self.parse_primary());
+                        }
                         _ => break,
                     }
                 }
@@ -316,7 +385,7 @@ impl Parser {
             }
             TokenKind::Variable(var) => Expr::Variable(var.to_owned()),
             TokenKind::Bool(value) => Expr::Bool(*value),
-            TokenKind::Typeof => {
+            TokenKind::TypeOf => {
                 self.advance(); // Skip past 'typeof'.
 
                 let expr = self.parse_expr();

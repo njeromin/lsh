@@ -1,0 +1,11 @@
+#!./target/debug/lsh
+
+fn add(a, b) {
+    return $a + $b;
+}
+
+let result = add 2 3
+
+echo $result
+
+echo $($add 2 3)

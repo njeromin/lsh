@@ -1,11 +1,14 @@
 use std::{collections::HashMap, fmt};
 
+use crate::parser::ast::Statement;
+
 #[derive(Clone)]
 pub enum ValueType {
     String,
     Number,
     Bool,
     Object,
+    Function,
     Null,
 }
 
@@ -16,9 +19,16 @@ impl fmt::Display for ValueType {
             Self::Number => write!(f, "number"),
             Self::Bool => write!(f, "bool"),
             Self::Object => write!(f, "object"),
+            Self::Function => write!(f, "function"),
             Self::Null => write!(f, "null"),
         }
     }
+}
+
+#[derive(Clone)]
+pub struct FunctionValue {
+    pub params: Vec<String>,
+    pub body: Vec<Statement>,
 }
 
 #[derive(Clone)]
@@ -27,6 +37,7 @@ pub enum Value {
     Number(f64),
     Bool(bool),
     Object(HashMap<String, Value>),
+    Function(FunctionValue),
     Null,
 }
 
@@ -46,6 +57,12 @@ impl fmt::Display for Value {
 
                 write!(f, "}}\n")
             }
+            Self::Function(func) => write!(
+                f,
+                "function({}): {}",
+                func.params.join(", "),
+                func.body.len()
+            ),
             Self::Null => write!(f, ""),
         }
     }
@@ -58,6 +75,7 @@ impl Value {
             Self::Number(_) => ValueType::Number,
             Self::Bool(_) => ValueType::Bool,
             Self::Object(_) => ValueType::Object,
+            Self::Function(_) => ValueType::Function,
             Self::Null => ValueType::Null,
         }
     }
@@ -68,6 +86,7 @@ impl Value {
             Self::Number(n) => *n != 0.0,
             Self::String(s) => !s.is_empty(),
             Self::Object(map) => !map.is_empty(),
+            Self::Function(_) => true,
             Self::Null => false,
         }
     }
@@ -80,12 +99,17 @@ impl Value {
                 Self::Number(n) => Self::Number(*n),
                 Self::Bool(b) => Self::Number(if *b { 1.0 } else { 0.0 }),
                 Self::Object(_) => Self::Null,
+                Self::Function(_) => Self::Null,
                 Self::Null => Self::Null,
             },
             ValueType::Bool => Self::Bool(self.is_truthy()),
             ValueType::Object => match self {
                 Self::Object(map) => Self::Object(map.clone()),
                 _ => Self::Object(HashMap::new()),
+            },
+            ValueType::Function => match self {
+                Self::Function(func) => Self::Function(func.clone()),
+                _ => Self::Null,
             },
             ValueType::Null => Self::Null,
         }

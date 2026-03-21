@@ -227,7 +227,6 @@ fn lex_identifier(tokens: &mut Vec<Token>, start_char: char, chars: &mut CharIte
                 || ident_char.is_ascii_alphanumeric()
             {
                 // Character is a valid identifier character.
-
                 ident_string.push(ident_char.to_owned());
                 // Skip forward one character as only peek was used
                 // previously.
@@ -299,7 +298,8 @@ fn match_keyword(keyword: &str) -> Option<TokenKind> {
         "else" => Some(TokenKind::Else),
         "while" => Some(TokenKind::While),
         "fn" => Some(TokenKind::Fn),
-        "typeof" => Some(TokenKind::Typeof),
+        "typeof" => Some(TokenKind::TypeOf),
+        "return" => Some(TokenKind::Return),
         "true" => Some(TokenKind::Bool(true)),
         "false" => Some(TokenKind::Bool(false)),
         _ => None,
