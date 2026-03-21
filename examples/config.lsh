@@ -1,12 +1,19 @@
 // If we have eza, set up ls aliases.
 if $(which eza).code == 0 {
-    echo "[O] Eza found, setting aliases."
+    echo "[-] Eza found, setting ls aliases."
 
     alias set ls "eza --icons"
     alias set la "eza --icons --all"
     alias set ll "eza --icons --long"
 } else {
-    echo "[-] Eza not found, not setting aliases."
+    echo "[-] Setting default ls aliases"
+
+    alias set la "ls -a"
+    alias set ll "ls -l"
 }
 
-echo "[O] Config loaded"
+echo "[-] Config loaded"
+
+fn $prompt.before() {
+    echo $PWD
+}

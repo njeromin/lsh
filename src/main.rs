@@ -21,12 +21,34 @@ pub mod parser;
 pub mod paths;
 pub mod ui;
 
-fn get_prompt(eval: &Evaluator) -> &str {
-    if let Some(Value::String(prompt)) = eval.get_var(0, "prompt") {
-        prompt
-    } else {
-        "\x1b[35m›\x1b[0m "
+const DEFAULT_PROMPT: &str = "\x1b[35m›\x1b[0m ";
+
+fn get_prompt(eval: &mut Evaluator) -> &str {
+    let before = eval
+        .get_var(0, "prompt")
+        .and_then(|v| match v {
+            Value::Object(prompt) => prompt.get("before"),
+            _ => None,
+        })
+        .and_then(|v| match v {
+            Value::Function(f) => Some(f.clone()),
+            _ => None,
+        });
+
+    if let Some(before_fn) = before {
+        eval.exec_function(&before_fn, vec![]);
     }
+
+    eval.get_var(0, "prompt")
+        .and_then(|v| match v {
+            Value::Object(prompt) => prompt.get("text"),
+            _ => None,
+        })
+        .and_then(|v| match v {
+            Value::String(text) => Some(text.as_str()),
+            _ => None,
+        })
+        .unwrap_or_else(|| DEFAULT_PROMPT)
 }
 
 fn interactive_session(eval: &mut Evaluator) -> rustyline::Result<()> {

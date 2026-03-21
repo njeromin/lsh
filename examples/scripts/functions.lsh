@@ -8,4 +8,4 @@ let result = add 2 3
 
 echo $result
 
-echo $($add 2 3)
+echo $(add 2 3)

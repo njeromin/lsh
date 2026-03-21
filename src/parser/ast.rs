@@ -51,6 +51,10 @@ pub enum Statement {
         name: String,
         value: Expr,
     },
+    Assign {
+        target: Expr,
+        value: Expr,
+    },
     If {
         condition: Expr,
         then_branch: Vec<Statement>,
@@ -61,7 +65,7 @@ pub enum Statement {
         body: Vec<Statement>,
     },
     FunctionDeclaration {
-        name: String,
+        target: Expr,
         params: Vec<String>,
         body: Vec<Statement>,
     },

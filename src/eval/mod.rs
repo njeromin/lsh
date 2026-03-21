@@ -14,7 +14,7 @@ pub enum EvalError {
     ScopeNotFound,
 }
 
-enum EvalFlow {
+pub enum EvalFlow {
     Continue,
     Return(Value),
 }
@@ -42,37 +42,42 @@ impl Evaluator {
 
         scope.vars.insert(
             String::from("prompt"),
-            Value::String(String::from("\x1b[35m›\x1b[0m ")),
+            Value::Object(HashMap::from([(
+                String::from("text"),
+                Value::String(String::from("\x1b[35m›\x1b[0m ")),
+            )])),
         );
 
-        let palette = Value::Object(HashMap::from([
-            (String::from("red"), Value::String(String::from("\x1b[31m"))),
-            (
-                String::from("green"),
-                Value::String(String::from("\x1b[32m")),
-            ),
-            (
-                String::from("yellow"),
-                Value::String(String::from("\x1b[33m")),
-            ),
-            (
-                String::from("blue"),
-                Value::String(String::from("\x1b[34m")),
-            ),
-            (
-                String::from("magenta"),
-                Value::String(String::from("\x1b[35m")),
-            ),
-            (
-                String::from("cyan"),
-                Value::String(String::from("\x1b[36m")),
-            ),
-            (
-                String::from("reset"),
-                Value::String(String::from("\x1b[0m")),
-            ),
-        ]));
-        scope.vars.insert(String::from("palette"), palette);
+        scope.vars.insert(
+            String::from("palette"),
+            Value::Object(HashMap::from([
+                (String::from("red"), Value::String(String::from("\x1b[31m"))),
+                (
+                    String::from("green"),
+                    Value::String(String::from("\x1b[32m")),
+                ),
+                (
+                    String::from("yellow"),
+                    Value::String(String::from("\x1b[33m")),
+                ),
+                (
+                    String::from("blue"),
+                    Value::String(String::from("\x1b[34m")),
+                ),
+                (
+                    String::from("magenta"),
+                    Value::String(String::from("\x1b[35m")),
+                ),
+                (
+                    String::from("cyan"),
+                    Value::String(String::from("\x1b[36m")),
+                ),
+                (
+                    String::from("reset"),
+                    Value::String(String::from("\x1b[0m")),
+                ),
+            ])),
+        );
 
         let logical_pwd = env::var("PWD").unwrap_or_else(|_| {
             env::current_dir()
@@ -85,6 +90,17 @@ impl Evaluator {
             .insert(String::from("PWD"), Value::String(logical_pwd));
 
         self
+    }
+
+    pub fn exec_function(&mut self, func: &FunctionValue, args: Vec<Value>) -> Value {
+        // TODO: Functions should have their own scopes.
+        let mut scope_indices = vec![0];
+        let flow = self.evaluate_in_new_scope(&func.body, &mut scope_indices);
+
+        match flow {
+            EvalFlow::Continue => Value::Null,
+            EvalFlow::Return(value) => value,
+        }
     }
 
     pub fn push_var(&mut self, scope_index: usize, name: String, value: Value) {
@@ -183,6 +199,10 @@ impl Evaluator {
                         panic!("Failed to get current scope.");
                     }
                 }
+                Statement::Assign { target, value } => {
+                    let assigned_value = self.evaluate_expr(value, true, scope_indices);
+                    self.assign_target(target, assigned_value, scope_indices);
+                }
                 Statement::If {
                     condition,
                     then_branch,
@@ -216,13 +236,16 @@ impl Evaluator {
                         }
                     }
                 }
-                Statement::FunctionDeclaration { name, params, body } => {
+                Statement::FunctionDeclaration {
+                    target,
+                    params,
+                    body,
+                } => {
                     let func_value = Value::Function(FunctionValue {
                         params: params.clone(),
                         body: body.clone(),
                     });
-                    self.set_var(scope_indices.last().copied().unwrap_or(0), name, func_value)
-                        .expect("Failed to store function declaration in current scope.");
+                    self.assign_target(target, func_value, scope_indices);
                 }
                 Statement::Return(maybe_expr) => {
                     let result = if let Some(expr) = maybe_expr {
@@ -272,6 +295,55 @@ impl Evaluator {
         }
 
         None
+    }
+
+    fn assign_var(&mut self, var_name: &str, value: Value, scope_indices: &[usize]) {
+        for scope_index in scope_indices.iter().rev() {
+            if let Some(scope) = self.scopes.get_mut(*scope_index) {
+                if scope.vars.contains_key(var_name) {
+                    scope.vars.insert(var_name.to_owned(), value);
+                    return;
+                }
+            } else {
+                panic!("Failed to retrieve scope {scope_index}.");
+            }
+        }
+
+        if let Some(scope_index) = scope_indices.last().copied()
+            && let Some(scope) = self.scopes.get_mut(scope_index)
+        {
+            scope.vars.insert(var_name.to_owned(), value);
+        } else {
+            panic!("Failed to get current scope for assignment.");
+        }
+    }
+
+    fn assign_target(&mut self, target: &Expr, value: Value, scope_indices: &mut Vec<usize>) {
+        match target {
+            Expr::Variable(var_name) => {
+                self.assign_var(var_name, value, scope_indices);
+            }
+            Expr::Index { object, index } => match object.as_ref() {
+                Expr::Variable(var_name) => {
+                    let key_value = self.evaluate_expr(index, true, scope_indices);
+                    let key = Self::object_index_key(key_value)
+                        .unwrap_or_else(|| panic!("Invalid object index for assignment."));
+
+                    let mut object_map = match self.scoped_var(var_name, scope_indices) {
+                        Some(Value::Object(map)) => map,
+                        Some(_) => {
+                            panic!("Cannot index-assign into non-object variable '{var_name}'.")
+                        }
+                        None => HashMap::new(),
+                    };
+
+                    object_map.insert(key, value);
+                    self.assign_var(var_name, Value::Object(object_map), scope_indices);
+                }
+                _ => panic!("Assignment target must be a variable or object member."),
+            },
+            _ => panic!("Invalid assignment target."),
+        }
     }
 
     fn call_user_function(

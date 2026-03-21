@@ -55,6 +55,23 @@ impl Parser {
                 self.parse_statement()
             }
             _ => {
+                if matches!(self.current().kind, TokenKind::Variable(_)) {
+                    let initial_index = self.index;
+                    let assignment_target = self.parse_postfix();
+
+                    if self.check_current(&TokenKind::Equals) {
+                        self.advance(); // Skip '='.
+                        let value = self.parse_expr();
+                        return Statement::Assign {
+                            target: assignment_target,
+                            value,
+                        };
+                    }
+
+                    // Reset state if this is not an assignment.
+                    self.index = initial_index;
+                }
+
                 let expr = self.parse_expr();
 
                 Statement::Expr(expr)
@@ -120,13 +137,17 @@ impl Parser {
     fn parse_function(&mut self) -> Statement {
         self.advance(); // Skip 'fn'.
 
-        let name = match &self.current().kind {
-            TokenKind::String(s) => s.clone(),
+        let target = match &self.current().kind {
+            TokenKind::String(s) => Expr::Variable(s.clone()),
+            TokenKind::Variable(var) => {
+                let seed = Expr::Variable(var.clone());
+                self.parse_postfix_from_seed(seed)
+            }
             other => panic!("Expected function name, got {:?}", other),
         };
-        self.advance(); // Move past the function name.
+        self.advance(); // Move past function target expression.
 
-        self.consume(&TokenKind::LeftParen, "Expected '(' after function name");
+        self.consume(&TokenKind::LeftParen, "Expected '(' after function target");
 
         let mut params = vec![];
 
@@ -156,7 +177,11 @@ impl Parser {
             stmt => vec![stmt],
         };
 
-        Statement::FunctionDeclaration { name, params, body }
+        Statement::FunctionDeclaration {
+            target,
+            params,
+            body,
+        }
     }
 
     fn parse_return(&mut self) -> Statement {
@@ -422,6 +447,16 @@ impl Parser {
 
                 let mut expr_map = HashMap::new();
                 while !self.check_current(&TokenKind::RightCurly) {
+                    while self.check_current(&TokenKind::NewLine)
+                        || self.check_current(&TokenKind::Semicolon)
+                    {
+                        self.advance();
+                    }
+
+                    if self.check_current(&TokenKind::RightCurly) {
+                        break;
+                    }
+
                     let key = match &self.current().kind {
                         TokenKind::String(s) => s.clone(),
                         TokenKind::Variable(v) => v.clone(),
@@ -437,7 +472,15 @@ impl Parser {
                     expr_map.insert(key, value);
 
                     if !self.check_current(&TokenKind::RightCurly) {
-                        self.consume(&TokenKind::Comma, "Expected ',' between object fields.");
+                        if self.check_current(&TokenKind::Comma) {
+                            self.advance();
+                        } else if self.check_current(&TokenKind::NewLine)
+                            || self.check_current(&TokenKind::Semicolon)
+                        {
+                            // Newline/semicolon separators are allowed in object literals.
+                        } else {
+                            self.consume(&TokenKind::Comma, "Expected ',' between object fields.");
+                        }
                     }
                 }
                 self.advance(); // Skip past '}'.
