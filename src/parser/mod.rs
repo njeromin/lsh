@@ -359,6 +359,8 @@ impl Parser {
     }
 
     fn parse_primary(&mut self) -> Expr {
+        let mut should_advance = true;
+
         let expr = match &self.current().kind {
             TokenKind::Number(n) => Expr::Number(*n),
             TokenKind::String(s) => {
@@ -415,6 +417,7 @@ impl Parser {
 
                 let expr = self.parse_expr();
 
+                should_advance = false;
                 Expr::TypeOf(Box::new(expr))
             }
             TokenKind::LeftParen => {
@@ -492,12 +495,15 @@ impl Parser {
 
                 self.advance();
 
+                should_advance = false;
                 expr
             }
             other => panic!("Unexpected token in primary: {other}"),
         };
 
-        self.advance();
+        if should_advance {
+            self.advance();
+        }
 
         expr
     }

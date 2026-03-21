@@ -1,7 +1,8 @@
 use std::{
-    env,
+    env::{self, current_dir},
+    fs,
     io::{self, Write},
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 
 use crossterm::{cursor, queue};
@@ -59,15 +60,13 @@ fn interactive_session(eval: &mut Evaluator) -> rustyline::Result<()> {
     }
 
     let mut editor = DefaultEditor::new()?;
-    // #[cfg(feature = "with-file-history")]
-    // if rl.load_history("history.txt").is_err() {
-    //     println!("No previous history.");
-    // }
+    #[cfg(feature = "with-file-history")]
+    if rl.load_history("./config/history.txt").is_err() {
+        println!("No previous history.");
+    }
 
     loop {
-        ui::print_prompt(&mut cout, eval);
-
-        cout.flush().expect("Failed to flush");
+        print!("\n");
 
         let mut input = String::new();
 
@@ -109,6 +108,23 @@ fn main() {
 
     let mut args = env::args();
     args.next();
+
+    let current_dir = current_dir().expect("Failed to get current directory");
+
+    let config_dir = Path::new(&current_dir).join("config/");
+    let config_entrypoint = config_dir.join("config.lsh");
+
+    if fs::exists(&config_entrypoint).expect("Failed to check config file existence") {
+        exec_file(&mut eval, config_entrypoint);
+    }
+
+    let lib_path = config_dir.join("lib/");
+    eval.set_var(
+        0,
+        "lib_path",
+        Value::String(lib_path.to_string_lossy().into_owned()),
+    )
+    .expect("Failed to set library path");
 
     // TODO: Improve this
     if let Some(file_path) = args.next() {

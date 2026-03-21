@@ -1,19 +1,16 @@
 // If we have eza, set up ls aliases.
 if $(which eza).code == 0 {
-    echo "[-] Eza found, setting ls aliases."
-
     alias set ls "eza --icons"
     alias set la "eza --icons --all"
     alias set ll "eza --icons --long"
 } else {
-    echo "[-] Setting default ls aliases"
-
     alias set la "ls -a"
     alias set ll "ls -l"
 }
 
-echo "[-] Config loaded"
-
 fn $prompt.before() {
+    echo $palette.blue
     echo $PWD
 }
+
+$prompt.text = $palette.bright_magenta + "$ " + $palette.reset

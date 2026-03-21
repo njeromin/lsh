@@ -44,13 +44,17 @@ impl Evaluator {
             String::from("prompt"),
             Value::Object(HashMap::from([(
                 String::from("text"),
-                Value::String(String::from("\x1b[35m›\x1b[0m ")),
+                Value::String(String::from("\x1b[35m$\x1b[0m ")),
             )])),
         );
 
         scope.vars.insert(
             String::from("palette"),
             Value::Object(HashMap::from([
+                (
+                    String::from("black"),
+                    Value::String(String::from("\x1b[30m")),
+                ),
                 (String::from("red"), Value::String(String::from("\x1b[31m"))),
                 (
                     String::from("green"),
@@ -73,6 +77,132 @@ impl Evaluator {
                     Value::String(String::from("\x1b[36m")),
                 ),
                 (
+                    String::from("white"),
+                    Value::String(String::from("\x1b[37m")),
+                ),
+                (
+                    String::from("default"),
+                    Value::String(String::from("\x1b[39m")),
+                ),
+                (
+                    String::from("bright_red"),
+                    Value::String(String::from("\x1b[91m")),
+                ),
+                (
+                    String::from("bright_green"),
+                    Value::String(String::from("\x1b[92m")),
+                ),
+                (
+                    String::from("bright_yellow"),
+                    Value::String(String::from("\x1b[93m")),
+                ),
+                (
+                    String::from("bright_blue"),
+                    Value::String(String::from("\x1b[94m")),
+                ),
+                (
+                    String::from("bright_magenta"),
+                    Value::String(String::from("\x1b[95m")),
+                ),
+                (
+                    String::from("bright_cyan"),
+                    Value::String(String::from("\x1b[96m")),
+                ),
+                (
+                    String::from("bright_white"),
+                    Value::String(String::from("\x1b[97m")),
+                ),
+                (
+                    String::from("bg_black"),
+                    Value::String(String::from("\x1b[40m")),
+                ),
+                (
+                    String::from("bg_red"),
+                    Value::String(String::from("\x1b[41m")),
+                ),
+                (
+                    String::from("bg_green"),
+                    Value::String(String::from("\x1b[42m")),
+                ),
+                (
+                    String::from("bg_yellow"),
+                    Value::String(String::from("\x1b[43m")),
+                ),
+                (
+                    String::from("bg_blue"),
+                    Value::String(String::from("\x1b[44m")),
+                ),
+                (
+                    String::from("bg_magenta"),
+                    Value::String(String::from("\x1b[45m")),
+                ),
+                (
+                    String::from("bg_cyan"),
+                    Value::String(String::from("\x1b[46m")),
+                ),
+                (
+                    String::from("bg_white"),
+                    Value::String(String::from("\x1b[47m")),
+                ),
+                (
+                    String::from("bg_default"),
+                    Value::String(String::from("\x1b[49m")),
+                ),
+                (String::from("bold"), Value::String(String::from("\x1b[1m"))),
+                (String::from("dim"), Value::String(String::from("\x1b[2m"))),
+                (
+                    String::from("italic"),
+                    Value::String(String::from("\x1b[3m")),
+                ),
+                (
+                    String::from("underline"),
+                    Value::String(String::from("\x1b[4m")),
+                ),
+                (
+                    String::from("blink"),
+                    Value::String(String::from("\x1b[5m")),
+                ),
+                (
+                    String::from("inverse"),
+                    Value::String(String::from("\x1b[7m")),
+                ),
+                (
+                    String::from("hidden"),
+                    Value::String(String::from("\x1b[8m")),
+                ),
+                (
+                    String::from("strikethrough"),
+                    Value::String(String::from("\x1b[9m")),
+                ),
+                (
+                    String::from("reset_bold_dim"),
+                    Value::String(String::from("\x1b[22m")),
+                ),
+                (
+                    String::from("reset_italic"),
+                    Value::String(String::from("\x1b[23m")),
+                ),
+                (
+                    String::from("reset_underline"),
+                    Value::String(String::from("\x1b[24m")),
+                ),
+                (
+                    String::from("reset_blink"),
+                    Value::String(String::from("\x1b[25m")),
+                ),
+                (
+                    String::from("reset_inverse"),
+                    Value::String(String::from("\x1b[27m")),
+                ),
+                (
+                    String::from("reset_hidden"),
+                    Value::String(String::from("\x1b[28m")),
+                ),
+                (
+                    String::from("reset_strike"),
+                    Value::String(String::from("\x1b[29m")),
+                ),
+                (
                     String::from("reset"),
                     Value::String(String::from("\x1b[0m")),
                 ),
@@ -93,14 +223,8 @@ impl Evaluator {
     }
 
     pub fn exec_function(&mut self, func: &FunctionValue, args: Vec<Value>) -> Value {
-        // TODO: Functions should have their own scopes.
         let mut scope_indices = vec![0];
-        let flow = self.evaluate_in_new_scope(&func.body, &mut scope_indices);
-
-        match flow {
-            EvalFlow::Continue => Value::Null,
-            EvalFlow::Return(value) => value,
-        }
+        self.call_user_function_with_values(func, args, &mut scope_indices)
     }
 
     pub fn push_var(&mut self, scope_index: usize, name: String, value: Value) {
@@ -323,27 +447,38 @@ impl Evaluator {
             Expr::Variable(var_name) => {
                 self.assign_var(var_name, value, scope_indices);
             }
-            Expr::Index { object, index } => match object.as_ref() {
-                Expr::Variable(var_name) => {
-                    let key_value = self.evaluate_expr(index, true, scope_indices);
-                    let key = Self::object_index_key(key_value)
-                        .unwrap_or_else(|| panic!("Invalid object index for assignment."));
+            Expr::Index { object, index } => {
+                let key_value = self.evaluate_expr(index, true, scope_indices);
+                let key = Self::object_index_key(key_value)
+                    .unwrap_or_else(|| panic!("Invalid object index for assignment."));
 
-                    let mut object_map = match self.scoped_var(var_name, scope_indices) {
-                        Some(Value::Object(map)) => map,
-                        Some(_) => {
-                            panic!("Cannot index-assign into non-object variable '{var_name}'.")
-                        }
-                        None => HashMap::new(),
-                    };
+                let mut object_map = match self.evaluate_expr(object, true, scope_indices) {
+                    Value::Object(map) => map,
+                    Value::Null => HashMap::new(),
+                    _ => panic!("Assignment target must be an object member."),
+                };
 
-                    object_map.insert(key, value);
-                    self.assign_var(var_name, Value::Object(object_map), scope_indices);
-                }
-                _ => panic!("Assignment target must be a variable or object member."),
-            },
+                object_map.insert(key, value);
+                self.assign_target(object, Value::Object(object_map), scope_indices);
+            }
             _ => panic!("Invalid assignment target."),
         }
+    }
+
+    fn resolve_named_value(&self, identifier: &str, scope_indices: &[usize]) -> Option<Value> {
+        let mut parts = identifier.split('.');
+        let first_part = parts.next()?;
+        let mut value = self.scoped_var(first_part, scope_indices)?;
+
+        for part in parts {
+            let next_value = match value {
+                Value::Object(map) => map.get(part).cloned(),
+                _ => None,
+            }?;
+            value = next_value;
+        }
+
+        Some(value)
     }
 
     fn call_user_function(
@@ -357,6 +492,15 @@ impl Evaluator {
             .map(|arg| self.evaluate_expr(arg, true, scope_indices))
             .collect();
 
+        self.call_user_function_with_values(func, evaluated_args, scope_indices)
+    }
+
+    fn call_user_function_with_values(
+        &mut self,
+        func: &FunctionValue,
+        evaluated_args: Vec<Value>,
+        scope_indices: &mut Vec<usize>,
+    ) -> Value {
         let scope_index = self.make_scope();
         scope_indices.push(scope_index);
 
@@ -401,7 +545,9 @@ impl Evaluator {
     ) -> Value {
         match expr {
             Expr::CallOrString { identifier, args } => {
-                if let Some(Value::Function(func)) = self.scoped_var(identifier, scope_indices) {
+                if let Some(Value::Function(func)) =
+                    self.resolve_named_value(identifier, scope_indices)
+                {
                     return self.call_user_function(&func, args, scope_indices);
                 }
 
@@ -531,7 +677,7 @@ impl Evaluator {
                 match expr.as_ref() {
                     Expr::CallOrString { identifier, args } => {
                         if let Some(Value::Function(func)) =
-                            self.scoped_var(identifier, scope_indices)
+                            self.resolve_named_value(identifier, scope_indices)
                         {
                             let value = self.call_user_function(&func, args, scope_indices);
                             return Value::String(value.to_string());
