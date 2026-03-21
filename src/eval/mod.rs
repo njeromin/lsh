@@ -6,7 +6,7 @@ use std::{collections::HashMap, env, io};
 
 use crate::{
     eval::value::{FunctionValue, Value},
-    parser::ast::{BinaryOp, Expr, Program, Statement},
+    parser::ast::{BinaryOp, CommandExpr, Expr, Program, Statement},
 };
 
 #[derive(Debug)]
@@ -312,6 +312,22 @@ impl Evaluator {
                 Statement::Expr(expr) => {
                     self.evaluate_expr(expr, false, scope_indices);
                 }
+                Statement::Command(cmd_expr) => {
+                    let (_code, out, err) = self.evaluate_command_expr_with_input(
+                        cmd_expr,
+                        vec![],
+                        scope_indices,
+                        false,
+                    );
+                    if !out.is_empty() {
+                        use std::io::Write as _;
+                        let _ = io::stdout().write_all(&out);
+                    }
+                    if !err.is_empty() {
+                        use std::io::Write as _;
+                        let _ = io::stderr().write_all(&err);
+                    }
+                }
                 Statement::Let { name, value } => {
                     let expr = self.evaluate_expr(value, true, scope_indices);
 
@@ -404,6 +420,84 @@ impl Evaluator {
             Value::String(s) => Some(s),
             Value::Number(n) => Some(n.to_string()),
             _ => None,
+        }
+    }
+
+    fn evaluate_command_expr_with_input(
+        &mut self,
+        command_expr: &CommandExpr,
+        input: Vec<u8>,
+        scope_indices: &mut Vec<usize>,
+        capture_output: bool,
+    ) -> (i32, Vec<u8>, Vec<u8>) {
+        match command_expr {
+            CommandExpr::Call { identifier, args } => {
+                if let Some(Value::Function(func)) =
+                    self.resolve_named_value(identifier, scope_indices)
+                {
+                    let value = self.call_user_function(&func, args, scope_indices);
+                    return (0, value.to_string().into_bytes(), vec![]);
+                }
+
+                let (res_cmd, res_args) = self.resolve_command(identifier.to_owned());
+                let string_args: Vec<String> = args
+                    .iter()
+                    .map(|arg| self.evaluate_expr(arg, true, scope_indices).to_string())
+                    .collect();
+                let all_args = [res_args, string_args].concat();
+
+                if capture_output {
+                    let mut io_ctx = lsh::IoCtx {
+                        input: io::Cursor::new(input),
+                        out: Vec::<u8>::new(),
+                        err: Vec::<u8>::new(),
+                        input_mode: lsh::IoStreamMode::Pipe,
+                        out_mode: lsh::IoStreamMode::Pipe,
+                        err_mode: lsh::IoStreamMode::Pipe,
+                    };
+
+                    let code = cmds::exec_cmd(self, &res_cmd, all_args, &mut io_ctx);
+                    (code, io_ctx.out, io_ctx.err)
+                } else if input.is_empty() {
+                    let mut io_ctx = lsh::IoCtx::<io::Stdin, io::Stdout, io::Stderr>::default();
+                    let code = cmds::exec_cmd(self, &res_cmd, all_args, &mut io_ctx);
+                    (code, vec![], vec![])
+                } else {
+                    let mut io_ctx = lsh::IoCtx {
+                        input: io::Cursor::new(input),
+                        out: io::stdout(),
+                        err: io::stderr(),
+                        input_mode: lsh::IoStreamMode::Pipe,
+                        out_mode: lsh::IoStreamMode::Inherit,
+                        err_mode: lsh::IoStreamMode::Inherit,
+                    };
+
+                    let code = cmds::exec_cmd(self, &res_cmd, all_args, &mut io_ctx);
+                    (code, vec![], vec![])
+                }
+            }
+            CommandExpr::Pipeline(stages) => {
+                let mut piped_input = input;
+                let mut final_code = 0;
+                let mut combined_err = vec![];
+
+                for (stage_index, stage) in stages.iter().enumerate() {
+                    let is_last_stage = stage_index + 1 == stages.len();
+                    let stage_capture_output = if is_last_stage { capture_output } else { true };
+
+                    let (code, out, err) = self.evaluate_command_expr_with_input(
+                        stage,
+                        piped_input,
+                        scope_indices,
+                        stage_capture_output,
+                    );
+                    final_code = code;
+                    combined_err.extend(err);
+                    piped_input = out;
+                }
+
+                (final_code, piped_input, combined_err)
+            }
         }
     }
 
@@ -723,6 +817,25 @@ impl Evaluator {
                         Value::String(value.to_string())
                     }
                 }
+            }
+            Expr::CommandSubCommand(command_expr) => {
+                let (code, out, err) = self.evaluate_command_expr_with_input(
+                    command_expr,
+                    vec![],
+                    scope_indices,
+                    true,
+                );
+                let mut res = HashMap::new();
+                res.insert(String::from("code"), Value::Number(code as f64));
+                res.insert(
+                    String::from("out"),
+                    Value::String(String::from_utf8(out).unwrap_or_default()),
+                );
+                res.insert(
+                    String::from("err"),
+                    Value::String(String::from_utf8(err).unwrap_or_default()),
+                );
+                Value::Object(res)
             }
             Expr::Object(expr_map) => {
                 let mut obj = HashMap::new();

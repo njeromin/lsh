@@ -17,6 +17,12 @@ pub enum BinaryOp {
 }
 
 #[derive(Debug, Clone)]
+pub enum CommandExpr {
+    Call { identifier: String, args: Vec<Expr> },
+    Pipeline(Vec<CommandExpr>),
+}
+
+#[derive(Debug, Clone)]
 pub enum Expr {
     // Data,
     Number(f64),
@@ -42,11 +48,13 @@ pub enum Expr {
     },
     TypeOf(Box<Expr>),
     CommandSub(Box<Expr>),
+    CommandSubCommand(Box<CommandExpr>),
 }
 
 #[derive(Debug, Clone)]
 pub enum Statement {
     Expr(Expr),
+    Command(CommandExpr),
     Let {
         name: String,
         value: Expr,

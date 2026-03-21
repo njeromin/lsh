@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::{
     lexer::token::{Token, TokenKind},
-    parser::ast::{BinaryOp, Expr, Program, Statement},
+    parser::ast::{BinaryOp, CommandExpr, Expr, Program, Statement},
 };
 
 pub mod ast;
@@ -54,6 +54,7 @@ impl Parser {
                 self.advance(); // Skip newline.
                 self.parse_statement()
             }
+            TokenKind::String(_) => Statement::Command(self.parse_command_expr()),
             _ => {
                 if matches!(self.current().kind, TokenKind::Variable(_)) {
                     let initial_index = self.index;
@@ -77,6 +78,82 @@ impl Parser {
                 Statement::Expr(expr)
             }
         }
+    }
+
+    fn parse_command_expr(&mut self) -> CommandExpr {
+        self.parse_command_expr_until(&[
+            TokenKind::NewLine,
+            TokenKind::Semicolon,
+            TokenKind::EOF,
+            TokenKind::RightCurly,
+        ])
+    }
+
+    fn parse_command_expr_until(&mut self, terminators: &[TokenKind]) -> CommandExpr {
+        let mut stages = vec![self.parse_command_call(terminators)];
+
+        while self.check_current(&TokenKind::Pipe) {
+            self.advance(); // Skip '|'
+            stages.push(self.parse_command_call(terminators));
+        }
+
+        if stages.len() == 1 {
+            stages
+                .into_iter()
+                .next()
+                .expect("Missing command stage in command expression.")
+        } else {
+            CommandExpr::Pipeline(stages)
+        }
+    }
+
+    fn parse_command_call(&mut self, terminators: &[TokenKind]) -> CommandExpr {
+        let identifier = match &self.current().kind {
+            TokenKind::String(s) => s.clone(),
+            other => panic!("Expected command identifier, found {other}"),
+        };
+        self.advance();
+
+        let mut args = vec![];
+        while !self.check_current(&TokenKind::Pipe)
+            && !terminators.iter().any(|term| self.check_current(term))
+        {
+            match self.current().kind.clone() {
+                TokenKind::String(s) => {
+                    args.push(Expr::String(s));
+                    self.advance();
+                }
+                TokenKind::Number(n) => {
+                    args.push(Expr::Number(n));
+                    self.advance();
+                }
+                TokenKind::Bool(b) => {
+                    args.push(Expr::Bool(b));
+                    self.advance();
+                }
+                TokenKind::Star => {
+                    args.push(Expr::String("*".to_string()));
+                    self.advance();
+                }
+                TokenKind::Slash => {
+                    args.push(Expr::String("/".to_string()));
+                    self.advance();
+                }
+                TokenKind::Variable(var) => {
+                    self.advance();
+                    let sub_expr = self.parse_postfix_on_current(Expr::Variable(var));
+                    args.push(sub_expr);
+                }
+                TokenKind::DollarLeftParen => {
+                    let sub_expr = self.parse_primary();
+                    let sub_expr = self.parse_postfix_on_current(sub_expr);
+                    args.push(sub_expr);
+                }
+                _ => break,
+            }
+        }
+
+        CommandExpr::Call { identifier, args }
     }
 
     fn parse_let(&mut self) -> Statement {
@@ -314,8 +391,11 @@ impl Parser {
     }
 
     fn parse_postfix(&mut self) -> Expr {
-        let mut expr = self.parse_primary();
+        let expr = self.parse_primary();
+        self.parse_postfix_on_current(expr)
+    }
 
+    fn parse_postfix_on_current(&mut self, mut expr: Expr) -> Expr {
         loop {
             if self.check_current(&TokenKind::LeftBracket) {
                 self.advance(); // Skip '['.
@@ -434,16 +514,26 @@ impl Parser {
             TokenKind::DollarLeftParen => {
                 self.advance(); // Skip past '$('.
 
-                let expr = self.parse_expr();
-
-                if !self.check_current(&TokenKind::RightParen) {
-                    panic!(
-                        "Parser error: expected ')' after expression, found {}",
-                        self.current().kind
+                if matches!(self.current().kind, TokenKind::String(_)) {
+                    let cmd_expr = self.parse_command_expr_until(&[TokenKind::RightParen]);
+                    self.consume(
+                        &TokenKind::RightParen,
+                        "Expected ')' after command substitution.",
                     );
-                }
+                    should_advance = false;
+                    Expr::CommandSubCommand(Box::new(cmd_expr))
+                } else {
+                    let expr = self.parse_expr();
 
-                Expr::CommandSub(Box::new(expr))
+                    if !self.check_current(&TokenKind::RightParen) {
+                        panic!(
+                            "Parser error: expected ')' after expression, found {}",
+                            self.current().kind
+                        );
+                    }
+
+                    Expr::CommandSub(Box::new(expr))
+                }
             }
             TokenKind::LeftCurly => {
                 self.advance(); // Skip past '{'.

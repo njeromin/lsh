@@ -38,6 +38,9 @@ pub fn print_parser(prog: &Program) {
 fn print_parser_statement(stmt: &Statement) {
     match stmt {
         Statement::Expr(expr) => print_parser_expr(expr),
+        Statement::Command(command_expr) => {
+            println!("Command({command_expr:?})");
+        }
         Statement::Let { name, value } => {
             print!("Let: {name} = ");
             print_parser_expr(value);
@@ -115,6 +118,9 @@ fn print_parser_expr(expr: &Expr) {
         }
         Expr::CommandSub(expr) => {
             println!("CommandSub({expr:?})");
+        }
+        Expr::CommandSubCommand(command_expr) => {
+            println!("CommandSubCommand({command_expr:?})");
         }
     }
 }

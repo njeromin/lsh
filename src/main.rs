@@ -52,7 +52,7 @@ fn get_prompt(eval: &mut Evaluator) -> &str {
         .unwrap_or_else(|| DEFAULT_PROMPT)
 }
 
-fn interactive_session(eval: &mut Evaluator) -> rustyline::Result<()> {
+fn interactive_session(eval: &mut Evaluator, config_dir: &Path) -> rustyline::Result<()> {
     let mut cout = io::stdout();
 
     if let Err(e) = queue!(cout, cursor::SetCursorStyle::BlinkingBar) {
@@ -60,8 +60,10 @@ fn interactive_session(eval: &mut Evaluator) -> rustyline::Result<()> {
     }
 
     let mut editor = DefaultEditor::new()?;
-    #[cfg(feature = "with-file-history")]
-    if rl.load_history("./config/history.txt").is_err() {
+    if editor
+        .load_history(&config_dir.join("history.txt"))
+        .is_err()
+    {
         println!("No previous history.");
     }
 
@@ -74,6 +76,7 @@ fn interactive_session(eval: &mut Evaluator) -> rustyline::Result<()> {
 
         match readline {
             Ok(line) => {
+                editor.add_history_entry(line.as_str())?;
                 input = line;
             }
             Err(e) => match e {
@@ -101,6 +104,9 @@ fn interactive_session(eval: &mut Evaluator) -> rustyline::Result<()> {
 
         eval.evaluate(prog);
     }
+
+    #[cfg(feature = "with-file-history")]
+    rl.save_history("history.txt");
 }
 
 fn main() {
@@ -134,7 +140,7 @@ fn main() {
 
         exec_file(&mut eval, PathBuf::from(file_path));
     } else {
-        if let Err(e) = interactive_session(&mut eval) {
+        if let Err(e) = interactive_session(&mut eval, &config_dir) {
             informer::print_error(&mut io::stderr(), e.to_string().as_str());
         }
     }
