@@ -90,6 +90,30 @@ impl Parser {
     }
 
     fn parse_command_expr_until(&mut self, terminators: &[TokenKind]) -> CommandExpr {
+        let mut expr = self.parse_command_pipeline(terminators);
+
+        while self.check_current(&TokenKind::And) || self.check_current(&TokenKind::Or) {
+            if self.check_current(&TokenKind::And) {
+                self.advance(); // Skip '&&'
+                let right = self.parse_command_pipeline(terminators);
+                expr = CommandExpr::And {
+                    left: Box::new(expr),
+                    right: Box::new(right),
+                };
+            } else {
+                self.advance(); // Skip '||'
+                let right = self.parse_command_pipeline(terminators);
+                expr = CommandExpr::Or {
+                    left: Box::new(expr),
+                    right: Box::new(right),
+                };
+            }
+        }
+
+        expr
+    }
+
+    fn parse_command_pipeline(&mut self, terminators: &[TokenKind]) -> CommandExpr {
         let mut stages = vec![self.parse_command_call(terminators)];
 
         while self.check_current(&TokenKind::Pipe) {
@@ -116,6 +140,8 @@ impl Parser {
 
         let mut args = vec![];
         while !self.check_current(&TokenKind::Pipe)
+            && !self.check_current(&TokenKind::And)
+            && !self.check_current(&TokenKind::Or)
             && !terminators.iter().any(|term| self.check_current(term))
         {
             if let TokenKind::String(s) = &self.current().kind {
@@ -502,9 +528,13 @@ impl Parser {
                     }
                 }
 
-                Expr::CallOrString {
-                    identifier: call_ident,
-                    args,
+                if args.is_empty() {
+                    Expr::Word(call_ident)
+                } else {
+                    Expr::Call {
+                        identifier: call_ident,
+                        args,
+                    }
                 }
             }
             TokenKind::Variable(var) => Expr::Variable(var.to_owned()),
@@ -768,6 +798,79 @@ mod tests {
     }
 
     #[test]
+    fn parses_and_command_chain() {
+        let body = parse_program("echo ok && echo done");
+
+        let Statement::Command(CommandExpr::And { left, right }) = &body[0] else {
+            panic!("Expected command and-chain");
+        };
+
+        let CommandExpr::Call {
+            identifier: left_id,
+            ..
+        } = left.as_ref()
+        else {
+            panic!("Expected left side of and-chain to be a command call");
+        };
+        let CommandExpr::Call {
+            identifier: right_id,
+            ..
+        } = right.as_ref()
+        else {
+            panic!("Expected right side of and-chain to be a command call");
+        };
+
+        assert_eq!(left_id, "echo");
+        assert_eq!(right_id, "echo");
+    }
+
+    #[test]
+    fn parses_or_command_chain() {
+        let body = parse_program("missing || echo fallback");
+
+        let Statement::Command(CommandExpr::Or { left, right }) = &body[0] else {
+            panic!("Expected command or-chain");
+        };
+
+        let CommandExpr::Call {
+            identifier: left_id,
+            ..
+        } = left.as_ref()
+        else {
+            panic!("Expected left side of or-chain to be a command call");
+        };
+        let CommandExpr::Call {
+            identifier: right_id,
+            ..
+        } = right.as_ref()
+        else {
+            panic!("Expected right side of or-chain to be a command call");
+        };
+
+        assert_eq!(left_id, "missing");
+        assert_eq!(right_id, "echo");
+    }
+
+    #[test]
+    fn parses_pipeline_before_and_chain() {
+        let body = parse_program("cat file.txt | grep txt && echo done");
+
+        let Statement::Command(CommandExpr::And { left, right }) = &body[0] else {
+            panic!("Expected top-level and-chain");
+        };
+
+        let CommandExpr::Pipeline(stages) = left.as_ref() else {
+            panic!("Expected left side to be parsed as pipeline");
+        };
+        assert_eq!(stages.len(), 2);
+
+        let CommandExpr::Call { identifier, .. } = right.as_ref() else {
+            panic!("Expected right side to be a command call");
+        };
+        assert_eq!(identifier, "echo");
+    }
+
+    #[test]
     fn parses_command_with_colon_path_argument() {
         let body = parse_program("cat /sys/bus/pci/devices/0000:64:00.0/power/runtime_status");
 
@@ -820,8 +923,6 @@ mod tests {
         let Expr::Object(map) = value else {
             panic!("Expected object literal expression");
         };
-        assert!(
-            matches!(map.get("key"), Some(Expr::CallOrString { identifier, args }) if identifier == "value" && args.is_empty())
-        );
+        assert!(matches!(map.get("key"), Some(Expr::Word(value)) if value == "value"));
     }
 }

@@ -499,6 +499,42 @@ impl Evaluator {
 
                 (final_code, piped_input, combined_err)
             }
+            CommandExpr::And { left, right } => {
+                let (left_code, mut left_out, mut left_err) = self
+                    .evaluate_command_expr_with_input(left, input, scope_indices, capture_output);
+
+                if left_code == 0 {
+                    let (right_code, right_out, right_err) = self.evaluate_command_expr_with_input(
+                        right,
+                        vec![],
+                        scope_indices,
+                        capture_output,
+                    );
+                    left_out.extend(right_out);
+                    left_err.extend(right_err);
+                    (right_code, left_out, left_err)
+                } else {
+                    (left_code, left_out, left_err)
+                }
+            }
+            CommandExpr::Or { left, right } => {
+                let (left_code, mut left_out, mut left_err) = self
+                    .evaluate_command_expr_with_input(left, input, scope_indices, capture_output);
+
+                if left_code != 0 {
+                    let (right_code, right_out, right_err) = self.evaluate_command_expr_with_input(
+                        right,
+                        vec![],
+                        scope_indices,
+                        capture_output,
+                    );
+                    left_out.extend(right_out);
+                    left_err.extend(right_err);
+                    (right_code, left_out, left_err)
+                } else {
+                    (left_code, left_out, left_err)
+                }
+            }
         }
     }
 
@@ -639,7 +675,7 @@ impl Evaluator {
         scope_indices: &mut Vec<usize>,
     ) -> Value {
         match expr {
-            Expr::CallOrString { identifier, args } => {
+            Expr::Call { identifier, args } => {
                 if let Some(Value::Function(func)) =
                     self.resolve_named_value(identifier, scope_indices)
                 {
@@ -665,6 +701,22 @@ impl Evaluator {
                 let mut io = lsh::IoCtx::<io::Stdin, io::Stdout, io::Stderr>::default();
 
                 // TODO: Use a shared io::Stdout reference.
+                cmds::exec_cmd(self, &res_cmd, args, &mut io);
+
+                Value::Null
+            }
+            Expr::Word(word) => {
+                if let Some(Value::Function(func)) = self.resolve_named_value(word, scope_indices) {
+                    return self.call_user_function(&func, &[], scope_indices);
+                }
+
+                let (res_cmd, args) = self.resolve_command(word.to_owned());
+
+                if is_secondary {
+                    return Value::String(word.to_owned());
+                }
+
+                let mut io = lsh::IoCtx::<io::Stdin, io::Stdout, io::Stderr>::default();
                 cmds::exec_cmd(self, &res_cmd, args, &mut io);
 
                 Value::Null
@@ -771,7 +823,7 @@ impl Evaluator {
             Expr::Bool(bool) => Value::Bool(*bool),
             Expr::CommandSub(expr) => {
                 match expr.as_ref() {
-                    Expr::CallOrString { identifier, args } => {
+                    Expr::Call { identifier, args } => {
                         if let Some(Value::Function(func)) =
                             self.resolve_named_value(identifier, scope_indices)
                         {
@@ -788,6 +840,41 @@ impl Evaluator {
 
                         let mut all_args = res_args;
                         all_args.extend(string_args);
+
+                        let mut io = lsh::IoCtx {
+                            input: io::empty(),
+                            out: Vec::<u8>::new(),
+                            err: Vec::<u8>::new(),
+                            input_mode: lsh::IoStreamMode::Pipe,
+                            out_mode: lsh::IoStreamMode::Pipe,
+                            err_mode: lsh::IoStreamMode::Pipe,
+                        };
+
+                        let exit_status = cmds::exec_cmd(self, &res_cmd, all_args, &mut io);
+
+                        let mut res = HashMap::new();
+
+                        res.insert(String::from("code"), Value::Number(exit_status as f64));
+                        res.insert(
+                            String::from("out"),
+                            Value::String(String::from_utf8(io.out).unwrap_or_default()),
+                        );
+                        res.insert(
+                            String::from("err"),
+                            Value::String(String::from_utf8(io.err).unwrap_or_default()),
+                        );
+
+                        Value::Object(res)
+                    }
+                    Expr::Word(word) => {
+                        if let Some(Value::Function(func)) =
+                            self.resolve_named_value(word, scope_indices)
+                        {
+                            let value = self.call_user_function(&func, &[], scope_indices);
+                            return Value::String(value.to_string());
+                        }
+
+                        let (res_cmd, all_args) = self.resolve_command(word.to_owned());
 
                         let mut io = lsh::IoCtx {
                             input: io::empty(),

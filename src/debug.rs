@@ -110,8 +110,11 @@ fn print_parser_expr(expr: &Expr) {
         Expr::Index { object, index } => {
             println!("Index({object:?}[{index:?}])");
         }
-        Expr::CallOrString { identifier, args } => {
-            println!("CallOrString({identifier}, {} args)", args.len());
+        Expr::Word(word) => {
+            println!("Word({word})");
+        }
+        Expr::Call { identifier, args } => {
+            println!("Call({identifier}, {} args)", args.len());
         }
         Expr::TypeOf(expr) => {
             println!("TypeOf({expr:?})");

@@ -9,8 +9,10 @@ if $(which eza).code == 0 {
 }
 
 fn $prompt.before() {
+    let branch = $palette.reset + $palette.green + $(git branch --show-current | tr -d '\n').out
+
     echo $palette.bold $palette.blue
-    echo $(fmt-cwd $PWD).out
+    echo $(fmt-cwd $PWD).out $branch
 }
 
 $prompt.text = $palette.bright_magenta + "$ " + $palette.reset

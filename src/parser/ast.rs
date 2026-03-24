@@ -18,8 +18,19 @@ pub enum BinaryOp {
 
 #[derive(Debug, Clone)]
 pub enum CommandExpr {
-    Call { identifier: String, args: Vec<Expr> },
+    Call {
+        identifier: String,
+        args: Vec<Expr>,
+    },
     Pipeline(Vec<CommandExpr>),
+    And {
+        left: Box<CommandExpr>,
+        right: Box<CommandExpr>,
+    },
+    Or {
+        left: Box<CommandExpr>,
+        right: Box<CommandExpr>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -41,8 +52,10 @@ pub enum Expr {
         object: Box<Expr>,
         index: Box<Expr>,
     },
-    // cmd arg1 arg2...
-    CallOrString {
+    // Bare identifier/token used in expression context.
+    Word(String),
+    // call arg1 arg2...
+    Call {
         identifier: String,
         args: Vec<Expr>,
     },
