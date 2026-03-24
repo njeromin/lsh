@@ -1,13 +1,21 @@
 use std::{fs, io::stderr, path::PathBuf};
 
-use crate::{debug, eval::Evaluator, lexer, parser::Parser, ui};
+use crate::{debug, diagnostics, eval::Evaluator, lexer, parser::Parser, ui};
 
 pub fn exec_file(evaluator: &mut Evaluator, path: PathBuf) {
     let mut cerr = stderr();
 
-    match fs::read_to_string(path) {
+    match fs::read_to_string(&path) {
         Ok(input) => {
-            let tokens = lexer::lex_input(input.as_str());
+            let tokens =
+                match lexer::lex_input_with_source(path.to_string_lossy().as_ref(), input.as_str())
+                {
+                    Ok(tokens) => tokens,
+                    Err(diag) => {
+                        diagnostics::print_diagnostic(&mut cerr, &diag);
+                        return;
+                    }
+                };
 
             debug::print_lexer(&tokens);
 

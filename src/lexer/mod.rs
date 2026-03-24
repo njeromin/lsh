@@ -1,12 +1,20 @@
 use std::{char, iter::Peekable, str::Chars};
 
+use crate::diagnostics::Diagnostic;
 use crate::lexer::token::{Token, TokenKind};
+use diagnostics::create_lex_diagnostic;
 
 pub mod token;
 
+mod diagnostics;
+
 type CharIter<'a> = Peekable<Chars<'a>>;
 
-pub fn lex_input(input: &str) -> Vec<Token> {
+pub fn lex_input(input: &str) -> Result<Vec<Token>, Diagnostic> {
+    lex_input_with_source("<input>", input)
+}
+
+pub fn lex_input_with_source(source_name: &str, input: &str) -> Result<Vec<Token>, Diagnostic> {
     let mut tokens = vec![];
 
     let mut chars: CharIter = input.chars().peekable();
@@ -127,10 +135,22 @@ pub fn lex_input(input: &str) -> Vec<Token> {
                         tokens.push(Token::new(TokenKind::DollarLeftParen, 0));
                         chars.next();
                     } else {
-                        panic!("Unexpected token");
+                        return Err(create_lex_diagnostic(
+                            source_name,
+                            input,
+                            0,
+                            1,
+                            "Unexpected token after '$'.",
+                        ));
                     }
                 } else {
-                    panic!("Unexpected token");
+                    return Err(create_lex_diagnostic(
+                        source_name,
+                        input,
+                        0,
+                        1,
+                        "Unexpected token after '$'.",
+                    ));
                 }
             }
             '/' => match chars.peek().copied() {
@@ -191,7 +211,13 @@ pub fn lex_input(input: &str) -> Vec<Token> {
                 } else if !is_whitespace(&char) {
                     // This is the fallback case so if it is not whitespace, then it is an
                     // unexpected token.
-                    panic!("Unexpected token {char}.");
+                    return Err(create_lex_diagnostic(
+                        source_name,
+                        input,
+                        0,
+                        1,
+                        format!("Unexpected token '{char}'.").as_str(),
+                    ));
                 }
             }
         }
@@ -199,7 +225,7 @@ pub fn lex_input(input: &str) -> Vec<Token> {
 
     tokens.push(Token::new(TokenKind::EOF, 0));
 
-    tokens
+    Ok(tokens)
 }
 
 fn lex_identifier(tokens: &mut Vec<Token>, start_char: char, chars: &mut CharIter) -> Option<()> {
@@ -215,7 +241,6 @@ fn lex_identifier(tokens: &mut Vec<Token>, start_char: char, chars: &mut CharIte
                     | '<'
                     | '!'
                     | '+'
-                    | '*'
                     | '$'
                     | '{'
                     | '}'
@@ -315,6 +340,7 @@ mod tests {
 
     fn token_kinds(input: &str) -> Vec<TokenKind> {
         lex_input(input)
+            .expect("lexer should succeed in test")
             .into_iter()
             .map(|token| token.kind)
             .collect()
@@ -401,6 +427,15 @@ mod tests {
 
         assert!(matches!(&kinds[0], TokenKind::String(s) if s == "echo"));
         assert!(matches!(&kinds[1], TokenKind::String(s) if s == "ok"));
+        assert!(matches!(&kinds[2], TokenKind::EOF));
+    }
+
+    #[test]
+    fn keeps_star_inside_word_when_unspaced() {
+        let kinds = token_kinds("echo a*b");
+
+        assert!(matches!(&kinds[0], TokenKind::String(s) if s == "echo"));
+        assert!(matches!(&kinds[1], TokenKind::String(s) if s == "a*b"));
         assert!(matches!(&kinds[2], TokenKind::EOF));
     }
 }

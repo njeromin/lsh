@@ -14,6 +14,7 @@ use crate::{
 
 pub mod builtins;
 pub mod debug;
+pub mod diagnostics;
 pub mod eval;
 pub mod lexer;
 pub mod parser;
@@ -83,7 +84,13 @@ fn interactive_session(eval: &mut Evaluator, config_dir: &Path) -> rustyline::Re
             continue;
         }
 
-        let tokens = lexer::lex_input(input.trim());
+        let tokens = match lexer::lex_input(input.trim()) {
+            Ok(tokens) => tokens,
+            Err(diag) => {
+                diagnostics::print_diagnostic(&mut cerr, &diag);
+                continue;
+            }
+        };
 
         debug::print_lexer(&tokens);
 

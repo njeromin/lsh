@@ -154,45 +154,13 @@ impl Parser {
             && !self.check_current(&TokenKind::Or)
             && !terminators.iter().any(|term| self.check_current(term))
         {
-            if self.check_current(&TokenKind::Comma) {
-                // In command context, treat commas as literal argument content
-                // rather than expression separators.
-                args.push(Expr::String(",".to_string()));
-                self.advance();
+            if let Some(compound_arg) = self.try_parse_command_equals_compound_arg() {
+                args.push(compound_arg);
                 continue;
             }
-            if let TokenKind::String(s) = &self.current().kind {
-                args.push(Expr::String(s.clone()));
-                self.advance();
-                continue;
-            }
-            if let TokenKind::Number(n) = &self.current().kind {
-                args.push(Expr::Number(*n));
-                self.advance();
-                continue;
-            }
-            if let TokenKind::Bool(b) = &self.current().kind {
-                args.push(Expr::Bool(*b));
-                self.advance();
-                continue;
-            }
-            if self.check_current(&TokenKind::Star) {
-                args.push(Expr::String("*".to_string()));
-                self.advance();
-                continue;
-            }
-            if self.check_current(&TokenKind::Minus) {
-                args.push(Expr::String("-".to_string()));
-                self.advance();
-                continue;
-            }
-            if self.check_current(&TokenKind::Slash) {
-                args.push(Expr::String("/".to_string()));
-                self.advance();
-                continue;
-            }
-            if self.check_current(&TokenKind::Colon) {
-                args.push(Expr::String(":".to_string()));
+
+            if let Some(literal) = Self::token_kind_to_command_literal(&self.current().kind) {
+                args.push(literal);
                 self.advance();
                 continue;
             }
@@ -214,6 +182,41 @@ impl Parser {
         }
 
         CommandExpr::Call { identifier, args }
+    }
+
+    fn try_parse_command_equals_compound_arg(&mut self) -> Option<Expr> {
+        let start_index = self.index;
+        let mut value = Self::token_kind_to_compound_command_part(&self.current().kind)?;
+        self.advance();
+
+        let mut consumed_equals = false;
+
+        loop {
+            if !self.check_current(&TokenKind::Equals) {
+                break;
+            }
+
+            let Some(next_kind) = self.tokens.get(self.index + 1).map(|token| &token.kind) else {
+                break;
+            };
+            let Some(next_value) = Self::token_kind_to_compound_command_part(next_kind) else {
+                break;
+            };
+
+            consumed_equals = true;
+            value.push('=');
+            value.push_str(&next_value);
+
+            self.advance(); // Skip '='.
+            self.advance(); // Move to and consume next literal part.
+        }
+
+        if consumed_equals {
+            Some(Expr::String(value))
+        } else {
+            self.index = start_index;
+            None
+        }
     }
 
     fn parse_let(&mut self) -> Statement {
@@ -511,28 +514,13 @@ impl Parser {
                 while let Some(next_token) = self.tokens.get(self.index + 1) {
                     // This should really just use some form of parse_primary/parse_expr.
                     match &next_token.kind {
-                        TokenKind::String(s) => {
-                            args.push(Expr::String(s.clone()));
-                            self.advance();
-                        }
-                        TokenKind::Number(n) => {
-                            args.push(Expr::Number(*n));
-                            self.advance();
-                        }
-                        TokenKind::Bool(b) => {
-                            args.push(Expr::Bool(*b));
-                            self.advance();
-                        }
-                        TokenKind::Star => {
-                            args.push(Expr::String("*".to_string()));
-                            self.advance();
-                        }
-                        TokenKind::Slash => {
-                            args.push(Expr::String("/".to_string()));
-                            self.advance();
-                        }
-                        TokenKind::Colon => {
-                            args.push(Expr::String(":".to_string()));
+                        _ if Self::token_kind_to_primary_call_arg_literal(&next_token.kind)
+                            .is_some() =>
+                        {
+                            args.push(
+                                Self::token_kind_to_primary_call_arg_literal(&next_token.kind)
+                                    .expect("Expected command literal token"),
+                            );
                             self.advance();
                         }
                         TokenKind::Variable(var) => {
@@ -659,6 +647,49 @@ impl Parser {
         expr
     }
 
+    fn token_kind_to_command_literal(kind: &TokenKind) -> Option<Expr> {
+        match kind {
+            TokenKind::String(s) => Some(Expr::String(s.clone())),
+            TokenKind::Number(n) => Some(Expr::Number(*n)),
+            TokenKind::Bool(b) => Some(Expr::Bool(*b)),
+            // Treat punctuation/operator tokens as literal string arguments in command context.
+            TokenKind::Comma => Some(Expr::String(",".to_string())),
+            TokenKind::Colon => Some(Expr::String(":".to_string())),
+            TokenKind::Minus => Some(Expr::String("-".to_string())),
+            TokenKind::Plus => Some(Expr::String("+".to_string())),
+            TokenKind::Star => Some(Expr::String("*".to_string())),
+            TokenKind::Slash => Some(Expr::String("/".to_string())),
+            TokenKind::Equals => Some(Expr::String("=".to_string())),
+            TokenKind::Not => Some(Expr::String("!".to_string())),
+            TokenKind::GreaterThan => Some(Expr::String(">".to_string())),
+            TokenKind::LessThan => Some(Expr::String("<".to_string())),
+            TokenKind::Ampersand => Some(Expr::String("&".to_string())),
+            _ => None,
+        }
+    }
+
+    fn token_kind_to_compound_command_part(kind: &TokenKind) -> Option<String> {
+        match kind {
+            TokenKind::String(s) => Some(s.clone()),
+            TokenKind::Number(n) => Some(n.to_string()),
+            TokenKind::Bool(b) => Some(b.to_string()),
+            _ => None,
+        }
+    }
+
+    fn token_kind_to_primary_call_arg_literal(kind: &TokenKind) -> Option<Expr> {
+        match kind {
+            TokenKind::String(s) => Some(Expr::String(s.clone())),
+            TokenKind::Number(n) => Some(Expr::Number(*n)),
+            TokenKind::Bool(b) => Some(Expr::Bool(*b)),
+            // Keep these for command-like expression args only.
+            TokenKind::Star => Some(Expr::String("*".to_string())),
+            TokenKind::Slash => Some(Expr::String("/".to_string())),
+            TokenKind::Colon => Some(Expr::String(":".to_string())),
+            _ => None,
+        }
+    }
+
     fn skip_statement_separators(&mut self) {
         while self.check_current(&TokenKind::NewLine) || self.check_current(&TokenKind::Semicolon) {
             self.advance();
@@ -763,11 +794,11 @@ mod tests {
 
     use super::{
         Parser,
-        ast::{CommandExpr, Expr, Statement},
+        ast::{BinaryOp, CommandExpr, Expr, Statement},
     };
 
     fn parse_program(input: &str) -> Vec<Statement> {
-        let tokens = lex_input(input);
+        let tokens = lex_input(input).expect("lexer should succeed in parser test");
         let mut parser = Parser::new(tokens);
         parser.parse_program().body
     }
@@ -972,6 +1003,74 @@ mod tests {
         assert_eq!(identifier, "cd");
         assert_eq!(args.len(), 1);
         assert!(matches!(&args[0], Expr::String(s) if s == "-"));
+    }
+
+    #[test]
+    fn parses_command_with_url_argument() {
+        let body = parse_program("echo https://example.com");
+
+        let Statement::Command(CommandExpr::Call { identifier, args }) = &body[0] else {
+            panic!("Expected command call statement");
+        };
+
+        assert_eq!(identifier, "echo");
+        assert_eq!(args.len(), 1);
+        assert!(matches!(&args[0], Expr::String(s) if s == "https://example.com"));
+    }
+
+    #[test]
+    fn parses_command_with_key_value_argument_tokens() {
+        let body = parse_program("echo key=value");
+
+        let Statement::Command(CommandExpr::Call { identifier, args }) = &body[0] else {
+            panic!("Expected command call statement");
+        };
+
+        assert_eq!(identifier, "echo");
+        assert_eq!(args.len(), 1);
+        assert!(matches!(&args[0], Expr::String(s) if s == "key=value"));
+    }
+
+    #[test]
+    fn parses_command_with_multiple_equals_in_argument() {
+        let body = parse_program("echo key=value=next");
+
+        let Statement::Command(CommandExpr::Call { identifier, args }) = &body[0] else {
+            panic!("Expected command call statement");
+        };
+
+        assert_eq!(identifier, "echo");
+        assert_eq!(args.len(), 1);
+        assert!(matches!(&args[0], Expr::String(s) if s == "key=value=next"));
+    }
+
+    #[test]
+    fn parses_command_with_unspaced_star_word_argument() {
+        let body = parse_program("echo a*b");
+
+        let Statement::Command(CommandExpr::Call { identifier, args }) = &body[0] else {
+            panic!("Expected command call statement");
+        };
+
+        assert_eq!(identifier, "echo");
+        assert_eq!(args.len(), 1);
+        assert!(matches!(&args[0], Expr::String(s) if s == "a*b"));
+    }
+
+    #[test]
+    fn parses_string_concatenation_in_assignment_expression() {
+        let body = parse_program("let x = \"a\" + \"b\" + \"c\"");
+
+        let Statement::Let { value, .. } = &body[0] else {
+            panic!("Expected let statement");
+        };
+
+        let Expr::Binary {
+            op: BinaryOp::Add, ..
+        } = value
+        else {
+            panic!("Expected top-level binary add expression");
+        };
     }
 
     #[test]
