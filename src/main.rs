@@ -16,6 +16,7 @@ pub mod builtins;
 pub mod debug;
 pub mod diagnostics;
 pub mod eval;
+pub mod expand;
 pub mod lexer;
 pub mod parser;
 pub mod paths;

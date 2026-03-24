@@ -1,6 +1,6 @@
 use crossterm::{
     queue,
-    style::{self, Color, Stylize},
+    style::{self, Stylize},
 };
 
 #[derive(Debug)]

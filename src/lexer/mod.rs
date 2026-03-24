@@ -1,4 +1,4 @@
-use std::{char, iter::Peekable, str::Chars};
+use std::{char, iter::Peekable, str::CharIndices};
 
 use crate::diagnostics::Diagnostic;
 use crate::lexer::token::{Token, TokenKind};
@@ -8,7 +8,7 @@ pub mod token;
 
 mod diagnostics;
 
-type CharIter<'a> = Peekable<Chars<'a>>;
+type CharIndexedIter<'a> = Peekable<CharIndices<'a>>;
 
 pub fn lex_input(input: &str) -> Result<Vec<Token>, Diagnostic> {
     lex_input_with_source("<input>", input)
@@ -17,111 +17,109 @@ pub fn lex_input(input: &str) -> Result<Vec<Token>, Diagnostic> {
 pub fn lex_input_with_source(source_name: &str, input: &str) -> Result<Vec<Token>, Diagnostic> {
     let mut tokens = vec![];
 
-    let mut chars: CharIter = input.chars().peekable();
+    let mut chars: CharIndexedIter = input.char_indices().peekable();
 
-    while let Some(char) = chars.next() {
+    while let Some((offset, char)) = chars.next() {
         match char {
             '|' => {
-                if chars.next_if(|next_char| next_char == &'|').is_some() {
-                    tokens.push(Token::new(TokenKind::Or, 0));
+                if chars.next_if(|(_, next_char)| next_char == &'|').is_some() {
+                    tokens.push(Token::new(TokenKind::Or, offset));
                 } else {
-                    tokens.push(Token::new(TokenKind::Pipe, 0));
+                    tokens.push(Token::new(TokenKind::Pipe, offset));
                 }
             }
             '&' => {
-                if chars.next_if(|next_char| next_char == &'&').is_some() {
-                    tokens.push(Token::new(TokenKind::And, 0));
+                if chars.next_if(|(_, next_char)| next_char == &'&').is_some() {
+                    tokens.push(Token::new(TokenKind::And, offset));
                 } else {
-                    tokens.push(Token::new(TokenKind::Ampersand, 0));
+                    tokens.push(Token::new(TokenKind::Ampersand, offset));
                 }
             }
-            ';' => tokens.push(Token::new(TokenKind::Semicolon, 0)),
-            ',' => tokens.push(Token::new(TokenKind::Comma, 0)),
-            ':' => tokens.push(Token::new(TokenKind::Colon, 0)),
+            ';' => tokens.push(Token::new(TokenKind::Semicolon, offset)),
+            ',' => tokens.push(Token::new(TokenKind::Comma, offset)),
+            ':' => tokens.push(Token::new(TokenKind::Colon, offset)),
             '=' => {
-                if chars.next_if(|next_char| next_char == &'=').is_some() {
-                    tokens.push(Token::new(TokenKind::EqualsEquals, 0));
+                if chars.next_if(|(_, next_char)| next_char == &'=').is_some() {
+                    tokens.push(Token::new(TokenKind::EqualsEquals, offset));
                 } else {
-                    tokens.push(Token::new(TokenKind::Equals, 0));
+                    tokens.push(Token::new(TokenKind::Equals, offset));
                 }
             }
             '>' => {
-                if chars.next_if(|next_char| next_char == &'=').is_some() {
-                    tokens.push(Token::new(TokenKind::GtEquals, 0));
+                if chars.next_if(|(_, next_char)| next_char == &'=').is_some() {
+                    tokens.push(Token::new(TokenKind::GtEquals, offset));
                 } else {
-                    tokens.push(Token::new(TokenKind::GreaterThan, 0));
+                    tokens.push(Token::new(TokenKind::GreaterThan, offset));
                 }
             }
             '<' => {
-                if chars.next_if(|next_char| next_char == &'=').is_some() {
-                    tokens.push(Token::new(TokenKind::LtEquals, 0));
+                if chars.next_if(|(_, next_char)| next_char == &'=').is_some() {
+                    tokens.push(Token::new(TokenKind::LtEquals, offset));
                 } else {
-                    tokens.push(Token::new(TokenKind::LessThan, 0));
+                    tokens.push(Token::new(TokenKind::LessThan, offset));
                 }
             }
             '!' => {
-                if chars.next_if(|next_char| next_char == &'=').is_some() {
-                    tokens.push(Token::new(TokenKind::NotEquals, 0));
+                if chars.next_if(|(_, next_char)| next_char == &'=').is_some() {
+                    tokens.push(Token::new(TokenKind::NotEquals, offset));
                 } else {
-                    tokens.push(Token::new(TokenKind::Not, 0));
+                    tokens.push(Token::new(TokenKind::Not, offset));
                 }
             }
             '+' => {
                 if let Some(next_char) = chars.peek() {
-                    match *next_char {
+                    match next_char.1 {
                         '=' => {
-                            tokens.push(Token::new(TokenKind::PlusEquals, 0));
+                            tokens.push(Token::new(TokenKind::PlusEquals, offset));
                             chars.next();
                         }
-                        ' ' => tokens.push(Token::new(TokenKind::Plus, 0)),
+                        ' ' => tokens.push(Token::new(TokenKind::Plus, offset)),
                         _ => {
-                            if lex_identifier(&mut tokens, '+', &mut chars).is_none() {
-                                tokens.push(Token::new(TokenKind::Plus, 0))
+                            if lex_identifier(&mut tokens, '+', offset, &mut chars).is_none() {
+                                tokens.push(Token::new(TokenKind::Plus, offset))
                             }
                         }
                     }
                 }
             }
             '-' => match chars.peek() {
-                Some(&'=') => {
-                    tokens.push(Token::new(TokenKind::MinusEquals, 0));
+                Some((_, '=')) => {
+                    tokens.push(Token::new(TokenKind::MinusEquals, offset));
                     chars.next();
                 }
-                Some(&' ') => tokens.push(Token::new(TokenKind::Minus, 0)),
-                Some(c) if c.is_ascii_digit() => {
-                    if lex_identifier(&mut tokens, char, &mut chars).is_none() {
-                        tokens.push(Token::new(TokenKind::Minus, 0));
+                Some((_, ' ')) => tokens.push(Token::new(TokenKind::Minus, offset)),
+                Some((_, c)) if c.is_ascii_digit() => {
+                    if lex_identifier(&mut tokens, char, offset, &mut chars).is_none() {
+                        tokens.push(Token::new(TokenKind::Minus, offset));
                     }
                 }
                 Some(_) => {
-                    if lex_identifier(&mut tokens, '-', &mut chars).is_none() {
-                        tokens.push(Token::new(TokenKind::Minus, 0))
+                    if lex_identifier(&mut tokens, '-', offset, &mut chars).is_none() {
+                        tokens.push(Token::new(TokenKind::Minus, offset))
                     }
                 }
-                None => tokens.push(Token::new(TokenKind::Minus, 0)),
+                None => tokens.push(Token::new(TokenKind::Minus, offset)),
             },
             '*' => {
-                if chars.next_if(|next_char| next_char == &'=').is_some() {
-                    tokens.push(Token::new(TokenKind::StarEquals, 0));
+                if chars.next_if(|(_, next_char)| next_char == &'=').is_some() {
+                    tokens.push(Token::new(TokenKind::StarEquals, offset));
                 } else {
-                    tokens.push(Token::new(TokenKind::Star, 0));
+                    tokens.push(Token::new(TokenKind::Star, offset));
                 }
             }
             '$' => {
                 if let Some(next_char) = chars.peek() {
-                    if *next_char == '_' || next_char.is_ascii_alphanumeric() {
-                        let mut var_string = String::from(
-                            // Using expect here but this should never fail.
-                            chars.next().expect(
-                                "Failed to get starting character of environment variable.",
-                            ),
-                        );
+                    if next_char.1 == '_' || next_char.1.is_ascii_alphanumeric() {
+                        let (var_offset, first_var_char) = chars
+                            .next()
+                            .expect("Failed to get starting character of environment variable.");
+                        let mut var_string = String::from(first_var_char);
 
                         while let Some(var_char) = chars.peek() {
-                            if *var_char == '_' || var_char.is_ascii_alphanumeric() {
+                            if var_char.1 == '_' || var_char.1.is_ascii_alphanumeric() {
                                 // Character is a valid identifier character.
 
-                                var_string.push(var_char.to_owned());
+                                var_string.push(var_char.1);
                                 // Skip forward one character as only peek was used
                                 // previously.
                                 chars.next();
@@ -130,16 +128,16 @@ pub fn lex_input_with_source(source_name: &str, input: &str) -> Result<Vec<Token
                             }
                         }
 
-                        tokens.push(Token::new(TokenKind::Variable(var_string), 0));
-                    } else if next_char == &'(' {
-                        tokens.push(Token::new(TokenKind::DollarLeftParen, 0));
+                        tokens.push(Token::new(TokenKind::Variable(var_string), var_offset));
+                    } else if next_char.1 == '(' {
+                        tokens.push(Token::new(TokenKind::DollarLeftParen, offset));
                         chars.next();
                     } else {
                         return Err(create_lex_diagnostic(
                             source_name,
                             input,
-                            0,
-                            1,
+                            next_char.0,
+                            next_char.0 + next_char.1.len_utf8(),
                             "Unexpected token after '$'.",
                         ));
                     }
@@ -147,43 +145,43 @@ pub fn lex_input_with_source(source_name: &str, input: &str) -> Result<Vec<Token
                     return Err(create_lex_diagnostic(
                         source_name,
                         input,
-                        0,
-                        1,
+                        offset,
+                        offset + char.len_utf8(),
                         "Unexpected token after '$'.",
                     ));
                 }
             }
-            '/' => match chars.peek().copied() {
+            '/' => match chars.peek().copied().map(|(_, c)| c) {
                 Some('=') => {
                     chars.next();
-                    tokens.push(Token::new(TokenKind::SlashEquals, 0))
+                    tokens.push(Token::new(TokenKind::SlashEquals, offset))
                 }
                 Some(_) | None => {
-                    if lex_identifier(&mut tokens, '/', &mut chars).is_none() {
-                        tokens.push(Token::new(TokenKind::Slash, 0))
+                    if lex_identifier(&mut tokens, '/', offset, &mut chars).is_none() {
+                        tokens.push(Token::new(TokenKind::Slash, offset))
                     }
                 }
             },
             '#' => {
                 // Skip single-line comments.
-                for comment_char in chars.by_ref() {
+                for (_, comment_char) in chars.by_ref() {
                     if comment_char == '\n' {
                         break;
                     }
                 }
             }
-            '{' => tokens.push(Token::new(TokenKind::LeftCurly, 0)),
-            '}' => tokens.push(Token::new(TokenKind::RightCurly, 0)),
-            '(' => tokens.push(Token::new(TokenKind::LeftParen, 0)),
-            ')' => tokens.push(Token::new(TokenKind::RightParen, 0)),
-            '[' => tokens.push(Token::new(TokenKind::LeftBracket, 0)),
-            ']' => tokens.push(Token::new(TokenKind::RightBracket, 0)),
+            '{' => tokens.push(Token::new(TokenKind::LeftCurly, offset)),
+            '}' => tokens.push(Token::new(TokenKind::RightCurly, offset)),
+            '(' => tokens.push(Token::new(TokenKind::LeftParen, offset)),
+            ')' => tokens.push(Token::new(TokenKind::RightParen, offset)),
+            '[' => tokens.push(Token::new(TokenKind::LeftBracket, offset)),
+            ']' => tokens.push(Token::new(TokenKind::RightBracket, offset)),
             '"' | '\'' => {
                 let delim = char;
 
                 let mut string = String::new();
 
-                for str_char in chars.by_ref() {
+                for (_, str_char) in chars.by_ref() {
                     if str_char != delim {
                         string.push(str_char);
                     } else {
@@ -191,22 +189,16 @@ pub fn lex_input_with_source(source_name: &str, input: &str) -> Result<Vec<Token
                     }
                 }
 
-                tokens.push(Token::new(TokenKind::String(string), 0));
+                tokens.push(Token::new(TokenKind::String(string), offset));
             }
             '\n' => {
-                let is_eof = chars
-                    .size_hint()
-                    .1
-                    .expect("lexer: Failed to retrieve length of input iterator.")
-                    == 0;
-
                 // Only add newline token if not at end of file, and the next char is not a '}'.
-                if !is_eof && chars.peek().is_none_or(|next_char| *next_char != '}') {
-                    tokens.push(Token::new(TokenKind::NewLine, 0))
+                if chars.peek().is_some_and(|(_, next_char)| *next_char != '}') {
+                    tokens.push(Token::new(TokenKind::NewLine, offset))
                 }
             }
             _ => {
-                if lex_identifier(&mut tokens, char, &mut chars).is_some() {
+                if lex_identifier(&mut tokens, char, offset, &mut chars).is_some() {
                     continue;
                 } else if !is_whitespace(&char) {
                     // This is the fallback case so if it is not whitespace, then it is an
@@ -214,8 +206,8 @@ pub fn lex_input_with_source(source_name: &str, input: &str) -> Result<Vec<Token
                     return Err(create_lex_diagnostic(
                         source_name,
                         input,
-                        0,
-                        1,
+                        offset,
+                        offset + char.len_utf8(),
                         format!("Unexpected token '{char}'.").as_str(),
                     ));
                 }
@@ -223,12 +215,17 @@ pub fn lex_input_with_source(source_name: &str, input: &str) -> Result<Vec<Token
         }
     }
 
-    tokens.push(Token::new(TokenKind::EOF, 0));
+    tokens.push(Token::new(TokenKind::EOF, input.len()));
 
     Ok(tokens)
 }
 
-fn lex_identifier(tokens: &mut Vec<Token>, start_char: char, chars: &mut CharIter) -> Option<()> {
+fn lex_identifier(
+    tokens: &mut Vec<Token>,
+    start_char: char,
+    start_offset: usize,
+    chars: &mut CharIndexedIter,
+) -> Option<()> {
     let is_ident_char = |c: char| -> bool {
         !c.is_whitespace()
             && !matches!(
@@ -256,19 +253,19 @@ fn lex_identifier(tokens: &mut Vec<Token>, start_char: char, chars: &mut CharIte
     if is_ident_char(start_char) {
         let mut ident_string = String::from(start_char);
 
-        while let Some(&ident_char) = chars.peek() {
+        while let Some(&(_, ident_char)) = chars.peek() {
             if is_ident_char(ident_char) {
                 if ident_char == ':' {
-                    chars.next();
+                    let (colon_offset, _) = chars.next().expect("Failed to get ':' offset.");
                     match chars.peek() {
-                        Some(&next_char)
+                        Some((_, next_char))
                             if next_char.is_whitespace()
                                 || matches!(next_char, '}' | ',' | '\n') =>
                         {
                             // Stop identifier if the colon is followed by whitespace, EOF, or typical object terminators.
                             // This allows `{ key: value }` to keep `:` as a separate token.
-                            push_identifier_or_number(tokens, ident_string);
-                            tokens.push(Token::new(TokenKind::Colon, 0));
+                            push_identifier_or_number(tokens, ident_string, start_offset);
+                            tokens.push(Token::new(TokenKind::Colon, colon_offset));
                             return Some(());
                         }
                         _ => {
@@ -284,21 +281,21 @@ fn lex_identifier(tokens: &mut Vec<Token>, start_char: char, chars: &mut CharIte
             }
         }
 
-        push_identifier_or_number(tokens, ident_string);
+        push_identifier_or_number(tokens, ident_string, start_offset);
         return Some(());
     }
 
     None
 }
 
-fn push_identifier_or_number(tokens: &mut Vec<Token>, ident_string: String) {
+fn push_identifier_or_number(tokens: &mut Vec<Token>, ident_string: String, offset: usize) {
     if ident_string == ":" {
-        tokens.push(Token::new(TokenKind::Colon, 0));
+        tokens.push(Token::new(TokenKind::Colon, offset));
         return;
     }
 
     if let Some(keyword_kind) = match_keyword(ident_string.as_str()) {
-        tokens.push(Token::new(keyword_kind, 0));
+        tokens.push(Token::new(keyword_kind, offset));
         return;
     }
 
@@ -307,12 +304,12 @@ fn push_identifier_or_number(tokens: &mut Vec<Token>, ident_string: String) {
         .all(|c| c.is_ascii_digit() || c == '.' || c == '-');
     if is_numeric {
         if let Ok(num) = ident_string.parse::<f64>() {
-            tokens.push(Token::new(TokenKind::Number(num), 0));
+            tokens.push(Token::new(TokenKind::Number(num), offset));
             return;
         }
     }
 
-    tokens.push(Token::new(TokenKind::String(ident_string), 0));
+    tokens.push(Token::new(TokenKind::String(ident_string), offset));
 }
 
 fn is_whitespace(char: &char) -> bool {

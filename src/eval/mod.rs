@@ -6,6 +6,7 @@ use std::{collections::HashMap, env, io};
 
 use crate::{
     eval::value::{FunctionValue, Value},
+    expand::{self, ExpandCtx},
     parser::ast::{BinaryOp, CommandExpr, Expr, Program, Statement},
 };
 
@@ -446,6 +447,7 @@ impl Evaluator {
                     .collect();
                 let mut all_args = res_args;
                 all_args.extend(string_args);
+                let all_args = expand::expand_args(all_args, ExpandCtx::default());
 
                 if capture_output {
                     let mut io_ctx = lsh::IoCtx {
@@ -697,6 +699,7 @@ impl Evaluator {
                 // Concatenate arguments from the input cmd with the provided arguments from the evaluator.
                 let mut args = res_args;
                 args.extend(string_args);
+                let args = expand::expand_args(args, ExpandCtx::default());
 
                 let mut io = lsh::IoCtx::<io::Stdin, io::Stdout, io::Stderr>::default();
 
@@ -711,6 +714,7 @@ impl Evaluator {
                 }
 
                 let (res_cmd, args) = self.resolve_command(word.to_owned());
+                let args = expand::expand_args(args, ExpandCtx::default());
 
                 if is_secondary {
                     return Value::String(word.to_owned());
@@ -840,6 +844,7 @@ impl Evaluator {
 
                         let mut all_args = res_args;
                         all_args.extend(string_args);
+                        let all_args = expand::expand_args(all_args, ExpandCtx::default());
 
                         let mut io = lsh::IoCtx {
                             input: io::empty(),
@@ -875,6 +880,7 @@ impl Evaluator {
                         }
 
                         let (res_cmd, all_args) = self.resolve_command(word.to_owned());
+                        let all_args = expand::expand_args(all_args, ExpandCtx::default());
 
                         let mut io = lsh::IoCtx {
                             input: io::empty(),

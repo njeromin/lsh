@@ -154,34 +154,69 @@ impl Parser {
             && !self.check_current(&TokenKind::Or)
             && !terminators.iter().any(|term| self.check_current(term))
         {
-            if let Some(compound_arg) = self.try_parse_command_equals_compound_arg() {
-                args.push(compound_arg);
+            if let Some(arg) = self.parse_command_argument() {
+                args.push(arg);
                 continue;
             }
-
-            if let Some(literal) = Self::token_kind_to_command_literal(&self.current().kind) {
-                args.push(literal);
-                self.advance();
-                continue;
-            }
-            if let TokenKind::Variable(var) = &self.current().kind {
-                let var_name = var.clone();
-                self.advance(); // Move to token after variable.
-                let sub_expr = self.parse_postfix_on_current(Expr::Variable(var_name));
-                args.push(sub_expr);
-                continue;
-            }
-            if self.check_current(&TokenKind::DollarLeftParen) {
-                let sub_expr = self.parse_primary();
-                let sub_expr = self.parse_postfix_on_current(sub_expr);
-                args.push(sub_expr);
-                continue;
-            }
-
             break;
         }
 
         CommandExpr::Call { identifier, args }
+    }
+
+    fn parse_command_argument(&mut self) -> Option<Expr> {
+        let (mut expr, mut end_offset) = self.parse_command_arg_part()?;
+
+        // Concatenate adjacent (no-whitespace) command parts into a single argument.
+        while self
+            .tokens
+            .get(self.index)
+            .is_some_and(|token| token.offset == end_offset)
+        {
+            let Some((right_expr, right_end_offset)) = self.parse_command_arg_part() else {
+                break;
+            };
+
+            expr = Expr::Binary {
+                op: BinaryOp::Add,
+                left: Box::new(expr),
+                right: Box::new(right_expr),
+            };
+            end_offset = right_end_offset;
+        }
+
+        Some(expr)
+    }
+
+    fn parse_command_arg_part(&mut self) -> Option<(Expr, usize)> {
+        if let Some(compound_arg) = self.try_parse_command_equals_compound_arg() {
+            let end_offset = self.end_offset_of_last_consumed_token();
+            return Some((compound_arg, end_offset));
+        }
+
+        if let Some(literal) = Self::token_kind_to_command_literal(&self.current().kind) {
+            let token = self.current().to_owned();
+            self.advance();
+            let end_offset = token.offset + Self::token_source_len(&token);
+            return Some((literal, end_offset));
+        }
+
+        if let TokenKind::Variable(var) = &self.current().kind {
+            let var_name = var.clone();
+            self.advance(); // Move to token after variable.
+            let sub_expr = self.parse_postfix_on_current(Expr::Variable(var_name));
+            let end_offset = self.end_offset_of_last_consumed_token();
+            return Some((sub_expr, end_offset));
+        }
+
+        if self.check_current(&TokenKind::DollarLeftParen) {
+            let sub_expr = self.parse_primary();
+            let sub_expr = self.parse_postfix_on_current(sub_expr);
+            let end_offset = self.end_offset_of_last_consumed_token();
+            return Some((sub_expr, end_offset));
+        }
+
+        None
     }
 
     fn try_parse_command_equals_compound_arg(&mut self) -> Option<Expr> {
@@ -677,6 +712,37 @@ impl Parser {
         }
     }
 
+    fn token_source_len(token: &Token) -> usize {
+        match &token.kind {
+            TokenKind::Variable(name) => name.len(),
+            TokenKind::String(s) => s.len(),
+            TokenKind::Number(n) => n.to_string().len(),
+            TokenKind::Bool(b) => b.to_string().len(),
+            TokenKind::And
+            | TokenKind::Or
+            | TokenKind::EqualsEquals
+            | TokenKind::GtEquals
+            | TokenKind::LtEquals
+            | TokenKind::NotEquals
+            | TokenKind::PlusEquals
+            | TokenKind::MinusEquals
+            | TokenKind::StarEquals
+            | TokenKind::SlashEquals
+            | TokenKind::DollarLeftParen => 2,
+            TokenKind::EOF => 0,
+            _ => 1,
+        }
+    }
+
+    fn end_offset_of_last_consumed_token(&self) -> usize {
+        if self.index == 0 {
+            return self.current().offset;
+        }
+
+        let token = &self.tokens[self.index - 1];
+        token.offset + Self::token_source_len(token)
+    }
+
     fn token_kind_to_primary_call_arg_literal(kind: &TokenKind) -> Option<Expr> {
         match kind {
             TokenKind::String(s) => Some(Expr::String(s.clone())),
@@ -986,10 +1052,17 @@ mod tests {
         };
 
         assert_eq!(identifier, "echo");
-        assert_eq!(args.len(), 3);
-        assert!(matches!(&args[0], Expr::String(s) if s == "hello"));
-        assert!(matches!(&args[1], Expr::String(s) if s == ","));
-        assert!(matches!(&args[2], Expr::String(s) if s == "world"));
+        assert_eq!(args.len(), 2);
+        assert!(matches!(
+            &args[0],
+            Expr::Binary {
+                op: BinaryOp::Add,
+                left,
+                right
+            } if matches!(left.as_ref(), Expr::String(s) if s == "hello")
+                && matches!(right.as_ref(), Expr::String(s) if s == ",")
+        ));
+        assert!(matches!(&args[1], Expr::String(s) if s == "world"));
     }
 
     #[test]
@@ -1055,6 +1128,27 @@ mod tests {
         assert_eq!(identifier, "echo");
         assert_eq!(args.len(), 1);
         assert!(matches!(&args[0], Expr::String(s) if s == "a*b"));
+    }
+
+    #[test]
+    fn parses_command_with_variable_path_suffix_as_single_argument() {
+        let body = parse_program("echo $HOME/.config");
+
+        let Statement::Command(CommandExpr::Call { identifier, args }) = &body[0] else {
+            panic!("Expected command call statement");
+        };
+
+        assert_eq!(identifier, "echo");
+        assert_eq!(args.len(), 1);
+        assert!(matches!(
+            &args[0],
+            Expr::Binary {
+                op: BinaryOp::Add,
+                left,
+                right
+            } if matches!(left.as_ref(), Expr::Variable(name) if name == "HOME")
+                && matches!(right.as_ref(), Expr::String(s) if s == "/.config")
+        ));
     }
 
     #[test]
