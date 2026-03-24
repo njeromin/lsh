@@ -10,7 +10,6 @@ use rustyline::{DefaultEditor, error::ReadlineError};
 use crate::{
     eval::{Evaluator, exec::exec_file, value::Value},
     parser::Parser,
-    ui::informer,
 };
 
 pub mod builtins;
@@ -53,9 +52,10 @@ fn get_prompt(eval: &mut Evaluator) -> &str {
 
 fn interactive_session(eval: &mut Evaluator, config_dir: &Path) -> rustyline::Result<()> {
     let mut cout = io::stdout();
+    let mut cerr = io::stderr();
 
     if let Err(e) = queue!(cout, cursor::SetCursorStyle::BlinkingBar) {
-        informer::print_error(&mut cout, e.to_string().as_str());
+        ui::print_error(&mut cerr, e.to_string().as_str());
     }
 
     let mut editor = DefaultEditor::new()?;
@@ -71,7 +71,7 @@ fn interactive_session(eval: &mut Evaluator, config_dir: &Path) -> rustyline::Re
             Err(e) => match e {
                 ReadlineError::Interrupted => continue,
                 _ => {
-                    informer::print_error(&mut cout, e.to_string().as_str());
+                    ui::print_error(&mut cerr, e.to_string().as_str());
                     continue;
                 }
             },
@@ -136,6 +136,6 @@ fn main() {
 
         exec_file(&mut eval, PathBuf::from(file_path));
     } else if let Err(e) = interactive_session(&mut eval, &config_dir) {
-        informer::print_error(&mut io::stderr(), e.to_string().as_str());
+        ui::print_error(&mut io::stderr(), e.to_string().as_str());
     }
 }

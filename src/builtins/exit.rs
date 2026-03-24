@@ -1,6 +1,6 @@
 use std::{io, process};
 
-use crate::{eval::Evaluator, ui::informer};
+use crate::{eval::Evaluator, ui};
 
 pub fn exit<R: io::Read, W: io::Write, WE: io::Write>(
     _: &mut Evaluator,
@@ -13,7 +13,7 @@ pub fn exit<R: io::Read, W: io::Write, WE: io::Write>(
         match args[0].parse::<i32>() {
             Ok(code) => code,
             Err(_) => {
-                informer::print_error(&mut io.out, "Invalid exit code.");
+                ui::print_error(&mut io.err, "Invalid exit code.");
                 1
             }
         }

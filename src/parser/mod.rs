@@ -21,14 +21,18 @@ impl Parser {
     pub fn parse_program(&mut self) -> Program {
         let mut body = vec![];
 
+        self.skip_statement_separators();
         while !self.check_current(&TokenKind::EOF) {
             body.push(self.parse_statement());
+            self.skip_statement_separators();
         }
 
         Program { body }
     }
 
     fn parse_statement(&mut self) -> Statement {
+        self.skip_statement_separators();
+
         match &self.current().kind {
             TokenKind::Let => self.parse_let(),
             TokenKind::If => self.parse_if(),
@@ -59,10 +63,6 @@ impl Parser {
                 self.consume(&TokenKind::RightCurly, "Expected '}' after block.");
 
                 Statement::Block(statements)
-            }
-            TokenKind::NewLine | TokenKind::Semicolon => {
-                self.advance(); // Skip newline.
-                self.parse_statement()
             }
             TokenKind::String(_) => Statement::Command(self.parse_command_expr()),
             _ => {
@@ -649,14 +649,6 @@ impl Parser {
 
                 Expr::Object(expr_map)
             }
-            TokenKind::NewLine | TokenKind::Semicolon => {
-                let expr = self.parse_expr();
-
-                self.advance();
-
-                should_advance = false;
-                expr
-            }
             other => panic!("Unexpected token in primary: {other}"),
         };
 
@@ -665,6 +657,12 @@ impl Parser {
         }
 
         expr
+    }
+
+    fn skip_statement_separators(&mut self) {
+        while self.check_current(&TokenKind::NewLine) || self.check_current(&TokenKind::Semicolon) {
+            self.advance();
+        }
     }
 
     fn parse_postfix_from_seed(&mut self, mut expr: Expr) -> Expr {
@@ -988,5 +986,11 @@ mod tests {
             &then_branch[0],
             Statement::Command(CommandExpr::Call { identifier, .. }) if identifier == "echo"
         ));
+    }
+
+    #[test]
+    fn parses_program_with_only_separators_as_empty() {
+        let body = parse_program("\n;\n;;\n");
+        assert!(body.is_empty());
     }
 }

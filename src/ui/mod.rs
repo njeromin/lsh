@@ -5,13 +5,20 @@ use std::{
 
 use crossterm::{
     cursor, queue,
-    style::{self, Stylize},
+    style::{self, PrintStyledContent, Stylize},
 };
 use git2::Repository;
 
 use crate::eval::{Evaluator, value::Value};
 
-pub mod informer;
+pub fn print_error<W: io::Write>(stdout: &mut W, err_msg: &str) {
+    queue!(
+        stdout,
+        PrintStyledContent(err_msg.red()),
+        style::Print("\n")
+    )
+    .expect("Failed to print error");
+}
 
 pub fn print_prompt<W: io::Write>(stdout: &mut W, eval: &Evaluator) {
     let cwd = get_logical_cwd(eval);
@@ -59,7 +66,7 @@ fn get_branch<W: io::Write>(stdout: &mut W, cwd: &Path) -> Option<String> {
                 });
             }
             Err(e) => {
-                informer::print_error(
+                print_error(
                     stdout,
                     format!("Failed to get head of repository: {e}").as_str(),
                 );

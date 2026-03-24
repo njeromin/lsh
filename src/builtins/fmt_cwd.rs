@@ -5,8 +5,7 @@ use std::{
 
 use crate::{
     eval::{Evaluator, value::Value},
-    paths,
-    ui::informer,
+    paths, ui,
 };
 
 fn format_cwd(path: &Path) -> String {
@@ -32,7 +31,7 @@ pub fn fmt_cwd<R: io::Read, W: io::Write, WE: io::Write>(
     args: Vec<String>,
 ) {
     if args.len() > 1 {
-        informer::print_error(&mut io.err, "Too many arguments.");
+        ui::print_error(&mut io.err, "Too many arguments.");
         return;
     }
 

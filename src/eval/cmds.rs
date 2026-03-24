@@ -9,7 +9,7 @@ use which::which;
 use crate::{
     builtins::{self},
     eval::Evaluator,
-    ui::informer,
+    ui,
 };
 
 pub fn is_valid_cmd(cmd: &str) -> bool {
@@ -51,7 +51,7 @@ pub fn exec_cmd<R: io::Read, W: io::Write, WE: io::Write>(
         _ => match spawn_proc(cmd, args, ctx) {
             Ok(status) => status,
             Err(e) => {
-                informer::print_error(&mut ctx.err, &e.to_string());
+                ui::print_error(&mut ctx.err, &e.to_string());
                 return -1;
             }
         },
@@ -109,9 +109,9 @@ pub fn spawn_proc<R: io::Read, W: io::Write, WE: io::Write>(
 
             // If cmd cannot be found, do custom error message, otherwise just print the message.
             if e.kind() == io::ErrorKind::NotFound {
-                informer::print_error(&mut ctx.err, format!("Command '{cmd}' not found.").as_str());
+                ui::print_error(&mut ctx.err, format!("Command '{cmd}' not found.").as_str());
             } else {
-                informer::print_error(&mut ctx.err, e.to_string().as_str());
+                ui::print_error(&mut ctx.err, e.to_string().as_str());
             }
 
             Ok(-1)

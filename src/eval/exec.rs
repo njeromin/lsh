@@ -1,9 +1,9 @@
-use std::{fs, io::stdout, path::PathBuf};
+use std::{fs, io::stderr, path::PathBuf};
 
-use crate::{debug, eval::Evaluator, lexer, parser::Parser, ui::informer};
+use crate::{debug, eval::Evaluator, lexer, parser::Parser, ui};
 
 pub fn exec_file(evaluator: &mut Evaluator, path: PathBuf) {
-    let mut cout = stdout();
+    let mut cerr = stderr();
 
     match fs::read_to_string(path) {
         Ok(input) => {
@@ -19,7 +19,7 @@ pub fn exec_file(evaluator: &mut Evaluator, path: PathBuf) {
             evaluator.evaluate(prog);
         }
         Err(e) => {
-            informer::print_error(&mut cout, e.to_string().as_str());
+            ui::print_error(&mut cerr, e.to_string().as_str());
         }
     }
 }

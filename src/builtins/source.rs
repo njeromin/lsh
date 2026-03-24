@@ -2,8 +2,7 @@ use std::{io, path::PathBuf};
 
 use crate::{
     eval::{Evaluator, exec::exec_file},
-    paths,
-    ui::informer,
+    paths, ui,
 };
 
 pub fn source<R: io::Read, W: io::Write, WE: io::Write>(
@@ -12,7 +11,7 @@ pub fn source<R: io::Read, W: io::Write, WE: io::Write>(
     args: Vec<String>,
 ) {
     if args.len() > 1 {
-        informer::print_error(&mut io.err, "Too many arguments.");
+        ui::print_error(&mut io.err, "Too many arguments.");
         return;
     }
 
@@ -21,6 +20,6 @@ pub fn source<R: io::Read, W: io::Write, WE: io::Write>(
 
         exec_file(eval, path);
     } else {
-        informer::print_error(&mut io.err, "An argument is required.");
+        ui::print_error(&mut io.err, "An argument is required.");
     }
 }

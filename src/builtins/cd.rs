@@ -5,8 +5,7 @@ use std::{
 
 use crate::{
     eval::{Evaluator, value::Value},
-    paths,
-    ui::informer,
+    paths, ui,
 };
 
 fn normalize_logical_path(path: &Path) -> PathBuf {
@@ -46,7 +45,7 @@ pub fn cd<R: io::Read, W: io::Write, WE: io::Write>(
     args: Vec<String>,
 ) {
     if args.len() > 1 {
-        informer::print_error(&mut io.out, "Too many arguments.");
+        ui::print_error(&mut io.err, "Too many arguments.");
         return;
     }
 
@@ -66,8 +65,8 @@ pub fn cd<R: io::Read, W: io::Write, WE: io::Write>(
         let logical_target = normalize_logical_path(&requested_path);
 
         if env::set_current_dir(&logical_target).is_err() {
-            informer::print_error(
-                &mut io.out,
+            ui::print_error(
+                &mut io.err,
                 format!("Failed to change directory to '{arg}'.").as_str(),
             );
             return;
@@ -79,6 +78,6 @@ pub fn cd<R: io::Read, W: io::Write, WE: io::Write>(
             Value::String(logical_target.to_string_lossy().into_owned()),
         );
     } else {
-        informer::print_error(&mut io.out, "An argument is required.");
+        ui::print_error(&mut io.err, "An argument is required.");
     }
 }

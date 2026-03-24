@@ -2,8 +2,7 @@ use std::{io, path::PathBuf};
 
 use crate::{
     eval::{Evaluator, exec::exec_file, value::Value},
-    paths,
-    ui::informer,
+    paths, ui,
 };
 
 pub fn exec<R: io::Read, W: io::Write, WE: io::Write>(
@@ -22,6 +21,6 @@ pub fn exec<R: io::Read, W: io::Write, WE: io::Write>(
 
         exec_file(&mut exec_evaluator, path);
     } else {
-        informer::print_error(&mut io.out, "An argument is required.");
+        ui::print_error(&mut io.err, "An argument is required.");
     }
 }
