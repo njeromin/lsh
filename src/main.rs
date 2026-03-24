@@ -1,7 +1,6 @@
 use std::{
     env::{self, current_dir},
-    fs,
-    io::{self, Write},
+    fs, io,
     path::{Path, PathBuf},
 };
 
@@ -59,30 +58,24 @@ fn interactive_session(eval: &mut Evaluator, config_dir: &Path) -> rustyline::Re
         informer::print_error(&mut cout, e.to_string().as_str());
     }
 
-    let history_path = config_dir.join("history.txt");
-
     let mut editor = DefaultEditor::new()?;
-    if editor.load_history(&history_path).is_err() {
-        println!("No previous history.");
-    }
+    let _ = editor.load_history(&config_dir.join("history.txt"));
 
     loop {
-        let mut input = String::new();
-
-        let readline = editor.readline(get_prompt(eval));
-
-        match readline {
+        let input = match editor.readline(get_prompt(eval)) {
             Ok(line) => {
-                editor.add_history_entry(line.as_str())?;
-                input = line;
+                editor.add_history_entry(&line)?;
+
+                line
             }
             Err(e) => match e {
                 ReadlineError::Interrupted => continue,
                 _ => {
                     informer::print_error(&mut cout, e.to_string().as_str());
+                    continue;
                 }
             },
-        }
+        };
 
         // If input is empty, skip to next iteration of loop as there won't be anything to execute
         // in the current one.
@@ -100,11 +93,6 @@ fn interactive_session(eval: &mut Evaluator, config_dir: &Path) -> rustyline::Re
         debug::print_parser(&prog);
 
         eval.evaluate(prog);
-
-        // TODO: This should be done after exiting the program, not on every iteration.
-        // if let Err(e) = editor.save_history(&history_path) {
-        //     informer::print_error(&mut cout, &e.to_string());
-        // }
     }
 }
 
@@ -112,13 +100,22 @@ fn main() {
     let mut eval = Evaluator::new().with_globals();
 
     let mut args = env::args();
-    args.next();
+    args.next(); // Skip the program name.
 
-    let current_dir = current_dir().expect("Failed to get current directory");
+    let config_dir = if let Ok(cfg_path) = env::var("LSH_CONFIG_DIR") {
+        PathBuf::from(cfg_path)
+    } else {
+        if let Some(config_dir) = dirs::config_dir() {
+            config_dir.join("lsh/")
+        } else {
+            let current_dir = current_dir().expect("Failed to get current directory");
+            Path::new(&current_dir).join("config/")
+        }
+    };
 
-    let config_dir = Path::new(&current_dir).join("config/");
     let config_entrypoint = config_dir.join("config.lsh");
 
+    // Run config.lsh.
     if fs::exists(&config_entrypoint).expect("Failed to check config file existence") {
         exec_file(&mut eval, config_entrypoint);
     }
@@ -138,9 +135,7 @@ fn main() {
         }
 
         exec_file(&mut eval, PathBuf::from(file_path));
-    } else {
-        if let Err(e) = interactive_session(&mut eval, &config_dir) {
-            informer::print_error(&mut io::stderr(), e.to_string().as_str());
-        }
+    } else if let Err(e) = interactive_session(&mut eval, &config_dir) {
+        informer::print_error(&mut io::stderr(), e.to_string().as_str());
     }
 }

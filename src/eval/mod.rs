@@ -444,7 +444,8 @@ impl Evaluator {
                     .iter()
                     .map(|arg| self.evaluate_expr(arg, true, scope_indices).to_string())
                     .collect();
-                let all_args = [res_args, string_args].concat();
+                let mut all_args = res_args;
+                all_args.extend(string_args);
 
                 if capture_output {
                     let mut io_ctx = lsh::IoCtx {
@@ -652,13 +653,14 @@ impl Evaluator {
                     return Value::String(identifier.to_owned());
                 }
 
-                let string_args = args
+                let string_args: Vec<String> = args
                     .iter()
                     .map(|i| self.evaluate_expr(i, true, scope_indices).to_string())
                     .collect();
 
                 // Concatenate arguments from the input cmd with the provided arguments from the evaluator.
-                let args = [res_args, string_args].concat();
+                let mut args = res_args;
+                args.extend(string_args);
 
                 let mut io = lsh::IoCtx::<io::Stdin, io::Stdout, io::Stderr>::default();
 
@@ -784,7 +786,8 @@ impl Evaluator {
                             .map(|arg| self.evaluate_expr(arg, true, scope_indices).to_string())
                             .collect();
 
-                        let all_args = [res_args, string_args].concat();
+                        let mut all_args = res_args;
+                        all_args.extend(string_args);
 
                         let mut io = lsh::IoCtx {
                             input: io::empty(),

@@ -18,7 +18,14 @@ pub fn expand_tilde(path: PathBuf) -> PathBuf {
     if let Some(stripped) = expanded_path.to_str().and_then(|s| s.strip_prefix('~'))
         && let Some(home_dir) = dirs::home_dir()
     {
-        expanded_path = home_dir.join(stripped);
+        if stripped.is_empty() {
+            expanded_path = home_dir;
+        } else {
+            // `PathBuf::join` discards the left side if the right side is absolute.
+            // For `~/foo`, strip the leading slash so it stays relative to `$HOME`.
+            let rel = stripped.trim_start_matches('/');
+            expanded_path = home_dir.join(rel);
+        }
     }
 
     expanded_path

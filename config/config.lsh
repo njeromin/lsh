@@ -9,10 +9,8 @@ if $(which eza).code == 0 {
 }
 
 fn $prompt.before() {
-    let formatted_cwd = $(fmt-cwd $PWD).out
-
-    echo $palette.blue
-    echo $formatted_cwd
+    echo $palette.bold $palette.blue
+    echo $(fmt-cwd $PWD).out
 }
 
 $prompt.text = $palette.bright_magenta + "$ " + $palette.reset

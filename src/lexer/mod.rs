@@ -92,7 +92,7 @@ pub fn lex_input(input: &str) -> Vec<Token> {
                 }
                 Some(&' ') => tokens.push(Token::new(TokenKind::Minus, 0)),
                 Some(c) if c.is_ascii_digit() => {
-                    if lex_number(&mut tokens, char, &mut chars).is_none() {
+                    if lex_identifier(&mut tokens, char, &mut chars).is_none() {
                         tokens.push(Token::new(TokenKind::Minus, 0));
                     }
                 }
@@ -199,9 +199,7 @@ pub fn lex_input(input: &str) -> Vec<Token> {
                 }
             }
             _ => {
-                if lex_number(&mut tokens, char, &mut chars).is_some()
-                    || lex_identifier(&mut tokens, char, &mut chars).is_some()
-                {
+                if lex_identifier(&mut tokens, char, &mut chars).is_some() {
                     continue;
                 } else if !is_whitespace(&char) {
                     // This is the fallback case so if it is not whitespace, then it is an
@@ -218,73 +216,91 @@ pub fn lex_input(input: &str) -> Vec<Token> {
 }
 
 fn lex_identifier(tokens: &mut Vec<Token>, start_char: char, chars: &mut CharIter) -> Option<()> {
-    // First, check if starting character is a valid for the start of a string.
-    if matches!(start_char, '~' | '.' | '/' | '_' | '-') || start_char.is_ascii_alphabetic() {
+    let is_ident_char = |c: char| -> bool {
+        !c.is_whitespace()
+            && !matches!(
+                c,
+                '|' | '&'
+                    | ';'
+                    | ','
+                    | '='
+                    | '>'
+                    | '<'
+                    | '!'
+                    | '+'
+                    | '*'
+                    | '$'
+                    | '{'
+                    | '}'
+                    | '('
+                    | ')'
+                    | '['
+                    | ']'
+                    | '"'
+                    | '\''
+            )
+    };
+
+    if is_ident_char(start_char) {
         let mut ident_string = String::from(start_char);
 
-        while let Some(ident_char) = chars.peek() {
-            if matches!(ident_char, '~' | '.' | '/' | '_' | '-')
-                || ident_char.is_ascii_alphanumeric()
-            {
-                // Character is a valid identifier character.
-                ident_string.push(ident_char.to_owned());
-                // Skip forward one character as only peek was used
-                // previously.
-                chars.next();
-            } else {
-                break;
-            }
-        }
-
-        if let Some(keyword_kind) = match_keyword(ident_string.as_str()) {
-            tokens.push(Token::new(keyword_kind, 0));
-        } else {
-            tokens.push(Token::new(TokenKind::String(ident_string), 0));
-        }
-
-        return Some(());
-    }
-
-    None
-}
-
-fn lex_number(tokens: &mut Vec<Token>, start_char: char, chars: &mut CharIter) -> Option<()> {
-    if start_char.is_ascii_digit()
-        || (start_char == '-' && chars.peek().is_some_and(|c| c.is_ascii_digit()))
-    {
-        // Character is a valid number starting character.
-
-        let mut num_str = String::from(start_char);
-        let mut has_decimal_separator = false;
-
-        while let Some(ident_char) = chars.peek() {
-            if ident_char.is_ascii_digit() {
-                // Character is a valid digit.
-
-                num_str.push(ident_char.to_owned());
-                chars.next(); // Increment chars iter.
-            } else if ident_char == &'.' {
-                if !has_decimal_separator {
-                    has_decimal_separator = true;
-
-                    num_str.push('.');
-                    chars.next(); // Increment chars iter.
+        while let Some(&ident_char) = chars.peek() {
+            if is_ident_char(ident_char) {
+                if ident_char == ':' {
+                    chars.next();
+                    match chars.peek() {
+                        Some(&next_char)
+                            if next_char.is_whitespace()
+                                || matches!(next_char, '}' | ',' | '\n') =>
+                        {
+                            // Stop identifier if the colon is followed by whitespace, EOF, or typical object terminators.
+                            // This allows `{ key: value }` to keep `:` as a separate token.
+                            push_identifier_or_number(tokens, ident_string);
+                            tokens.push(Token::new(TokenKind::Colon, 0));
+                            return Some(());
+                        }
+                        _ => {
+                            ident_string.push(':');
+                        }
+                    }
                 } else {
-                    panic!("A number cannot have more than one decimal separator.");
+                    ident_string.push(ident_char);
+                    chars.next();
                 }
             } else {
                 break;
             }
         }
 
-        let num: f64 = num_str.parse().expect("Failed to parse number.");
-
-        tokens.push(Token::new(TokenKind::Number(num), 0));
-
+        push_identifier_or_number(tokens, ident_string);
         return Some(());
     }
 
     None
+}
+
+fn push_identifier_or_number(tokens: &mut Vec<Token>, ident_string: String) {
+    if ident_string == ":" {
+        tokens.push(Token::new(TokenKind::Colon, 0));
+        return;
+    }
+
+    if let Some(keyword_kind) = match_keyword(ident_string.as_str()) {
+        tokens.push(Token::new(keyword_kind, 0));
+        return;
+    }
+
+    let is_numeric = ident_string
+        .chars()
+        .all(|c| c.is_ascii_digit() || c == '.' || c == '-');
+    if is_numeric {
+        if let Ok(num) = ident_string.parse::<f64>() {
+            tokens.push(Token::new(TokenKind::Number(num), 0));
+            return;
+        }
+    }
+
+    tokens.push(Token::new(TokenKind::String(ident_string), 0));
 }
 
 fn is_whitespace(char: &char) -> bool {
@@ -303,5 +319,74 @@ fn match_keyword(keyword: &str) -> Option<TokenKind> {
         "true" => Some(TokenKind::Bool(true)),
         "false" => Some(TokenKind::Bool(false)),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn token_kinds(input: &str) -> Vec<TokenKind> {
+        lex_input(input)
+            .into_iter()
+            .map(|token| token.kind)
+            .collect()
+    }
+
+    #[test]
+    fn lexes_regular_command_tokens() {
+        let kinds = token_kinds("echo hello world");
+
+        assert!(matches!(&kinds[0], TokenKind::String(s) if s == "echo"));
+        assert!(matches!(&kinds[1], TokenKind::String(s) if s == "hello"));
+        assert!(matches!(&kinds[2], TokenKind::String(s) if s == "world"));
+        assert!(matches!(&kinds[3], TokenKind::EOF));
+    }
+
+    #[test]
+    fn lexes_pipeline_command_tokens() {
+        let kinds = token_kinds("cat file.txt | grep txt");
+
+        assert!(matches!(&kinds[0], TokenKind::String(s) if s == "cat"));
+        assert!(matches!(&kinds[1], TokenKind::String(s) if s == "file.txt"));
+        assert!(matches!(&kinds[2], TokenKind::Pipe));
+        assert!(matches!(&kinds[3], TokenKind::String(s) if s == "grep"));
+        assert!(matches!(&kinds[4], TokenKind::String(s) if s == "txt"));
+    }
+
+    #[test]
+    fn keeps_colons_inside_command_path_tokens() {
+        let kinds = token_kinds("cat /sys/bus/pci/devices/0000:64:00.0/power/runtime_status");
+
+        assert!(matches!(&kinds[0], TokenKind::String(s) if s == "cat"));
+        assert!(
+            matches!(&kinds[1], TokenKind::String(s) if s == "/sys/bus/pci/devices/0000:64:00.0/power/runtime_status")
+        );
+        assert!(matches!(&kinds[2], TokenKind::EOF));
+    }
+
+    #[test]
+    fn keeps_object_key_colon_as_colon_token() {
+        let kinds = token_kinds("let x = { key: value }");
+
+        assert!(matches!(&kinds[0], TokenKind::Let));
+        assert!(matches!(&kinds[1], TokenKind::String(s) if s == "x"));
+        assert!(matches!(&kinds[2], TokenKind::Equals));
+        assert!(matches!(&kinds[3], TokenKind::LeftCurly));
+        assert!(matches!(&kinds[4], TokenKind::String(s) if s == "key"));
+        assert!(matches!(&kinds[5], TokenKind::Colon));
+        assert!(matches!(&kinds[6], TokenKind::String(s) if s == "value"));
+        assert!(matches!(&kinds[7], TokenKind::RightCurly));
+    }
+
+    #[test]
+    fn lexes_command_substitution_tokens() {
+        let kinds = token_kinds("echo $(cat /etc/hosts)");
+
+        assert!(matches!(&kinds[0], TokenKind::String(s) if s == "echo"));
+        assert!(matches!(&kinds[1], TokenKind::DollarLeftParen));
+        assert!(matches!(&kinds[2], TokenKind::String(s) if s == "cat"));
+        assert!(matches!(&kinds[3], TokenKind::String(s) if s == "/etc/hosts"));
+        assert!(matches!(&kinds[4], TokenKind::RightParen));
     }
 }

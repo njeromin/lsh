@@ -118,39 +118,51 @@ impl Parser {
         while !self.check_current(&TokenKind::Pipe)
             && !terminators.iter().any(|term| self.check_current(term))
         {
-            match self.current().kind.clone() {
-                TokenKind::String(s) => {
-                    args.push(Expr::String(s));
-                    self.advance();
-                }
-                TokenKind::Number(n) => {
-                    args.push(Expr::Number(n));
-                    self.advance();
-                }
-                TokenKind::Bool(b) => {
-                    args.push(Expr::Bool(b));
-                    self.advance();
-                }
-                TokenKind::Star => {
-                    args.push(Expr::String("*".to_string()));
-                    self.advance();
-                }
-                TokenKind::Slash => {
-                    args.push(Expr::String("/".to_string()));
-                    self.advance();
-                }
-                TokenKind::Variable(var) => {
-                    self.advance();
-                    let sub_expr = self.parse_postfix_on_current(Expr::Variable(var));
-                    args.push(sub_expr);
-                }
-                TokenKind::DollarLeftParen => {
-                    let sub_expr = self.parse_primary();
-                    let sub_expr = self.parse_postfix_on_current(sub_expr);
-                    args.push(sub_expr);
-                }
-                _ => break,
+            if let TokenKind::String(s) = &self.current().kind {
+                args.push(Expr::String(s.clone()));
+                self.advance();
+                continue;
             }
+            if let TokenKind::Number(n) = &self.current().kind {
+                args.push(Expr::Number(*n));
+                self.advance();
+                continue;
+            }
+            if let TokenKind::Bool(b) = &self.current().kind {
+                args.push(Expr::Bool(*b));
+                self.advance();
+                continue;
+            }
+            if self.check_current(&TokenKind::Star) {
+                args.push(Expr::String("*".to_string()));
+                self.advance();
+                continue;
+            }
+            if self.check_current(&TokenKind::Slash) {
+                args.push(Expr::String("/".to_string()));
+                self.advance();
+                continue;
+            }
+            if self.check_current(&TokenKind::Colon) {
+                args.push(Expr::String(":".to_string()));
+                self.advance();
+                continue;
+            }
+            if let TokenKind::Variable(var) = &self.current().kind {
+                let var_name = var.clone();
+                self.advance(); // Move to token after variable.
+                let sub_expr = self.parse_postfix_on_current(Expr::Variable(var_name));
+                args.push(sub_expr);
+                continue;
+            }
+            if self.check_current(&TokenKind::DollarLeftParen) {
+                let sub_expr = self.parse_primary();
+                let sub_expr = self.parse_postfix_on_current(sub_expr);
+                args.push(sub_expr);
+                continue;
+            }
+
+            break;
         }
 
         CommandExpr::Call { identifier, args }
@@ -443,24 +455,24 @@ impl Parser {
 
         let expr = match &self.current().kind {
             TokenKind::Number(n) => Expr::Number(*n),
+            TokenKind::Colon => Expr::String(":".to_string()),
             TokenKind::String(s) => {
                 let call_ident = s.to_owned();
                 let mut args = vec![];
 
-                while let Some(next_kind) = self.tokens.get(self.index + 1).map(|t| t.kind.clone())
-                {
+                while let Some(next_token) = self.tokens.get(self.index + 1) {
                     // This should really just use some form of parse_primary/parse_expr.
-                    match next_kind {
+                    match &next_token.kind {
                         TokenKind::String(s) => {
-                            args.push(Expr::String(s));
+                            args.push(Expr::String(s.clone()));
                             self.advance();
                         }
                         TokenKind::Number(n) => {
-                            args.push(Expr::Number(n));
+                            args.push(Expr::Number(*n));
                             self.advance();
                         }
                         TokenKind::Bool(b) => {
-                            args.push(Expr::Bool(b));
+                            args.push(Expr::Bool(*b));
                             self.advance();
                         }
                         TokenKind::Star => {
@@ -471,10 +483,15 @@ impl Parser {
                             args.push(Expr::String("/".to_string()));
                             self.advance();
                         }
+                        TokenKind::Colon => {
+                            args.push(Expr::String(":".to_string()));
+                            self.advance();
+                        }
                         TokenKind::Variable(var) => {
+                            let var_name = var.clone();
                             self.advance(); // Move to variable.
 
-                            let sub_expr = self.parse_postfix_from_seed(Expr::Variable(var));
+                            let sub_expr = self.parse_postfix_from_seed(Expr::Variable(var_name));
                             args.push(sub_expr);
                         }
                         TokenKind::DollarLeftParen => {
@@ -687,5 +704,124 @@ impl Parser {
         let current_kind = &self.current().kind;
 
         panic!("Parser error: expected {kind}, found {current_kind} - {panic_msg}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::lexer::lex_input;
+
+    use super::{
+        Parser,
+        ast::{CommandExpr, Expr, Statement},
+    };
+
+    fn parse_program(input: &str) -> Vec<Statement> {
+        let tokens = lex_input(input);
+        let mut parser = Parser::new(tokens);
+        parser.parse_program().body
+    }
+
+    #[test]
+    fn parses_regular_command_call() {
+        let body = parse_program("echo hello world");
+
+        let Statement::Command(CommandExpr::Call { identifier, args }) = &body[0] else {
+            panic!("Expected command call statement");
+        };
+
+        assert_eq!(identifier, "echo");
+        assert_eq!(args.len(), 2);
+        assert!(matches!(&args[0], Expr::String(s) if s == "hello"));
+        assert!(matches!(&args[1], Expr::String(s) if s == "world"));
+    }
+
+    #[test]
+    fn parses_pipeline_command() {
+        let body = parse_program("cat file.txt | grep txt");
+
+        let Statement::Command(CommandExpr::Pipeline(stages)) = &body[0] else {
+            panic!("Expected command pipeline statement");
+        };
+
+        assert_eq!(stages.len(), 2);
+
+        let CommandExpr::Call {
+            identifier: first_id,
+            args: first_args,
+        } = &stages[0]
+        else {
+            panic!("Expected first pipeline stage to be a call");
+        };
+        assert_eq!(first_id, "cat");
+        assert!(matches!(&first_args[0], Expr::String(s) if s == "file.txt"));
+
+        let CommandExpr::Call {
+            identifier: second_id,
+            args: second_args,
+        } = &stages[1]
+        else {
+            panic!("Expected second pipeline stage to be a call");
+        };
+        assert_eq!(second_id, "grep");
+        assert!(matches!(&second_args[0], Expr::String(s) if s == "txt"));
+    }
+
+    #[test]
+    fn parses_command_with_colon_path_argument() {
+        let body = parse_program("cat /sys/bus/pci/devices/0000:64:00.0/power/runtime_status");
+
+        let Statement::Command(CommandExpr::Call { identifier, args }) = &body[0] else {
+            panic!("Expected command call statement");
+        };
+
+        assert_eq!(identifier, "cat");
+        assert_eq!(args.len(), 1);
+        assert!(
+            matches!(&args[0], Expr::String(s) if s == "/sys/bus/pci/devices/0000:64:00.0/power/runtime_status")
+        );
+    }
+
+    #[test]
+    fn parses_command_with_command_substitution_argument() {
+        let body = parse_program("echo $(cat /etc/hosts)");
+
+        let Statement::Command(CommandExpr::Call { identifier, args }) = &body[0] else {
+            panic!("Expected command call statement");
+        };
+
+        assert_eq!(identifier, "echo");
+        assert_eq!(args.len(), 1);
+
+        let Expr::CommandSubCommand(sub_command) = &args[0] else {
+            panic!("Expected command substitution command argument");
+        };
+
+        let CommandExpr::Call {
+            identifier: sub_id,
+            args: sub_args,
+        } = sub_command.as_ref()
+        else {
+            panic!("Expected command substitution to contain a command call");
+        };
+        assert_eq!(sub_id, "cat");
+        assert!(matches!(&sub_args[0], Expr::String(s) if s == "/etc/hosts"));
+    }
+
+    #[test]
+    fn parses_object_literal_with_colon_separator() {
+        let body = parse_program("let x = { key: value }");
+
+        let Statement::Let { name, value } = &body[0] else {
+            panic!("Expected let statement");
+        };
+        assert_eq!(name, "x");
+
+        let Expr::Object(map) = value else {
+            panic!("Expected object literal expression");
+        };
+        assert!(
+            matches!(map.get("key"), Some(Expr::CallOrString { identifier, args }) if identifier == "value" && args.is_empty())
+        );
     }
 }
