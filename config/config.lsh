@@ -1,18 +1,28 @@
-// If we have eza, set up ls aliases.
+# If we have eza, set up ls aliases.
 if $(which eza).code == 0 {
     alias set ls "eza --icons"
     alias set la "eza --icons --all"
     alias set ll "eza --icons --long"
 } else {
+    alias set ls "ls --color=auto -F"
     alias set la "ls -a"
     alias set ll "ls -l"
 }
 
 fn $prompt.before() {
-    let branch = $palette.reset + $palette.green + $(git branch --show-current | tr -d '\n').out
+    let git_info = ""
+
+    if $(git rev-parse --is-inside-work-tree).code == 0 {
+        let branch = $(git branch --show-current | tr -d '\n').out
+        let ahead = $(git status --porcelain --branch | awk 'NR==1{if(match($0,/ahead [0-9]+/)){printf substr($0,RSTART+6,RLENGTH-6)}else{printf 0}}').out
+        let changes = $(git status --porcelain | awk 'END{printf NR}').out
+
+        $git_info = $palette.reset + $palette.green + $branch + $palette.cyan + " ↑" + $ahead + $palette.yellow + " ~" + $changes
+    }
 
     echo $palette.bold $palette.blue
-    echo $(fmt-cwd $PWD).out $branch
+    echo $(fmt-cwd $PWD).out $git_info
 }
+
 
 $prompt.text = $palette.bright_magenta + "$ " + $palette.reset

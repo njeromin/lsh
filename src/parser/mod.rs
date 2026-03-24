@@ -43,6 +43,16 @@ impl Parser {
                 let mut statements = vec![];
 
                 while !self.check_current(&TokenKind::RightCurly) {
+                    while self.check_current(&TokenKind::NewLine)
+                        || self.check_current(&TokenKind::Semicolon)
+                    {
+                        self.advance();
+                    }
+
+                    if self.check_current(&TokenKind::RightCurly) {
+                        break;
+                    }
+
                     statements.push(self.parse_statement());
                 }
 
@@ -144,6 +154,13 @@ impl Parser {
             && !self.check_current(&TokenKind::Or)
             && !terminators.iter().any(|term| self.check_current(term))
         {
+            if self.check_current(&TokenKind::Comma) {
+                // In command context, treat commas as literal argument content
+                // rather than expression separators.
+                args.push(Expr::String(",".to_string()));
+                self.advance();
+                continue;
+            }
             if let TokenKind::String(s) = &self.current().kind {
                 args.push(Expr::String(s.clone()));
                 self.advance();
@@ -161,6 +178,11 @@ impl Parser {
             }
             if self.check_current(&TokenKind::Star) {
                 args.push(Expr::String("*".to_string()));
+                self.advance();
+                continue;
+            }
+            if self.check_current(&TokenKind::Minus) {
+                args.push(Expr::String("-".to_string()));
                 self.advance();
                 continue;
             }
@@ -924,5 +946,47 @@ mod tests {
             panic!("Expected object literal expression");
         };
         assert!(matches!(map.get("key"), Some(Expr::Word(value)) if value == "value"));
+    }
+
+    #[test]
+    fn parses_command_with_comma_arguments_without_panicking() {
+        let body = parse_program("echo hello, world");
+
+        let Statement::Command(CommandExpr::Call { identifier, args }) = &body[0] else {
+            panic!("Expected command call statement");
+        };
+
+        assert_eq!(identifier, "echo");
+        assert_eq!(args.len(), 3);
+        assert!(matches!(&args[0], Expr::String(s) if s == "hello"));
+        assert!(matches!(&args[1], Expr::String(s) if s == ","));
+        assert!(matches!(&args[2], Expr::String(s) if s == "world"));
+    }
+
+    #[test]
+    fn parses_command_with_dash_argument_without_panicking() {
+        let body = parse_program("cd -");
+
+        let Statement::Command(CommandExpr::Call { identifier, args }) = &body[0] else {
+            panic!("Expected command call statement");
+        };
+
+        assert_eq!(identifier, "cd");
+        assert_eq!(args.len(), 1);
+        assert!(matches!(&args[0], Expr::String(s) if s == "-"));
+    }
+
+    #[test]
+    fn parses_block_with_trailing_separator_before_right_curly() {
+        let body = parse_program("if true {\n    echo ok\n}\n");
+
+        let Statement::If { then_branch, .. } = &body[0] else {
+            panic!("Expected if statement");
+        };
+        assert_eq!(then_branch.len(), 1);
+        assert!(matches!(
+            &then_branch[0],
+            Statement::Command(CommandExpr::Call { identifier, .. }) if identifier == "echo"
+        ));
     }
 }

@@ -11,17 +11,6 @@ pub fn lex_input(input: &str) -> Vec<Token> {
 
     let mut chars: CharIter = input.chars().peekable();
 
-    // Handle shebang line.
-    if chars.next_if(|&char| char == '#').is_some() && chars.next_if(|&char| char == '!').is_some()
-    {
-        // Go through all characters in shebang line until newline is hit.
-        for char in chars.by_ref() {
-            if char == '\n' {
-                break;
-            }
-        }
-    }
-
     while let Some(char) = chars.next() {
         match char {
             '|' => {
@@ -144,24 +133,22 @@ pub fn lex_input(input: &str) -> Vec<Token> {
                     panic!("Unexpected token");
                 }
             }
-            '/' => {
-                match chars.peek().copied() {
-                    Some('=') => {
-                        chars.next();
-                        tokens.push(Token::new(TokenKind::SlashEquals, 0))
+            '/' => match chars.peek().copied() {
+                Some('=') => {
+                    chars.next();
+                    tokens.push(Token::new(TokenKind::SlashEquals, 0))
+                }
+                Some(_) | None => {
+                    if lex_identifier(&mut tokens, '/', &mut chars).is_none() {
+                        tokens.push(Token::new(TokenKind::Slash, 0))
                     }
-                    Some('/') => {
-                        // Skip single line comments.
-                        while let Some(char) = chars.next() {
-                            if char == '\n' {
-                                break;
-                            }
-                        }
-                    }
-                    Some(_) | None => {
-                        if lex_identifier(&mut tokens, '/', &mut chars).is_none() {
-                            tokens.push(Token::new(TokenKind::Slash, 0))
-                        }
+                }
+            },
+            '#' => {
+                // Skip single-line comments.
+                for comment_char in chars.by_ref() {
+                    if comment_char == '\n' {
+                        break;
                     }
                 }
             }
@@ -388,5 +375,32 @@ mod tests {
         assert!(matches!(&kinds[2], TokenKind::String(s) if s == "cat"));
         assert!(matches!(&kinds[3], TokenKind::String(s) if s == "/etc/hosts"));
         assert!(matches!(&kinds[4], TokenKind::RightParen));
+    }
+
+    #[test]
+    fn hash_starts_comment() {
+        let kinds = token_kinds("echo hello # this is a comment");
+
+        assert!(matches!(&kinds[0], TokenKind::String(s) if s == "echo"));
+        assert!(matches!(&kinds[1], TokenKind::String(s) if s == "hello"));
+        assert!(matches!(&kinds[2], TokenKind::EOF));
+    }
+
+    #[test]
+    fn double_slash_is_not_a_comment() {
+        let kinds = token_kinds("echo https://example.com");
+
+        assert!(matches!(&kinds[0], TokenKind::String(s) if s == "echo"));
+        assert!(matches!(&kinds[1], TokenKind::String(s) if s == "https://example.com"));
+        assert!(matches!(&kinds[2], TokenKind::EOF));
+    }
+
+    #[test]
+    fn leading_hash_comment_does_not_lex_comment_text() {
+        let kinds = token_kinds("# If this is a comment\necho ok");
+
+        assert!(matches!(&kinds[0], TokenKind::String(s) if s == "echo"));
+        assert!(matches!(&kinds[1], TokenKind::String(s) if s == "ok"));
+        assert!(matches!(&kinds[2], TokenKind::EOF));
     }
 }
