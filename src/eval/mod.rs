@@ -7,6 +7,7 @@ use std::{collections::HashMap, env, io};
 use crate::{
     eval::value::{FunctionValue, Value},
     expand::{self, ExpandCtx},
+    options::Options,
     parser::ast::{BinaryOp, CommandExpr, Expr, Program, Statement},
 };
 
@@ -48,6 +49,10 @@ impl Evaluator {
                 Value::String(String::from("\x1b[35m$\x1b[0m ")),
             )])),
         );
+
+        scope
+            .vars
+            .insert(String::from("options"), Options::default().into());
 
         scope.vars.insert(
             String::from("palette"),

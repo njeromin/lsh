@@ -5,10 +5,11 @@ use std::{
 };
 
 use crossterm::{cursor, queue};
-use rustyline::{DefaultEditor, error::ReadlineError};
+use rustyline::{DefaultEditor, config::Configurer, error::ReadlineError};
 
 use crate::{
     eval::{Evaluator, exec::exec_file, value::Value},
+    options::Options,
     parser::Parser,
 };
 
@@ -18,6 +19,7 @@ pub mod diagnostics;
 pub mod eval;
 pub mod expand;
 pub mod lexer;
+pub mod options;
 pub mod parser;
 pub mod paths;
 pub mod ui;
@@ -49,7 +51,7 @@ fn get_prompt(eval: &mut Evaluator) -> &str {
             Value::String(text) => Some(text.as_str()),
             _ => None,
         })
-        .unwrap_or_else(|| DEFAULT_PROMPT)
+        .unwrap_or(DEFAULT_PROMPT)
 }
 
 fn interactive_session(eval: &mut Evaluator, config_dir: &Path) -> rustyline::Result<()> {
@@ -62,8 +64,22 @@ fn interactive_session(eval: &mut Evaluator, config_dir: &Path) -> rustyline::Re
 
     let mut editor = DefaultEditor::new()?;
     let _ = editor.load_history(&config_dir.join("history.txt"));
+    let mut last_applied_options: Option<Options> = None;
 
     loop {
+        if let Some(opts) = eval.get_var(0, "options").and_then(|v| match v {
+            Value::Object(opts) => Some(opts),
+            _ => None,
+        }) {
+            let opts = Options::from(opts);
+
+            if last_applied_options.as_ref() != Some(&opts) {
+                editor.set_tab_stop(opts.tab_stop);
+                editor.set_edit_mode(opts.edit_mode.into());
+                last_applied_options = Some(opts);
+            }
+        }
+
         let input = match editor.readline(get_prompt(eval)) {
             Ok(line) => {
                 editor.add_history_entry(&line)?;
