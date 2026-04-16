@@ -1,5 +1,5 @@
 use std::{
-    io,
+    env, io,
     path::{Path, PathBuf},
 };
 
@@ -8,11 +8,7 @@ use crate::{
     paths, ui,
 };
 
-fn format_cwd(path: &Path) -> String {
-    let Some(home_dir) = dirs::home_dir() else {
-        return path.to_string_lossy().into_owned();
-    };
-
+fn format_cwd(path: &Path, home_dir: &Path) -> String {
     if let Ok(stripped_cwd) = path.strip_prefix(home_dir) {
         let stripped = stripped_cwd.to_string_lossy();
         if stripped.is_empty() {
@@ -21,8 +17,24 @@ fn format_cwd(path: &Path) -> String {
             format!("~/{}", stripped)
         }
     } else {
-        path.to_string_lossy().into_owned()
+        return path.to_string_lossy().into_owned();
     }
+}
+
+fn resolve_home_dir(eval: &Evaluator) -> Option<PathBuf> {
+    if let Some(Value::String(home)) = eval.get_var(0, "HOME")
+        && !home.is_empty()
+    {
+        return Some(PathBuf::from(home));
+    }
+
+    if let Ok(home) = env::var("HOME")
+        && !home.is_empty()
+    {
+        return Some(PathBuf::from(home));
+    }
+
+    dirs::home_dir()
 }
 
 pub fn fmt_cwd<R: io::Read, W: io::Write, WE: io::Write>(
@@ -43,6 +55,29 @@ pub fn fmt_cwd<R: io::Read, W: io::Write, WE: io::Write>(
         PathBuf::from(".")
     };
 
-    let formatted = format_cwd(path.as_path());
+    let formatted = if let Some(home_dir) = resolve_home_dir(eval) {
+        format_cwd(path.as_path(), home_dir.as_path())
+    } else {
+        path.to_string_lossy().into_owned()
+    };
     write!(&mut io.out, "{formatted}").expect("Failed to write formatted cwd");
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::format_cwd;
+
+    #[test]
+    fn formats_home_path_as_tilde() {
+        let formatted = format_cwd(Path::new("/home/njeromin"), Path::new("/home/njeromin"));
+        assert_eq!(formatted, "~");
+    }
+
+    #[test]
+    fn keeps_non_home_paths_unchanged() {
+        let formatted = format_cwd(Path::new("/tmp"), Path::new("/home/njeromin"));
+        assert_eq!(formatted, "/tmp");
+    }
 }

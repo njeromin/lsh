@@ -438,21 +438,24 @@ impl Evaluator {
     ) -> (i32, Vec<u8>, Vec<u8>) {
         match command_expr {
             CommandExpr::Call { identifier, args } => {
+                let identifier_val = self.evaluate_expr(identifier, true, scope_indices);
+
+                if let Value::Function(func) = &identifier_val {
+                    let value = self.call_user_function(func, args, scope_indices);
+                    return (0, value.to_string().into_bytes(), vec![]);
+                }
+
+                let identifier_str = identifier_val.to_string();
+
                 if let Some(Value::Function(func)) =
-                    self.resolve_named_value(identifier, scope_indices)
+                    self.resolve_named_value(&identifier_str, scope_indices)
                 {
                     let value = self.call_user_function(&func, args, scope_indices);
                     return (0, value.to_string().into_bytes(), vec![]);
                 }
 
-                let (res_cmd, res_args) = self.resolve_command(identifier.to_owned());
-                let string_args: Vec<String> = args
-                    .iter()
-                    .map(|arg| self.evaluate_expr(arg, true, scope_indices).to_string())
-                    .collect();
-                let mut all_args = res_args;
-                all_args.extend(string_args);
-                let all_args = expand::expand_args(all_args, ExpandCtx::default());
+                let (res_cmd, res_args) = self.resolve_command(identifier_str);
+                let all_args = self.build_command_args(res_args, args, scope_indices);
 
                 if capture_output {
                     let mut io_ctx = lsh::IoCtx {
@@ -619,6 +622,30 @@ impl Evaluator {
         Some(value)
     }
 
+    fn build_command_args(
+        &mut self,
+        resolved_args: Vec<String>,
+        args: &[Expr],
+        scope_indices: &mut Vec<usize>,
+    ) -> Vec<String> {
+        let mut all_args = expand::expand_args(resolved_args, ExpandCtx::default());
+
+        for arg in args {
+            let evaluated = self.evaluate_expr(arg, true, scope_indices).to_string();
+
+            match arg {
+                // Match shell behavior more closely: tilde expansion should occur for
+                // source literals, not for computed values (variables / command-sub output).
+                Expr::String(_) => {
+                    all_args.extend(expand::expand_arg(evaluated, ExpandCtx::default()))
+                }
+                _ => all_args.push(evaluated),
+            }
+        }
+
+        all_args
+    }
+
     fn call_user_function(
         &mut self,
         func: &FunctionValue,
@@ -682,29 +709,32 @@ impl Evaluator {
         scope_indices: &mut Vec<usize>,
     ) -> Value {
         match expr {
-            Expr::Call { identifier, args } => {
-                if let Some(Value::Function(func)) =
-                    self.resolve_named_value(identifier, scope_indices)
-                {
-                    return self.call_user_function(&func, args, scope_indices);
+            Expr::Call { target, args } => {
+                let target_val = self.evaluate_expr(target, true, scope_indices);
+
+                if let Value::Function(func) = &target_val {
+                    return self.call_user_function(func, args, scope_indices);
                 }
 
-                let (res_cmd, res_args) = self.resolve_command(identifier.to_owned());
+                // If target was a Word or Variable that resolved to a function name.
+                if let Expr::Word(identifier) | Expr::Variable(identifier) = target.as_ref() {
+                    if let Some(Value::Function(func)) =
+                        self.resolve_named_value(identifier, scope_indices)
+                    {
+                        return self.call_user_function(&func, args, scope_indices);
+                    }
+                }
 
-                // What if someone wants to set a value to the result of a command?
+                // For command execution, we only want to do this if we are not in a secondary expression (like an argument).
                 if is_secondary {
-                    return Value::String(identifier.to_owned());
+                    return target_val;
                 }
 
-                let string_args: Vec<String> = args
-                    .iter()
-                    .map(|i| self.evaluate_expr(i, true, scope_indices).to_string())
-                    .collect();
+                let identifier = target_val.to_string();
+                let (res_cmd, res_args) = self.resolve_command(identifier);
 
                 // Concatenate arguments from the input cmd with the provided arguments from the evaluator.
-                let mut args = res_args;
-                args.extend(string_args);
-                let args = expand::expand_args(args, ExpandCtx::default());
+                let args = self.build_command_args(res_args, args, scope_indices);
 
                 let mut io = lsh::IoCtx::<io::Stdin, io::Stdout, io::Stderr>::default();
 
@@ -832,24 +862,25 @@ impl Evaluator {
             Expr::Bool(bool) => Value::Bool(*bool),
             Expr::CommandSub(expr) => {
                 match expr.as_ref() {
-                    Expr::Call { identifier, args } => {
+                    Expr::Call { target, args } => {
+                        let target_val = self.evaluate_expr(target, true, scope_indices);
+
+                        if let Value::Function(func) = &target_val {
+                            let value = self.call_user_function(func, args, scope_indices);
+                            return Value::String(value.to_string());
+                        }
+
+                        let identifier = target_val.to_string();
+
                         if let Some(Value::Function(func)) =
-                            self.resolve_named_value(identifier, scope_indices)
+                            self.resolve_named_value(&identifier, scope_indices)
                         {
                             let value = self.call_user_function(&func, args, scope_indices);
                             return Value::String(value.to_string());
                         }
 
-                        let (res_cmd, res_args) = self.resolve_command(identifier.to_owned());
-
-                        let string_args: Vec<String> = args
-                            .iter()
-                            .map(|arg| self.evaluate_expr(arg, true, scope_indices).to_string())
-                            .collect();
-
-                        let mut all_args = res_args;
-                        all_args.extend(string_args);
-                        let all_args = expand::expand_args(all_args, ExpandCtx::default());
+                        let (res_cmd, res_args) = self.resolve_command(identifier);
+                        let all_args = self.build_command_args(res_args, args, scope_indices);
 
                         let mut io = lsh::IoCtx {
                             input: io::empty(),
@@ -938,6 +969,10 @@ impl Evaluator {
                 );
                 Value::Object(res)
             }
+            Expr::AnonymousFunction { params, body } => Value::Function(FunctionValue {
+                params: params.clone(),
+                body: body.clone(),
+            }),
             Expr::Object(expr_map) => {
                 let mut obj = HashMap::new();
                 for (key, value) in expr_map {

@@ -19,7 +19,7 @@ pub enum BinaryOp {
 #[derive(Debug, Clone)]
 pub enum CommandExpr {
     Call {
-        identifier: String,
+        identifier: Expr,
         args: Vec<Expr>,
     },
     Pipeline(Vec<CommandExpr>),
@@ -56,12 +56,16 @@ pub enum Expr {
     Word(String),
     // call arg1 arg2...
     Call {
-        identifier: String,
+        target: Box<Expr>,
         args: Vec<Expr>,
     },
     TypeOf(Box<Expr>),
     CommandSub(Box<Expr>),
     CommandSubCommand(Box<CommandExpr>),
+    AnonymousFunction {
+        params: Vec<String>,
+        body: Vec<Statement>,
+    },
 }
 
 #[derive(Debug, Clone)]

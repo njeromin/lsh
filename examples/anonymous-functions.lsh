@@ -1,0 +1,14 @@
+let add = (a, b) => { return a + b };
+echo (add(10, 20));
+
+let square = x => { return x * x };
+echo (square(5));
+
+let greet = () => { echo "Hello from anonymous function!" };
+greet();
+
+let double_greet = () => {
+    echo "Hi!"
+    echo "Bye!"
+};
+double_greet();

@@ -3,6 +3,10 @@ use crossterm::{
     style::{self, Stylize},
 };
 
+use crate::{diagnostics::source_map::SourceMap, ui::print_error};
+
+pub mod source_map;
+
 #[derive(Debug)]
 pub enum DiagnosticKind {
     LexError,
@@ -19,11 +23,31 @@ pub struct Diagnostic {
     pub hint: Option<String>,
 }
 
-// TODO: Source maps
+impl Diagnostic {
+    pub fn new(
+        kind: DiagnosticKind,
+        source_id: usize,
+        start: usize,
+        end: usize,
+        message: &str,
+    ) -> Self {
+        Self {
+            kind: kind,
+            message: message.to_string(),
+            source: SourceInfo {
+                source_id,
+                start,
+                end,
+            },
+            notes: Vec::new(),
+            hint: None,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct SourceInfo {
-    pub source_name: String,
-    pub source: String,
+    pub source_id: usize,
     pub start: usize,
     pub end: usize,
 }
@@ -69,10 +93,19 @@ fn format_kind(kind: &DiagnosticKind) -> &'static str {
     }
 }
 
-pub fn print_diagnostic<W: std::io::Write>(out: &mut W, diag: &Diagnostic) {
-    let src = &diag.source;
-    let (line_num, col_num) = line_col_from_offset(&src.source, src.start);
-    let line_text = line_text_at_offset(&src.source, src.start);
+pub fn print_diagnostic<W: std::io::Write>(out: &mut W, diag: &Diagnostic, source_map: &SourceMap) {
+    let src_info = &diag.source;
+    let src = source_map.get(src_info.source_id);
+
+    if src.is_none() {
+        print_error(out, "Failed to find source for diagnostic.");
+        return;
+    }
+
+    let src = src.unwrap();
+
+    let (line_num, col_num) = line_col_from_offset(&src.contents, src_info.start);
+    let line_text = line_text_at_offset(&src.contents, src_info.start);
     let caret_padding = col_num.saturating_sub(1);
 
     queue!(
@@ -80,7 +113,7 @@ pub fn print_diagnostic<W: std::io::Write>(out: &mut W, diag: &Diagnostic) {
         style::Print(format!("{}: ", format_kind(&diag.kind)).red()),
         style::Print(format!("{}\n", diag.message)),
         style::Print("---> ".blue()),
-        style::Print(format!("{}:{}:{}\n", src.source_name, line_num, col_num)),
+        style::Print(format!("{}:{}:{}\n", src.name, line_num, col_num)),
     )
     .expect("Failed to write diagnostic header");
 

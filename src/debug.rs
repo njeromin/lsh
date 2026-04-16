@@ -37,12 +37,21 @@ pub fn print_parser(prog: &Program) {
 
 fn print_parser_statement(stmt: &Statement) {
     match stmt {
-        Statement::Expr(expr) => print_parser_expr(expr),
+        Statement::Expr(expr) => {
+            print!("Expr: ");
+            print_parser_expr(expr);
+        }
         Statement::Command(command_expr) => {
             println!("Command({command_expr:?})");
         }
         Statement::Let { name, value } => {
             print!("Let: {name} = ");
+            print_parser_expr(value);
+        }
+        Statement::Assign { target, value } => {
+            print!("Assign: ");
+            print_parser_expr(target);
+            print!(" = ");
             print_parser_expr(value);
         }
         Statement::If {
@@ -74,6 +83,26 @@ fn print_parser_statement(stmt: &Statement) {
 
             println!("----   End if    ----");
         }
+        Statement::While { condition, body } => {
+            println!("---- Start while ----");
+            print_parser_expr(condition);
+            body.iter().for_each(|s| {
+                print_parser_statement(s);
+            });
+            println!("---- End while ----");
+        }
+        Statement::FunctionDeclaration { target, params, .. } => {
+            print!("Fn: ");
+            print_parser_expr(target);
+            println!("({})", params.join(", "));
+        }
+        Statement::Return(expr) => {
+            print!("Return: ");
+            if let Some(e) = expr {
+                print_parser_expr(e);
+            }
+            println!();
+        }
         Statement::Block(stmts) => {
             println!("---- Start block ----");
 
@@ -83,7 +112,6 @@ fn print_parser_statement(stmt: &Statement) {
 
             println!("----   End block ----");
         }
-        _ => println!("Other statement"),
     }
 }
 
@@ -113,8 +141,8 @@ fn print_parser_expr(expr: &Expr) {
         Expr::Word(word) => {
             println!("Word({word})");
         }
-        Expr::Call { identifier, args } => {
-            println!("Call({identifier}, {} args)", args.len());
+        Expr::Call { target, args } => {
+            println!("Call({target:?}, {} args)", args.len());
         }
         Expr::TypeOf(expr) => {
             println!("TypeOf({expr:?})");
@@ -124,6 +152,9 @@ fn print_parser_expr(expr: &Expr) {
         }
         Expr::CommandSubCommand(command_expr) => {
             println!("CommandSubCommand({command_expr:?})");
+        }
+        Expr::AnonymousFunction { params, body } => {
+            println!("AnonymousFunction({params:?}, {} statements)", body.len());
         }
     }
 }

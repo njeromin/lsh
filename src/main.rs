@@ -8,6 +8,7 @@ use crossterm::{cursor, queue};
 use rustyline::{DefaultEditor, config::Configurer, error::ReadlineError};
 
 use crate::{
+    diagnostics::source_map::SourceMap,
     eval::{Evaluator, exec::exec_file, value::Value},
     options::Options,
     parser::Parser,
@@ -54,7 +55,11 @@ fn get_prompt(eval: &mut Evaluator) -> &str {
         .unwrap_or(DEFAULT_PROMPT)
 }
 
-fn interactive_session(eval: &mut Evaluator, config_dir: &Path) -> rustyline::Result<()> {
+fn interactive_session(
+    eval: &mut Evaluator,
+    src_map: &mut SourceMap,
+    config_dir: &Path,
+) -> rustyline::Result<()> {
     let mut cout = io::stdout();
     let mut cerr = io::stderr();
 
@@ -84,35 +89,40 @@ fn interactive_session(eval: &mut Evaluator, config_dir: &Path) -> rustyline::Re
             Ok(line) => {
                 editor.add_history_entry(&line)?;
 
-                line
-            }
-            Err(e) => match e {
-                ReadlineError::Interrupted => continue,
-                _ => {
-                    ui::print_error(&mut cerr, e.to_string().as_str());
+                let line = line.trim();
+                if line.is_empty() {
                     continue;
                 }
-            },
+
+                line.to_owned()
+            }
+            Err(ReadlineError::Interrupted) => continue,
+            Err(e) => {
+                ui::print_error(&mut cerr, e.to_string().as_str());
+                continue;
+            }
         };
 
-        // If input is empty, skip to next iteration of loop as there won't be anything to execute
-        // in the current one.
-        if input.is_empty() {
-            continue;
-        }
+        let src_id = src_map.insert("<input>", &input);
 
-        let tokens = match lexer::lex_input(input.trim()) {
+        let tokens = match lexer::lex_input(src_id, &input) {
             Ok(tokens) => tokens,
             Err(diag) => {
-                diagnostics::print_diagnostic(&mut cerr, &diag);
+                diagnostics::print_diagnostic(&mut cerr, &diag, &src_map);
                 continue;
             }
         };
 
         debug::print_lexer(&tokens);
 
-        let mut parser = Parser::new(tokens);
-        let prog = parser.parse_program();
+        let mut parser = Parser::new(src_id, tokens);
+        let prog = match parser.parse_program() {
+            Ok(prog) => prog,
+            Err(diag) => {
+                diagnostics::print_diagnostic(&mut cerr, &diag, src_map);
+                continue;
+            }
+        };
 
         debug::print_parser(&prog);
 
@@ -121,11 +131,13 @@ fn interactive_session(eval: &mut Evaluator, config_dir: &Path) -> rustyline::Re
 }
 
 fn main() {
+    let mut src_map = SourceMap::default();
     let mut eval = Evaluator::new().with_globals();
 
     let mut args = env::args();
     args.next(); // Skip the program name.
 
+    // Handle initial config.
     let config_dir = if let Ok(cfg_path) = env::var("LSH_CONFIG_DIR") {
         PathBuf::from(cfg_path)
     } else {
@@ -159,7 +171,7 @@ fn main() {
         }
 
         exec_file(&mut eval, PathBuf::from(file_path));
-    } else if let Err(e) = interactive_session(&mut eval, &config_dir) {
+    } else if let Err(e) = interactive_session(&mut eval, &mut src_map, &config_dir) {
         ui::print_error(&mut io::stderr(), e.to_string().as_str());
     }
 }

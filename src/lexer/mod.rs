@@ -1,20 +1,13 @@
 use std::{char, iter::Peekable, str::CharIndices};
 
-use crate::diagnostics::Diagnostic;
+use crate::diagnostics::{Diagnostic, DiagnosticKind};
 use crate::lexer::token::{Token, TokenKind};
-use diagnostics::create_lex_diagnostic;
 
 pub mod token;
 
-mod diagnostics;
-
 type CharIndexedIter<'a> = Peekable<CharIndices<'a>>;
 
-pub fn lex_input(input: &str) -> Result<Vec<Token>, Diagnostic> {
-    lex_input_with_source("<input>", input)
-}
-
-pub fn lex_input_with_source(source_name: &str, input: &str) -> Result<Vec<Token>, Diagnostic> {
+pub fn lex_input(src_id: usize, input: &str) -> Result<Vec<Token>, Diagnostic> {
     let mut tokens = vec![];
 
     let mut chars: CharIndexedIter = input.char_indices().peekable();
@@ -37,10 +30,13 @@ pub fn lex_input_with_source(source_name: &str, input: &str) -> Result<Vec<Token
             }
             ';' => tokens.push(Token::new(TokenKind::Semicolon, offset)),
             ',' => tokens.push(Token::new(TokenKind::Comma, offset)),
+            '.' => tokens.push(Token::new(TokenKind::Dot, offset)),
             ':' => tokens.push(Token::new(TokenKind::Colon, offset)),
             '=' => {
                 if chars.next_if(|(_, next_char)| next_char == &'=').is_some() {
                     tokens.push(Token::new(TokenKind::EqualsEquals, offset));
+                } else if chars.next_if(|(_, next_char)| next_char == &'>').is_some() {
+                    tokens.push(Token::new(TokenKind::Arrow, offset));
                 } else {
                     tokens.push(Token::new(TokenKind::Equals, offset));
                 }
@@ -133,18 +129,18 @@ pub fn lex_input_with_source(source_name: &str, input: &str) -> Result<Vec<Token
                         tokens.push(Token::new(TokenKind::DollarLeftParen, offset));
                         chars.next();
                     } else {
-                        return Err(create_lex_diagnostic(
-                            source_name,
-                            input,
+                        return Err(Diagnostic::new(
+                            DiagnosticKind::LexError,
+                            src_id,
                             next_char.0,
                             next_char.0 + next_char.1.len_utf8(),
                             "Unexpected token after '$'.",
                         ));
                     }
                 } else {
-                    return Err(create_lex_diagnostic(
-                        source_name,
-                        input,
+                    return Err(Diagnostic::new(
+                        DiagnosticKind::LexError,
+                        src_id,
                         offset,
                         offset + char.len_utf8(),
                         "Unexpected token after '$'.",
@@ -203,9 +199,9 @@ pub fn lex_input_with_source(source_name: &str, input: &str) -> Result<Vec<Token
                 } else if !is_whitespace(&char) {
                     // This is the fallback case so if it is not whitespace, then it is an
                     // unexpected token.
-                    return Err(create_lex_diagnostic(
-                        source_name,
-                        input,
+                    return Err(Diagnostic::new(
+                        DiagnosticKind::LexError,
+                        src_id,
                         offset,
                         offset + char.len_utf8(),
                         format!("Unexpected token '{char}'.").as_str(),
@@ -233,6 +229,7 @@ fn lex_identifier(
                 '|' | '&'
                     | ';'
                     | ','
+                    | '.'
                     | '='
                     | '>'
                     | '<'
@@ -333,14 +330,23 @@ fn match_keyword(keyword: &str) -> Option<TokenKind> {
 
 #[cfg(test)]
 mod tests {
+    use crate::diagnostics::source_map::SourceMap;
+
     use super::*;
 
     fn token_kinds(input: &str) -> Vec<TokenKind> {
-        lex_input(input)
+        let mut src_map = SourceMap::default();
+        let src_id = src_map.insert("<test data>", input);
+
+        let toks = lex_input(src_id, input)
             .expect("lexer should succeed in test")
             .into_iter()
             .map(|token| token.kind)
-            .collect()
+            .collect();
+
+        src_map.remove(src_id);
+
+        return toks;
     }
 
     #[test]

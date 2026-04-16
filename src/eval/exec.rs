@@ -1,26 +1,33 @@
 use std::{fs, io::stderr, path::PathBuf};
 
-use crate::{debug, diagnostics, eval::Evaluator, lexer, parser::Parser, ui};
+use crate::{debug, diagnostics::source_map::SourceMap, eval::Evaluator, lexer, parser::Parser, ui};
 
 pub fn exec_file(evaluator: &mut Evaluator, path: PathBuf) {
     let mut cerr = stderr();
 
     match fs::read_to_string(&path) {
         Ok(input) => {
-            let tokens =
-                match lexer::lex_input_with_source(path.to_string_lossy().as_ref(), input.as_str())
-                {
-                    Ok(tokens) => tokens,
-                    Err(diag) => {
-                        diagnostics::print_diagnostic(&mut cerr, &diag);
-                        return;
-                    }
-                };
+            let mut source_map = SourceMap::default();
+            let src_id = source_map.insert(path.to_string_lossy().as_ref(), input.as_str());
+
+            let tokens = match lexer::lex_input(src_id, input.as_str()) {
+                Ok(tokens) => tokens,
+                Err(diag) => {
+                    crate::diagnostics::print_diagnostic(&mut cerr, &diag, &source_map);
+                    return;
+                }
+            };
 
             debug::print_lexer(&tokens);
 
-            let mut parser = Parser::new(tokens);
-            let prog = parser.parse_program();
+            let mut parser = Parser::new(src_id, tokens);
+            let prog = match parser.parse_program() {
+                Ok(prog) => prog,
+                Err(diag) => {
+                    crate::diagnostics::print_diagnostic(&mut cerr, &diag, &source_map);
+                    return;
+                }
+            };
 
             debug::print_parser(&prog);
 
