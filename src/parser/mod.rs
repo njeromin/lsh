@@ -85,8 +85,10 @@ impl Parser {
                     Err(diag) => return Err(diag),
                 };
 
-                // If it's an assignment, it's definitely a statement.
-                if self.check_current(&TokenKind::Equals) {
+                // Assignment is only valid for assignable targets.
+                if self.check_current(&TokenKind::Equals)
+                    && matches!(expr, Expr::Variable(_) | Expr::Index { .. })
+                {
                     self.advance(); // Skip '='.
                     let value = self.parse_expr()?;
                     return Ok(Statement::Assign {
@@ -173,6 +175,11 @@ impl Parser {
     }
 
     fn parse_command_call(&mut self, terminators: &[TokenKind]) -> Result<CommandExpr, Diagnostic> {
+        let mut env_assignments = vec![];
+        while let Some(assignment) = self.try_parse_env_assignment_prefix(terminators)? {
+            env_assignments.push(assignment);
+        }
+
         let identifier = match &self.current().kind {
             TokenKind::String(s) => Expr::String(s.clone()),
             other => {
@@ -194,6 +201,7 @@ impl Parser {
         while !self.check_current(&TokenKind::Pipe)
             && !self.check_current(&TokenKind::And)
             && !self.check_current(&TokenKind::Or)
+            && !self.check_current(&TokenKind::ThinArrow)
             && !terminators.iter().any(|term| self.check_current(term))
         {
             if let Some(arg) = self.parse_command_argument()? {
@@ -203,7 +211,79 @@ impl Parser {
             break;
         }
 
-        Ok(CommandExpr::Call { identifier, args })
+        let stdout_redirect = if self.check_current(&TokenKind::ThinArrow) {
+            self.advance(); // Skip '->'.
+            let Some(target) = self.parse_command_argument()? else {
+                return self.error_here("Expected redirect target after '->'.");
+            };
+            Some(target)
+        } else {
+            None
+        };
+
+        Ok(CommandExpr::Call {
+            env_assignments,
+            identifier,
+            args,
+            stdout_redirect,
+        })
+    }
+
+    fn try_parse_env_assignment_prefix(
+        &mut self,
+        terminators: &[TokenKind],
+    ) -> Result<Option<(String, Expr)>, Diagnostic> {
+        let start_index = self.index;
+
+        let (name, name_offset) = match &self.current().kind {
+            TokenKind::String(name) => (name.clone(), self.current().offset),
+            _ => return Ok(None),
+        };
+
+        if !Self::is_valid_env_name(name.as_str()) {
+            return Ok(None);
+        }
+
+        let Some(eq_token) = self.tokens.get(self.index + 1) else {
+            return Ok(None);
+        };
+        if !eq_token.kind.compare(&TokenKind::Equals) {
+            return Ok(None);
+        }
+        let eq_offset = eq_token.offset;
+        let eq_len = Self::token_source_len(eq_token);
+        if eq_offset != name_offset + name.len() {
+            return Ok(None);
+        }
+
+        self.advance(); // Move to '='
+        self.advance(); // Move to start of value / command identifier
+
+        if self.check_current(&TokenKind::Pipe)
+            || self.check_current(&TokenKind::And)
+            || self.check_current(&TokenKind::Or)
+            || terminators.iter().any(|term| self.check_current(term))
+        {
+            return Ok(Some((name, Expr::String(String::new()))));
+        }
+
+        let eq_end_offset = eq_offset + eq_len;
+        let current_offset = self.current().offset;
+        // Values for prefix assignments must be contiguous with '='. `$VAR` is a
+        // special case where the variable token starts one byte after '$'.
+        let contiguous = current_offset == eq_end_offset
+            || (matches!(self.current().kind, TokenKind::Variable(_))
+                && current_offset == eq_end_offset + 1);
+        if !contiguous {
+            self.index = start_index;
+            return Ok(None);
+        }
+
+        let Some(value_expr) = self.parse_command_argument()? else {
+            return Ok(Some((name, Expr::String(String::new()))));
+        };
+
+        Ok(Some((name, value_expr)))
     }
 
     fn parse_command_argument(&mut self) -> Result<Option<Expr>, Diagnostic> {
@@ -679,7 +759,7 @@ impl Parser {
             TokenKind::Colon => Expr::String(":".to_string()),
             TokenKind::String(s) => {
                 // Check if this is the start of an anonymous function: x => ...
-                if self.check_peek(1, &TokenKind::Arrow) {
+                if self.check_peek(1, &TokenKind::FatArrow) {
                     should_advance = false;
                     self.parse_anonymous_function()?
                 } else {
@@ -700,6 +780,33 @@ impl Parser {
                             let sub_expr =
                                 self.parse_postfix_from_seed(Expr::Variable(var_name))?;
                             args.push(sub_expr);
+
+                            // Keep command-like expression args contiguous:
+                            // `echo $HOME/.config` should remain one argument.
+                            while let Some(next_part) = self.tokens.get(self.index + 1).cloned() {
+                                let current_token = self.current().to_owned();
+                                let current_end =
+                                    current_token.offset + Self::token_source_len(&current_token);
+                                if next_part.offset != current_end {
+                                    break;
+                                }
+
+                                let Some(part_expr) =
+                                    Self::token_kind_to_primary_call_arg_literal(&next_part.kind)
+                                else {
+                                    break;
+                                };
+
+                                self.advance(); // Consume contiguous part token.
+                                let previous = args
+                                    .pop()
+                                    .expect("Expected previous argument while concatenating.");
+                                args.push(Expr::Binary {
+                                    op: BinaryOp::Add,
+                                    left: Box::new(previous),
+                                    right: Box::new(part_expr),
+                                });
+                            }
                         } else if let TokenKind::DollarLeftParen = &next_token.kind {
                             self.advance(); // Move to '$('.
                             let sub_expr = self.parse_primary()?;
@@ -793,7 +900,7 @@ impl Parser {
                             nesting -= 1;
                             if nesting == 0 {
                                 if let Some(next) = self.tokens.get(i + 1)
-                                    && next.kind.compare(&TokenKind::Arrow)
+                                    && next.kind.compare(&TokenKind::FatArrow)
                                 {
                                     arrow_found = true;
                                 }
@@ -949,10 +1056,25 @@ impl Parser {
             | TokenKind::MinusEquals
             | TokenKind::StarEquals
             | TokenKind::SlashEquals
-            | TokenKind::DollarLeftParen => 2,
+            | TokenKind::DollarLeftParen
+            | TokenKind::FatArrow
+            | TokenKind::ThinArrow => 2,
             TokenKind::EOF => 0,
             _ => 1,
         }
+    }
+
+    fn is_valid_env_name(name: &str) -> bool {
+        let mut chars = name.chars();
+        let Some(first) = chars.next() else {
+            return false;
+        };
+
+        if !(first == '_' || first.is_ascii_alphabetic()) {
+            return false;
+        }
+
+        chars.all(|c| c == '_' || c.is_ascii_alphanumeric())
     }
 
     fn end_offset_of_last_consumed_token(&self) -> usize {
@@ -1118,7 +1240,7 @@ impl Parser {
             self.advance();
         }
 
-        self.consume(&TokenKind::Arrow, "Expected '=>' after parameters.")?;
+        self.consume(&TokenKind::FatArrow, "Expected '=>' after parameters.")?;
 
         let body = match self.parse_statement()? {
             Statement::Block(stmts) => stmts,
@@ -1196,7 +1318,9 @@ mod tests {
 
     fn extract_call_parts(statement: &Statement) -> (&Expr, &Vec<Expr>) {
         match statement {
-            Statement::Command(CommandExpr::Call { identifier, args }) => (identifier, args),
+            Statement::Command(CommandExpr::Call {
+                identifier, args, ..
+            }) => (identifier, args),
             Statement::Expr(Expr::Call { target, args }) => (target.as_ref(), args),
             _ => panic!("Expected call-like statement"),
         }
@@ -1227,6 +1351,18 @@ mod tests {
     }
 
     #[test]
+    fn returns_parse_diagnostic_for_missing_redirect_target() {
+        let tokens = lex_input(0, "echo hi ->").expect("lexer should succeed");
+        let mut parser = Parser::new(0, tokens);
+
+        let err = parser
+            .parse_program()
+            .expect_err("parser should return parse diagnostic");
+        assert!(matches!(err.kind, DiagnosticKind::ParseError));
+        assert!(err.message.contains("Expected redirect target after '->'."));
+    }
+
+    #[test]
     fn parses_regular_command_call() {
         let body = parse_program("echo hello world");
 
@@ -1251,6 +1387,7 @@ mod tests {
         let CommandExpr::Call {
             identifier: first_id,
             args: first_args,
+            ..
         } = &stages[0]
         else {
             panic!("Expected first pipeline stage to be a call");
@@ -1261,6 +1398,7 @@ mod tests {
         let CommandExpr::Call {
             identifier: second_id,
             args: second_args,
+            ..
         } = &stages[1]
         else {
             panic!("Expected second pipeline stage to be a call");
@@ -1294,6 +1432,76 @@ mod tests {
 
         assert_command_identifier(left_id, "echo");
         assert_command_identifier(right_id, "echo");
+    }
+
+    #[test]
+    fn parses_command_with_env_prefix_assignment() {
+        let body = parse_program("ENV_VAR=1 echo hello");
+
+        let Statement::Command(CommandExpr::Call {
+            env_assignments,
+            identifier,
+            args,
+            ..
+        }) = &body[0]
+        else {
+            panic!("Expected command call statement with env prefix");
+        };
+
+        assert_eq!(env_assignments.len(), 1);
+        assert!(matches!(
+            &env_assignments[0],
+            (name, Expr::Number(n)) if name == "ENV_VAR" && (*n - 1.0).abs() < f64::EPSILON
+        ));
+        assert_command_identifier(identifier, "echo");
+        assert_eq!(args.len(), 1);
+        assert!(matches!(&args[0], Expr::String(s) if s == "hello"));
+    }
+
+    #[test]
+    fn parses_command_with_multiple_env_prefix_assignments() {
+        let body = parse_program("A=1 B=2 echo ok");
+
+        let Statement::Command(CommandExpr::Call {
+            env_assignments,
+            identifier,
+            args,
+            ..
+        }) = &body[0]
+        else {
+            panic!("Expected command call statement with env prefix");
+        };
+
+        assert_eq!(env_assignments.len(), 2);
+        assert!(matches!(&env_assignments[0], (name, Expr::Number(_)) if name == "A"));
+        assert!(matches!(&env_assignments[1], (name, Expr::Number(_)) if name == "B"));
+        assert_command_identifier(identifier, "echo");
+        assert_eq!(args.len(), 1);
+        assert!(matches!(&args[0], Expr::String(s) if s == "ok"));
+    }
+
+    #[test]
+    fn parses_command_with_env_prefix_variable_value() {
+        let body = parse_program("ENV_VAR=$HOME echo ok");
+
+        let Statement::Command(CommandExpr::Call {
+            env_assignments,
+            identifier,
+            args,
+            ..
+        }) = &body[0]
+        else {
+            panic!("Expected command call statement with env prefix");
+        };
+
+        assert_eq!(env_assignments.len(), 1);
+        assert!(matches!(
+            &env_assignments[0],
+            (name, Expr::Variable(var)) if name == "ENV_VAR" && var == "HOME"
+        ));
+        assert_command_identifier(identifier, "echo");
+        assert_eq!(args.len(), 1);
+        assert!(matches!(&args[0], Expr::String(s) if s == "ok"));
     }
 
     #[test]
@@ -1371,6 +1579,7 @@ mod tests {
         let CommandExpr::Call {
             identifier: sub_id,
             args: sub_args,
+            ..
         } = sub_command.as_ref()
         else {
             panic!("Expected command substitution to contain a command call");
@@ -1401,6 +1610,7 @@ mod tests {
         let CommandExpr::Call {
             identifier: sub_id,
             args: sub_args,
+            ..
         } = sub_command.as_ref()
         else {
             panic!("Expected command substitution to contain a command call");
@@ -1447,6 +1657,56 @@ mod tests {
         assert_eq!(args.len(), 2);
         assert!(matches!(&args[0], Expr::String(s) if s == "add"));
         assert!(matches!(&args[1], Expr::String(s) if s == "."));
+    }
+
+    #[test]
+    fn parses_command_with_stdout_redirection() {
+        let body = parse_program("echo hello -> out.txt");
+
+        let Statement::Command(CommandExpr::Call {
+            identifier,
+            args,
+            stdout_redirect,
+            ..
+        }) = &body[0]
+        else {
+            panic!("Expected command call statement with redirection");
+        };
+
+        assert_command_identifier(identifier, "echo");
+        assert_eq!(args.len(), 1);
+        assert!(matches!(&args[0], Expr::String(s) if s == "hello"));
+        assert!(matches!(stdout_redirect, Some(Expr::String(s)) if s == "out.txt"));
+    }
+
+    #[test]
+    fn parses_pipeline_with_last_stage_stdout_redirection() {
+        let body = parse_program("echo hello | cat -> out.txt");
+
+        let Statement::Command(CommandExpr::Pipeline(stages)) = &body[0] else {
+            panic!("Expected command pipeline statement");
+        };
+        assert_eq!(stages.len(), 2);
+
+        let CommandExpr::Call {
+            stdout_redirect: first_redirect,
+            ..
+        } = &stages[0]
+        else {
+            panic!("Expected first stage call");
+        };
+        assert!(first_redirect.is_none());
+
+        let CommandExpr::Call {
+            identifier,
+            stdout_redirect,
+            ..
+        } = &stages[1]
+        else {
+            panic!("Expected second stage call");
+        };
+        assert_command_identifier(identifier, "cat");
+        assert!(matches!(stdout_redirect, Some(Expr::String(s)) if s == "out.txt"));
     }
 
     #[test]

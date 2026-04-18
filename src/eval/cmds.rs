@@ -21,6 +21,7 @@ pub fn exec_cmd<R: io::Read, W: io::Write, WE: io::Write>(
     evaluator: &mut Evaluator,
     cmd: &str,
     args: Vec<String>,
+    env_assignments: &[(String, String)],
     ctx: &mut lsh::IoCtx<R, W, WE>,
 ) -> i32 {
     match cmd {
@@ -48,7 +49,7 @@ pub fn exec_cmd<R: io::Read, W: io::Write, WE: io::Write>(
             builtins::fmt_cwd::fmt_cwd(evaluator, ctx, args);
             0
         }
-        _ => match spawn_proc(cmd, args, ctx) {
+        _ => match spawn_proc(cmd, args, env_assignments, ctx) {
             Ok(status) => status,
             Err(e) => {
                 ui::print_error(&mut ctx.err, &e.to_string());
@@ -61,10 +62,12 @@ pub fn exec_cmd<R: io::Read, W: io::Write, WE: io::Write>(
 pub fn spawn_proc<R: io::Read, W: io::Write, WE: io::Write>(
     cmd: &str,
     args: Vec<String>,
+    env_assignments: &[(String, String)],
     ctx: &mut lsh::IoCtx<R, W, WE>,
 ) -> io::Result<i32> {
     let mut c = Command::new(cmd);
     c.args(args);
+    c.envs(env_assignments.iter().map(|(k, v)| (k.as_str(), v.as_str())));
 
     c.stdin(match ctx.input_mode {
         IoStreamMode::Inherit => Stdio::inherit(),

@@ -19,8 +19,10 @@ pub enum BinaryOp {
 #[derive(Debug, Clone)]
 pub enum CommandExpr {
     Call {
+        env_assignments: Vec<(String, Expr)>,
         identifier: Expr,
         args: Vec<Expr>,
+        stdout_redirect: Option<Expr>,
     },
     Pipeline(Vec<CommandExpr>),
     And {

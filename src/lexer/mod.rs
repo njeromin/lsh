@@ -36,7 +36,7 @@ pub fn lex_input(src_id: usize, input: &str) -> Result<Vec<Token>, Diagnostic> {
                 if chars.next_if(|(_, next_char)| next_char == &'=').is_some() {
                     tokens.push(Token::new(TokenKind::EqualsEquals, offset));
                 } else if chars.next_if(|(_, next_char)| next_char == &'>').is_some() {
-                    tokens.push(Token::new(TokenKind::Arrow, offset));
+                    tokens.push(Token::new(TokenKind::FatArrow, offset));
                 } else {
                     tokens.push(Token::new(TokenKind::Equals, offset));
                 }
@@ -79,6 +79,10 @@ pub fn lex_input(src_id: usize, input: &str) -> Result<Vec<Token>, Diagnostic> {
                 }
             }
             '-' => match chars.peek() {
+                Some((_, '>')) => {
+                    tokens.push(Token::new(TokenKind::ThinArrow, offset));
+                    chars.next();
+                }
                 Some((_, '=')) => {
                     tokens.push(Token::new(TokenKind::MinusEquals, offset));
                     chars.next();
@@ -173,18 +177,7 @@ pub fn lex_input(src_id: usize, input: &str) -> Result<Vec<Token>, Diagnostic> {
             '[' => tokens.push(Token::new(TokenKind::LeftBracket, offset)),
             ']' => tokens.push(Token::new(TokenKind::RightBracket, offset)),
             '"' | '\'' => {
-                let delim = char;
-
-                let mut string = String::new();
-
-                for (_, str_char) in chars.by_ref() {
-                    if str_char != delim {
-                        string.push(str_char);
-                    } else {
-                        break;
-                    }
-                }
-
+                let string = lex_string_literal(src_id, input, offset, char, &mut chars)?;
                 tokens.push(Token::new(TokenKind::String(string), offset));
             }
             '\n' => {
@@ -216,6 +209,66 @@ pub fn lex_input(src_id: usize, input: &str) -> Result<Vec<Token>, Diagnostic> {
     Ok(tokens)
 }
 
+fn lex_string_literal(
+    src_id: usize,
+    input: &str,
+    start_offset: usize,
+    delim: char,
+    chars: &mut CharIndexedIter,
+) -> Result<String, Diagnostic> {
+    let mut string = String::new();
+    let mut closed = false;
+
+    while let Some((offset, str_char)) = chars.next() {
+        if str_char == delim {
+            closed = true;
+            break;
+        }
+
+        // Handle string escapes.
+        if str_char == '\\' {
+            let Some((_, escaped)) = chars.next() else {
+                return Err(Diagnostic::new(
+                    DiagnosticKind::LexError,
+                    src_id,
+                    offset,
+                    offset + '\\'.len_utf8(),
+                    "Unterminated escape sequence in string literal.",
+                ));
+            };
+
+            let resolved = match escaped {
+                'n' => '\n',
+                'r' => '\r',
+                't' => '\t',
+                '\\' => '\\',
+                '"' => '"',
+                '\'' => '\'',
+                '0' => '\0',
+                other => other,
+            };
+
+            string.push(resolved);
+
+            continue;
+        }
+
+        string.push(str_char);
+    }
+
+    if !closed {
+        return Err(Diagnostic::new(
+            DiagnosticKind::LexError,
+            src_id,
+            start_offset,
+            input.len(),
+            "Unterminated string literal.",
+        ));
+    }
+
+    Ok(string)
+}
+
 fn lex_identifier(
     tokens: &mut Vec<Token>,
     start_char: char,
@@ -229,7 +282,6 @@ fn lex_identifier(
                 '|' | '&'
                     | ';'
                     | ','
-                    | '.'
                     | '='
                     | '>'
                     | '<'
@@ -299,9 +351,7 @@ fn push_identifier_or_number(tokens: &mut Vec<Token>, ident_string: String, offs
     let is_numeric = ident_string
         .chars()
         .all(|c| c.is_ascii_digit() || c == '.' || c == '-');
-    if is_numeric
-        && let Ok(num) = ident_string.parse::<f64>()
-    {
+    if is_numeric && let Ok(num) = ident_string.parse::<f64>() {
         tokens.push(Token::new(TokenKind::Number(num), offset));
         return;
     }
@@ -440,5 +490,39 @@ mod tests {
         assert!(matches!(&kinds[0], TokenKind::String(s) if s == "echo"));
         assert!(matches!(&kinds[1], TokenKind::String(s) if s == "a*b"));
         assert!(matches!(&kinds[2], TokenKind::EOF));
+    }
+
+    #[test]
+    fn decodes_common_string_escapes() {
+        let kinds = token_kinds("echo \"line1\\nline2\\t\\\\\"");
+
+        assert!(matches!(&kinds[0], TokenKind::String(s) if s == "echo"));
+        assert!(matches!(&kinds[1], TokenKind::String(s) if s == "line1\nline2\t\\"));
+        assert!(matches!(&kinds[2], TokenKind::EOF));
+    }
+
+    #[test]
+    fn decodes_single_quoted_escape_sequences_too() {
+        let kinds = token_kinds("echo 'a\\nb\\\\c'");
+
+        assert!(matches!(&kinds[0], TokenKind::String(s) if s == "echo"));
+        assert!(matches!(&kinds[1], TokenKind::String(s) if s == "a\nb\\c"));
+        assert!(matches!(&kinds[2], TokenKind::EOF));
+    }
+
+    #[test]
+    fn lexes_fat_arrow_for_fat_arrow() {
+        let kinds = token_kinds("x => x");
+        assert!(matches!(&kinds[0], TokenKind::String(s) if s == "x"));
+        assert!(matches!(&kinds[1], TokenKind::FatArrow));
+        assert!(matches!(&kinds[2], TokenKind::String(s) if s == "x"));
+    }
+
+    #[test]
+    fn lexes_thin_arrow_for_thin_arrow() {
+        let kinds = token_kinds("a -> b");
+        assert!(matches!(&kinds[0], TokenKind::String(s) if s == "a"));
+        assert!(matches!(&kinds[1], TokenKind::ThinArrow));
+        assert!(matches!(&kinds[2], TokenKind::String(s) if s == "b"));
     }
 }

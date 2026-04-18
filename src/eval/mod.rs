@@ -2,7 +2,7 @@ pub mod cmds;
 pub mod exec;
 pub mod value;
 
-use std::{collections::HashMap, env, io};
+use std::{collections::HashMap, env, fs::File, io};
 
 use crate::{
     eval::value::{FunctionValue, Value},
@@ -436,55 +436,212 @@ impl Evaluator {
         capture_output: bool,
     ) -> (i32, Vec<u8>, Vec<u8>) {
         match command_expr {
-            CommandExpr::Call { identifier, args } => {
-                let identifier_val = self.evaluate_expr(identifier, true, scope_indices);
+            CommandExpr::Call {
+                env_assignments,
+                identifier,
+                args,
+                stdout_redirect,
+            } => {
+                // Evaluate env-prefix assignments in a temporary scope so they are visible
+                // during same-command expansion but don't leak into shell state.
+                let temp_scope_index = self.make_scope();
+                scope_indices.push(temp_scope_index);
 
-                if let Value::Function(func) = &identifier_val {
-                    let value = self.call_user_function(func, args, scope_indices);
-                    return (0, value.to_string().into_bytes(), vec![]);
+                let mut env_assignment_values = vec![];
+                for (name, value_expr) in env_assignments {
+                    let value = self.evaluate_expr(value_expr, true, scope_indices).to_string();
+                    self.push_var(temp_scope_index, name.clone(), Value::String(value.clone()));
+                    env_assignment_values.push((name.clone(), value));
                 }
 
-                let identifier_str = identifier_val.to_string();
+                let stdout_redirect_path = stdout_redirect.as_ref().map(|target_expr| {
+                    let raw_target = self
+                        .evaluate_expr(target_expr, true, scope_indices)
+                        .to_string();
+                    let expanded = expand::expand_arg(raw_target.clone(), ExpandCtx::default());
+                    expanded.into_iter().next().unwrap_or(raw_target)
+                });
 
-                if let Some(Value::Function(func)) =
-                    self.resolve_named_value(&identifier_str, scope_indices)
-                {
-                    let value = self.call_user_function(&func, args, scope_indices);
-                    return (0, value.to_string().into_bytes(), vec![]);
+                let result = {
+                    let identifier_val = self.evaluate_expr(identifier, true, scope_indices);
+
+                    if let Value::Function(func) = &identifier_val {
+                        let output = self
+                            .call_user_function(func, args, scope_indices)
+                            .to_string()
+                            .into_bytes();
+
+                        if let Some(path) = &stdout_redirect_path {
+                            match File::create(path) {
+                                Ok(mut file) => {
+                                    use std::io::Write as _;
+                                    if let Err(e) = file.write_all(&output) {
+                                        (-1, vec![], e.to_string().into_bytes())
+                                    } else {
+                                        (0, vec![], vec![])
+                                    }
+                                }
+                                Err(e) => (-1, vec![], e.to_string().into_bytes()),
+                            }
+                        } else {
+                            (0, output, vec![])
+                        }
+                    } else {
+                        let identifier_str = identifier_val.to_string();
+
+                        if let Some(Value::Function(func)) =
+                            self.resolve_named_value(&identifier_str, scope_indices)
+                        {
+                            let output = self
+                                .call_user_function(&func, args, scope_indices)
+                                .to_string()
+                                .into_bytes();
+
+                            if let Some(path) = &stdout_redirect_path {
+                                match File::create(path) {
+                                    Ok(mut file) => {
+                                        use std::io::Write as _;
+                                        if let Err(e) = file.write_all(&output) {
+                                            (-1, vec![], e.to_string().into_bytes())
+                                        } else {
+                                            (0, vec![], vec![])
+                                        }
+                                    }
+                                    Err(e) => (-1, vec![], e.to_string().into_bytes()),
+                                }
+                            } else {
+                                (0, output, vec![])
+                            }
+                        } else {
+                            let (res_cmd, res_args) = self.resolve_command(identifier_str);
+                            let all_args = self.build_command_args(res_args, args, scope_indices);
+
+                            if let Some(path) = &stdout_redirect_path {
+                                match File::create(path) {
+                                    Ok(file) => {
+                                        if capture_output {
+                                            let mut io_ctx = lsh::IoCtx {
+                                                input: io::Cursor::new(input),
+                                                out: file,
+                                                err: Vec::<u8>::new(),
+                                                input_mode: lsh::IoStreamMode::Pipe,
+                                                out_mode: lsh::IoStreamMode::Pipe,
+                                                err_mode: lsh::IoStreamMode::Pipe,
+                                            };
+
+                                            let code = cmds::exec_cmd(
+                                                self,
+                                                &res_cmd,
+                                                all_args,
+                                                env_assignment_values.as_slice(),
+                                                &mut io_ctx,
+                                            );
+                                            (code, vec![], io_ctx.err)
+                                        } else if input.is_empty() {
+                                            let mut io_ctx = lsh::IoCtx {
+                                                input: io::stdin(),
+                                                out: file,
+                                                err: io::stderr(),
+                                                input_mode: lsh::IoStreamMode::Inherit,
+                                                out_mode: lsh::IoStreamMode::Pipe,
+                                                err_mode: lsh::IoStreamMode::Inherit,
+                                            };
+
+                                            let code = cmds::exec_cmd(
+                                                self,
+                                                &res_cmd,
+                                                all_args,
+                                                env_assignment_values.as_slice(),
+                                                &mut io_ctx,
+                                            );
+                                            (code, vec![], vec![])
+                                        } else {
+                                            let mut io_ctx = lsh::IoCtx {
+                                                input: io::Cursor::new(input),
+                                                out: file,
+                                                err: io::stderr(),
+                                                input_mode: lsh::IoStreamMode::Pipe,
+                                                out_mode: lsh::IoStreamMode::Pipe,
+                                                err_mode: lsh::IoStreamMode::Inherit,
+                                            };
+
+                                            let code = cmds::exec_cmd(
+                                                self,
+                                                &res_cmd,
+                                                all_args,
+                                                env_assignment_values.as_slice(),
+                                                &mut io_ctx,
+                                            );
+                                            (code, vec![], vec![])
+                                        }
+                                    }
+                                    Err(e) => (-1, vec![], e.to_string().into_bytes()),
+                                }
+                            } else if capture_output {
+                                let mut io_ctx = lsh::IoCtx {
+                                    input: io::Cursor::new(input),
+                                    out: Vec::<u8>::new(),
+                                    err: Vec::<u8>::new(),
+                                    input_mode: lsh::IoStreamMode::Pipe,
+                                    out_mode: lsh::IoStreamMode::Pipe,
+                                    err_mode: lsh::IoStreamMode::Pipe,
+                                };
+
+                                let code = cmds::exec_cmd(
+                                    self,
+                                    &res_cmd,
+                                    all_args,
+                                    env_assignment_values.as_slice(),
+                                    &mut io_ctx,
+                                );
+                                (code, io_ctx.out, io_ctx.err)
+                            } else if input.is_empty() {
+                                let mut io_ctx =
+                                    lsh::IoCtx::<io::Stdin, io::Stdout, io::Stderr>::default();
+                                let code = cmds::exec_cmd(
+                                    self,
+                                    &res_cmd,
+                                    all_args,
+                                    env_assignment_values.as_slice(),
+                                    &mut io_ctx,
+                                );
+                                (code, vec![], vec![])
+                            } else {
+                                let mut io_ctx = lsh::IoCtx {
+                                    input: io::Cursor::new(input),
+                                    out: io::stdout(),
+                                    err: io::stderr(),
+                                    input_mode: lsh::IoStreamMode::Pipe,
+                                    out_mode: lsh::IoStreamMode::Inherit,
+                                    err_mode: lsh::IoStreamMode::Inherit,
+                                };
+
+                                let code = cmds::exec_cmd(
+                                    self,
+                                    &res_cmd,
+                                    all_args,
+                                    env_assignment_values.as_slice(),
+                                    &mut io_ctx,
+                                );
+                                (code, vec![], vec![])
+                            }
+                        }
+                    }
+                };
+
+                let popped_scope_index = scope_indices
+                    .pop()
+                    .expect("Failed to pop temp env scope index after command call.");
+                if popped_scope_index != temp_scope_index {
+                    panic!(
+                        "Scope stack mismatch: expected to pop scope {temp_scope_index}, popped {popped_scope_index}."
+                    );
                 }
+                self.scopes
+                    .pop()
+                    .expect("Failed to pop temp env scope after command call.");
 
-                let (res_cmd, res_args) = self.resolve_command(identifier_str);
-                let all_args = self.build_command_args(res_args, args, scope_indices);
-
-                if capture_output {
-                    let mut io_ctx = lsh::IoCtx {
-                        input: io::Cursor::new(input),
-                        out: Vec::<u8>::new(),
-                        err: Vec::<u8>::new(),
-                        input_mode: lsh::IoStreamMode::Pipe,
-                        out_mode: lsh::IoStreamMode::Pipe,
-                        err_mode: lsh::IoStreamMode::Pipe,
-                    };
-
-                    let code = cmds::exec_cmd(self, &res_cmd, all_args, &mut io_ctx);
-                    (code, io_ctx.out, io_ctx.err)
-                } else if input.is_empty() {
-                    let mut io_ctx = lsh::IoCtx::<io::Stdin, io::Stdout, io::Stderr>::default();
-                    let code = cmds::exec_cmd(self, &res_cmd, all_args, &mut io_ctx);
-                    (code, vec![], vec![])
-                } else {
-                    let mut io_ctx = lsh::IoCtx {
-                        input: io::Cursor::new(input),
-                        out: io::stdout(),
-                        err: io::stderr(),
-                        input_mode: lsh::IoStreamMode::Pipe,
-                        out_mode: lsh::IoStreamMode::Inherit,
-                        err_mode: lsh::IoStreamMode::Inherit,
-                    };
-
-                    let code = cmds::exec_cmd(self, &res_cmd, all_args, &mut io_ctx);
-                    (code, vec![], vec![])
-                }
+                result
             }
             CommandExpr::Pipeline(stages) => {
                 let mut piped_input = input;
@@ -737,7 +894,7 @@ impl Evaluator {
                 let mut io = lsh::IoCtx::<io::Stdin, io::Stdout, io::Stderr>::default();
 
                 // TODO: Use a shared io::Stdout reference.
-                cmds::exec_cmd(self, &res_cmd, args, &mut io);
+                cmds::exec_cmd(self, &res_cmd, args, &[], &mut io);
 
                 Value::Null
             }
@@ -754,7 +911,7 @@ impl Evaluator {
                 }
 
                 let mut io = lsh::IoCtx::<io::Stdin, io::Stdout, io::Stderr>::default();
-                cmds::exec_cmd(self, &res_cmd, args, &mut io);
+                cmds::exec_cmd(self, &res_cmd, args, &[], &mut io);
 
                 Value::Null
             }
@@ -889,7 +1046,7 @@ impl Evaluator {
                             err_mode: lsh::IoStreamMode::Pipe,
                         };
 
-                        let exit_status = cmds::exec_cmd(self, &res_cmd, all_args, &mut io);
+                        let exit_status = cmds::exec_cmd(self, &res_cmd, all_args, &[], &mut io);
 
                         let mut res = HashMap::new();
 
@@ -925,7 +1082,7 @@ impl Evaluator {
                             err_mode: lsh::IoStreamMode::Pipe,
                         };
 
-                        let exit_status = cmds::exec_cmd(self, &res_cmd, all_args, &mut io);
+                        let exit_status = cmds::exec_cmd(self, &res_cmd, all_args, &[], &mut io);
 
                         let mut res = HashMap::new();
 
