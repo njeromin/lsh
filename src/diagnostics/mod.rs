@@ -85,6 +85,17 @@ fn line_text_at_offset(source: &str, offset: usize) -> String {
     source[line_start..line_end].to_string()
 }
 
+fn line_bounds_at_offset(source: &str, offset: usize) -> (usize, usize) {
+    let clamped_offset = offset.min(source.len());
+    let line_start = source[..clamped_offset]
+        .rfind('\n')
+        .map_or(0, |idx| idx + 1);
+    let line_end = source[clamped_offset..]
+        .find('\n')
+        .map_or(source.len(), |idx| clamped_offset + idx);
+    (line_start, line_end)
+}
+
 fn format_kind(kind: &DiagnosticKind) -> &'static str {
     match kind {
         DiagnosticKind::LexError => "lex error",
@@ -106,7 +117,23 @@ pub fn print_diagnostic<W: std::io::Write>(out: &mut W, diag: &Diagnostic, sourc
 
     let (line_num, col_num) = line_col_from_offset(&src.contents, src_info.start);
     let line_text = line_text_at_offset(&src.contents, src_info.start);
+    let (line_start, line_end) = line_bounds_at_offset(&src.contents, src_info.start);
+    let underline_start = src_info.start.clamp(line_start, line_end);
+    let underline_end = src_info.end.clamp(underline_start, line_end);
+    let underline_len = (underline_end.saturating_sub(underline_start)).max(1);
     let caret_padding = col_num.saturating_sub(1);
+    let underline = "^".repeat(underline_len);
+
+    let notes_block = diag
+        .notes
+        .iter()
+        .map(|note| format!(" |  {note}\n"))
+        .collect::<String>();
+    let hint_block = diag
+        .hint
+        .as_ref()
+        .map(|hint| format!(" |  {hint}\n"))
+        .unwrap_or_default();
 
     queue!(
         out,
@@ -114,25 +141,15 @@ pub fn print_diagnostic<W: std::io::Write>(out: &mut W, diag: &Diagnostic, sourc
         style::Print(format!("{}\n", diag.message)),
         style::Print("---> ".blue()),
         style::Print(format!("{}:{}:{}\n", src.name, line_num, col_num)),
+        style::Print(" |  \n".blue()),
+        style::Print(" |  ".blue()),
+        style::Print(format!("{line_text}\n")),
+        style::Print(" |  ".blue()),
+        style::Print(" ".repeat(caret_padding)),
+        style::Print(underline.red()),
+        style::Print("\n"),
+        style::Print(notes_block),
+        style::Print(hint_block),
     )
-    .expect("Failed to write diagnostic header");
-
-    queue!(out, style::Print(" |  \n".blue())).unwrap();
-
-    queue!(out, style::Print(" |  ".blue())).unwrap();
-    queue!(out, style::Print(format!("{}\n", line_text))).unwrap();
-
-    queue!(out, style::Print(" |  ".blue())).unwrap();
-    queue!(out, style::Print(" ".repeat(caret_padding))).unwrap();
-    queue!(out, style::Print("^".red())).unwrap();
-    queue!(out, style::Print("\n")).unwrap();
-
-    for note in &diag.notes {
-        queue!(out, style::Print(" |  ".blue())).unwrap();
-        queue!(out, style::Print(format!("{}\n", note))).unwrap();
-    }
-    if let Some(hint) = &diag.hint {
-        queue!(out, style::Print(" |  ".blue())).unwrap();
-        queue!(out, style::Print(format!("{}\n", hint))).unwrap();
-    }
+    .expect("Failed to print diagnostic");
 }
