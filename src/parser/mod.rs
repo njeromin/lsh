@@ -183,7 +183,10 @@ impl Parser {
         let identifier = match &self.current().kind {
             TokenKind::String(s) => Expr::String(s.clone()),
             other => {
-                return self.error_here(format!("Expected command identifier, found {other}"));
+                return self.error_here(format!(
+                    "Expected command name, found {}.",
+                    Self::token_kind_label(other)
+                ));
             }
         };
 
@@ -456,7 +459,10 @@ impl Parser {
                 match &self.current().kind {
                     TokenKind::String(p) => params.push(p.clone()),
                     other => {
-                        return self.error_here(format!("Expected parameter name, found {other}"));
+                        return self.error_here(format!(
+                            "Expected parameter name, found {}.",
+                            Self::token_kind_label(other)
+                        ));
                     }
                 }
                 self.advance();
@@ -646,8 +652,10 @@ impl Parser {
                 let key = match &self.current().kind {
                     TokenKind::String(s) => s.clone(),
                     other => {
-                        return self
-                            .error_here(format!("Expected identifier after '.', found {other}"));
+                        return self.error_here(format!(
+                            "Expected identifier after '.', found {}.",
+                            Self::token_kind_label(other)
+                        ));
                     }
                 };
                 self.advance();
@@ -714,8 +722,10 @@ impl Parser {
                 let key = match &self.current().kind {
                     TokenKind::String(s) => s.clone(),
                     other => {
-                        return self
-                            .error_here(format!("Expected identifier after '.', found {other}"));
+                        return self.error_here(format!(
+                            "Expected identifier after '.', found {}.",
+                            Self::token_kind_label(other)
+                        ));
                     }
                 };
                 self.advance();
@@ -922,8 +932,8 @@ impl Parser {
 
                     if !self.check_current(&TokenKind::RightParen) {
                         return self.error_here(format!(
-                            "Parser error: expected ')', found {}",
-                            self.current().kind
+                            "Expected ')' after expression, found {}.",
+                            self.current_token_label()
                         ));
                     }
 
@@ -946,8 +956,8 @@ impl Parser {
 
                     if !self.check_current(&TokenKind::RightParen) {
                         return self.error_here(format!(
-                            "Parser error: expected ')' after expression, found {}",
-                            self.current().kind
+                            "Expected ')' after expression, found {}.",
+                            self.current_token_label()
                         ));
                     }
 
@@ -999,7 +1009,28 @@ impl Parser {
 
                 Expr::Object(expr_map)
             }
-            other => return self.error_here(format!("Unexpected token in primary: {other}")),
+            TokenKind::ThinArrow => {
+                return self.error_here(
+                    "Unexpected '->' here. Redirection is only valid after a command.",
+                );
+            }
+            TokenKind::FatArrow => {
+                return self.error_here(
+                    "Unexpected '=>'. Anonymous function arrows must follow a parameter list.",
+                );
+            }
+            TokenKind::Equals => {
+                return self.error_here_with_hint(
+                    "Unexpected '=' in expression.",
+                    "If you meant comparison, use '=='.",
+                );
+            }
+            _ => {
+                return self.error_here(format!(
+                    "Unexpected token {} while parsing an expression.",
+                    self.current_token_label()
+                ));
+            }
         };
 
         if should_advance {
@@ -1137,8 +1168,10 @@ impl Parser {
                 let key = match &self.current().kind {
                     TokenKind::String(s) => s.clone(),
                     other => {
-                        return self
-                            .error_here(format!("Expected identifier after '.', found {other}"));
+                        return self.error_here(format!(
+                            "Expected identifier after '.', found {}.",
+                            Self::token_kind_label(other)
+                        ));
                     }
                 };
 
@@ -1215,8 +1248,10 @@ impl Parser {
                     match &self.current().kind {
                         TokenKind::String(p) => params.push(p.clone()),
                         other => {
-                            return self
-                                .error_here(format!("Expected parameter name, found {other}"));
+                            return self.error_here(format!(
+                                "Expected parameter name, found {}.",
+                                Self::token_kind_label(other)
+                            ));
                         }
                     }
                     self.advance();
@@ -1234,13 +1269,22 @@ impl Parser {
             match &self.current().kind {
                 TokenKind::String(p) => params.push(p.clone()),
                 other => {
-                    return self.error_here(format!("Expected parameter name, found {other}"));
+                    return self.error_here(format!(
+                        "Expected parameter name, found {}.",
+                        Self::token_kind_label(other)
+                    ));
                 }
             }
             self.advance();
         }
 
         self.consume(&TokenKind::FatArrow, "Expected '=>' after parameters.")?;
+
+        if self.check_current(&TokenKind::EOF) {
+            return self.error_here(
+                "Expected function body after '=>'. Anonymous functions need an expression or block.",
+            );
+        }
 
         let body = match self.parse_statement()? {
             Statement::Block(stmts) => stmts,
@@ -1266,9 +1310,65 @@ impl Parser {
             return Ok(self.advance().to_owned());
         }
 
-        let current_kind = self.current().kind.to_string();
-        let msg = format!("expected {kind}, found {current_kind} - {err_msg}");
+        let expected = Self::token_kind_label(kind);
+        let found = self.current_token_label();
+        let msg = format!("{err_msg} Found {found}, expected {expected}.");
         self.error_here(msg)
+    }
+
+    fn token_kind_label(kind: &TokenKind) -> String {
+        match kind {
+            TokenKind::String(s) => format!("'{s}'"),
+            TokenKind::Variable(v) => format!("'${v}'"),
+            TokenKind::Number(n) => format!("'{n}'"),
+            TokenKind::Bool(b) => format!("'{b}'"),
+            TokenKind::Let => "'let'".to_string(),
+            TokenKind::If => "'if'".to_string(),
+            TokenKind::Else => "'else'".to_string(),
+            TokenKind::While => "'while'".to_string(),
+            TokenKind::Fn => "'fn'".to_string(),
+            TokenKind::TypeOf => "'typeof'".to_string(),
+            TokenKind::Return => "'return'".to_string(),
+            TokenKind::Pipe => "'|'".to_string(),
+            TokenKind::And => "'&&'".to_string(),
+            TokenKind::Or => "'||'".to_string(),
+            TokenKind::Plus => "'+'".to_string(),
+            TokenKind::Minus => "'-'".to_string(),
+            TokenKind::Star => "'*'".to_string(),
+            TokenKind::Slash => "'/'".to_string(),
+            TokenKind::Equals => "'='".to_string(),
+            TokenKind::EqualsEquals => "'=='".to_string(),
+            TokenKind::Not => "'!'".to_string(),
+            TokenKind::NotEquals => "'!='".to_string(),
+            TokenKind::LessThan => "'<'".to_string(),
+            TokenKind::LtEquals => "'<='".to_string(),
+            TokenKind::GreaterThan => "'>'".to_string(),
+            TokenKind::GtEquals => "'>='".to_string(),
+            TokenKind::PlusEquals => "'+='".to_string(),
+            TokenKind::MinusEquals => "'-='".to_string(),
+            TokenKind::StarEquals => "'*='".to_string(),
+            TokenKind::SlashEquals => "'/='".to_string(),
+            TokenKind::FatArrow => "'=>'".to_string(),
+            TokenKind::ThinArrow => "'->'".to_string(),
+            TokenKind::DollarLeftParen => "'$('".to_string(),
+            TokenKind::LeftCurly => "'{'".to_string(),
+            TokenKind::RightCurly => "'}'".to_string(),
+            TokenKind::LeftParen => "'('".to_string(),
+            TokenKind::RightParen => "')'".to_string(),
+            TokenKind::LeftBracket => "'['".to_string(),
+            TokenKind::RightBracket => "']'".to_string(),
+            TokenKind::Comma => "','".to_string(),
+            TokenKind::Dot => "'.'".to_string(),
+            TokenKind::Semicolon => "';'".to_string(),
+            TokenKind::Colon => "':'".to_string(),
+            TokenKind::NewLine => "newline".to_string(),
+            TokenKind::EOF => "end of input".to_string(),
+            TokenKind::Ampersand => "'&'".to_string(),
+        }
+    }
+
+    fn current_token_label(&self) -> String {
+        Self::token_kind_label(&self.current().kind)
     }
 
     fn diagnostic_here(&self, message: impl Into<String>) -> Diagnostic {
@@ -1285,8 +1385,26 @@ impl Parser {
         )
     }
 
+    fn diagnostic_here_with_hint(
+        &self,
+        message: impl Into<String>,
+        hint: impl Into<String>,
+    ) -> Diagnostic {
+        let mut diag = self.diagnostic_here(message);
+        diag.hint = Some(hint.into());
+        diag
+    }
+
     fn error_here<T>(&self, message: impl Into<String>) -> Result<T, Diagnostic> {
         Err(self.diagnostic_here(message))
+    }
+
+    fn error_here_with_hint<T>(
+        &self,
+        message: impl Into<String>,
+        hint: impl Into<String>,
+    ) -> Result<T, Diagnostic> {
+        Err(self.diagnostic_here_with_hint(message, hint))
     }
 }
 
@@ -1347,7 +1465,7 @@ mod tests {
             .parse_program()
             .expect_err("parser should return parse diagnostic");
         assert!(matches!(err.kind, DiagnosticKind::ParseError));
-        assert!(err.message.contains("expected ')' after expression"));
+        assert!(err.message.contains("Expected ')' after expression"));
     }
 
     #[test]
@@ -1360,6 +1478,19 @@ mod tests {
             .expect_err("parser should return parse diagnostic");
         assert!(matches!(err.kind, DiagnosticKind::ParseError));
         assert!(err.message.contains("Expected redirect target after '->'."));
+    }
+
+    #[test]
+    fn returns_parse_diagnostic_with_hint_for_assignment_in_expression() {
+        let tokens = lex_input(0, "if 1 = 1 {}").expect("lexer should succeed");
+        let mut parser = Parser::new(0, tokens);
+
+        let err = parser
+            .parse_program()
+            .expect_err("parser should return parse diagnostic");
+        assert!(matches!(err.kind, DiagnosticKind::ParseError));
+        assert!(err.message.contains("Unexpected '=' in expression."));
+        assert!(matches!(err.hint.as_deref(), Some("If you meant comparison, use '=='.")));
     }
 
     #[test]
@@ -1644,7 +1775,13 @@ mod tests {
         assert_eq!(args.len(), 1);
         assert!(
             matches!(&args[0], Expr::String(s) if s == "config/config.lsh")
-                || matches!(&args[0], Expr::Binary { op: BinaryOp::Add, .. })
+                || matches!(
+                    &args[0],
+                    Expr::Binary {
+                        op: BinaryOp::Add,
+                        ..
+                    }
+                )
         );
     }
 
@@ -1765,7 +1902,13 @@ mod tests {
         assert_eq!(args.len(), 1);
         assert!(
             matches!(&args[0], Expr::String(s) if s == "https://example.com")
-                || matches!(&args[0], Expr::Binary { op: BinaryOp::Add, .. })
+                || matches!(
+                    &args[0],
+                    Expr::Binary {
+                        op: BinaryOp::Add,
+                        ..
+                    }
+                )
         );
     }
 

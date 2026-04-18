@@ -138,7 +138,7 @@ pub fn lex_input(src_id: usize, input: &str) -> Result<Vec<Token>, Diagnostic> {
                             src_id,
                             next_char.0,
                             next_char.0 + next_char.1.len_utf8(),
-                            "Unexpected token after '$'.",
+                            format!("Unexpected token '{}' after '$'.", next_char.1).as_str(),
                         ));
                     }
                 } else {
@@ -147,7 +147,7 @@ pub fn lex_input(src_id: usize, input: &str) -> Result<Vec<Token>, Diagnostic> {
                         src_id,
                         offset,
                         offset + char.len_utf8(),
-                        "Unexpected token after '$'.",
+                        "Unexpected end of input after '$'.",
                     ));
                 }
             }

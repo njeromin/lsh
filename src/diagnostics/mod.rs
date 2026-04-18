@@ -124,17 +124,6 @@ pub fn print_diagnostic<W: std::io::Write>(out: &mut W, diag: &Diagnostic, sourc
     let caret_padding = col_num.saturating_sub(1);
     let underline = "^".repeat(underline_len);
 
-    let notes_block = diag
-        .notes
-        .iter()
-        .map(|note| format!(" |  {note}\n"))
-        .collect::<String>();
-    let hint_block = diag
-        .hint
-        .as_ref()
-        .map(|hint| format!(" |  {hint}\n"))
-        .unwrap_or_default();
-
     queue!(
         out,
         style::Print(format!("{}: ", format_kind(&diag.kind)).red()),
@@ -148,8 +137,16 @@ pub fn print_diagnostic<W: std::io::Write>(out: &mut W, diag: &Diagnostic, sourc
         style::Print(" ".repeat(caret_padding)),
         style::Print(underline.red()),
         style::Print("\n"),
-        style::Print(notes_block),
-        style::Print(hint_block),
     )
     .expect("Failed to print diagnostic");
+
+    for note in &diag.notes {
+        queue!(out, style::Print(" |  ".blue()), style::Print(format!("{note}\n")))
+            .expect("Failed to print diagnostic note");
+    }
+
+    if let Some(hint) = &diag.hint {
+        queue!(out, style::Print(" |  ".blue()), style::Print(format!("{hint}\n")))
+            .expect("Failed to print diagnostic hint");
+    }
 }
