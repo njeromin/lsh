@@ -109,6 +109,7 @@ fn interactive_session(
             Ok(tokens) => tokens,
             Err(diag) => {
                 diagnostics::print_diagnostic(&mut cerr, &diag, src_map);
+                let _ = src_map.remove(src_id);
                 continue;
             }
         };
@@ -120,6 +121,7 @@ fn interactive_session(
             Ok(prog) => prog,
             Err(diag) => {
                 diagnostics::print_diagnostic(&mut cerr, &diag, src_map);
+                let _ = src_map.remove(src_id);
                 continue;
             }
         };
@@ -127,6 +129,7 @@ fn interactive_session(
         debug::print_parser(&prog);
 
         eval.evaluate(prog);
+        let _ = src_map.remove(src_id);
     }
 }
 
