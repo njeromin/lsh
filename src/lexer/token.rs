@@ -50,7 +50,6 @@ pub enum TokenKind {
     EOF,
 }
 
-// NOTE: This is pretty ugly with how unreachable is used.
 impl fmt::Display for TokenKind {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
@@ -112,19 +111,6 @@ impl TokenKind {
     /// Compares two TokenKind instances for equality based on their discriminants.
     pub fn compare(&self, other: &TokenKind) -> bool {
         mem::discriminant(self) == mem::discriminant(other)
-    }
-
-    // TODO: Use this for deciding in parser if a token should be used a string e.g. in arguments
-    // for cmds.
-    pub fn can_be_string(&self) -> bool {
-        matches!(
-            self,
-            TokenKind::String(_)
-                | TokenKind::Number(_)
-                | TokenKind::Bool(_)
-                | TokenKind::Star
-                | TokenKind::Slash
-        )
     }
 }
 

@@ -16,7 +16,6 @@ pub fn is_valid_cmd(cmd: &str) -> bool {
     builtins::is_valid_builtin(cmd) || which(cmd).is_ok()
 }
 
-// TODO: This could probably really just go in evaluator, stop mixing str and string, stop repeating stdout calls
 pub fn exec_cmd<R: io::Read, W: io::Write, WE: io::Write>(
     evaluator: &mut Evaluator,
     cmd: &str,
@@ -67,7 +66,11 @@ pub fn spawn_proc<R: io::Read, W: io::Write, WE: io::Write>(
 ) -> io::Result<i32> {
     let mut c = Command::new(cmd);
     c.args(args);
-    c.envs(env_assignments.iter().map(|(k, v)| (k.as_str(), v.as_str())));
+    c.envs(
+        env_assignments
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str())),
+    );
 
     c.stdin(match ctx.input_mode {
         IoStreamMode::Inherit => Stdio::inherit(),

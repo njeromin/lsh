@@ -154,7 +154,7 @@ fn main() {
 
     let config_entrypoint = config_dir.join("config.lsh");
 
-    // Run config.lsh.
+    // Evaluate config if it exists.
     if fs::exists(&config_entrypoint).expect("Failed to check config file existence") {
         exec_file(&mut eval, config_entrypoint);
     }
@@ -167,8 +167,8 @@ fn main() {
     )
     .expect("Failed to set library path");
 
-    // TODO: Improve this
     if let Some(file_path) = args.next() {
+        // Push command line arguments as into global scope.
         for (i, arg) in args.enumerate() {
             eval.push_var(0, i.to_string(), Value::String(arg.to_owned()));
         }
