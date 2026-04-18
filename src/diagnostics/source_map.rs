@@ -19,7 +19,7 @@ impl SourceMap {
         if self.free_ids.is_empty() {
             self.sources.push(Some(src));
 
-            return self.sources.len() - 1;
+            self.sources.len() - 1
         } else {
             // We can take the first free ID and unwrap since we know there
             // are some elements in `free_ids`.
@@ -27,8 +27,8 @@ impl SourceMap {
 
             self.sources[id] = Some(src);
 
-            return id;
-        };
+            id
+        }
     }
 
     pub fn remove(&mut self, id: usize) -> Option<Source> {

@@ -362,12 +362,11 @@ impl Evaluator {
                         {
                             return EvalFlow::Return(value);
                         }
-                    } else if let Some(else_branch_statements) = else_branch {
-                        if let EvalFlow::Return(value) =
+                    } else if let Some(else_branch_statements) = else_branch
+                        && let EvalFlow::Return(value) =
                             self.evaluate_in_new_scope(else_branch_statements, scope_indices)
-                        {
-                            return EvalFlow::Return(value);
-                        }
+                    {
+                        return EvalFlow::Return(value);
                     }
                 }
                 Statement::While { condition, body } => {
@@ -717,12 +716,11 @@ impl Evaluator {
                 }
 
                 // If target was a Word or Variable that resolved to a function name.
-                if let Expr::Word(identifier) | Expr::Variable(identifier) = target.as_ref() {
-                    if let Some(Value::Function(func)) =
+                if let Expr::Word(identifier) | Expr::Variable(identifier) = target.as_ref()
+                    && let Some(Value::Function(func)) =
                         self.resolve_named_value(identifier, scope_indices)
-                    {
-                        return self.call_user_function(&func, args, scope_indices);
-                    }
+                {
+                    return self.call_user_function(&func, args, scope_indices);
                 }
 
                 // For command execution, we only want to do this if we are not in a secondary expression (like an argument).
@@ -976,7 +974,7 @@ impl Evaluator {
             Expr::Object(expr_map) => {
                 let mut obj = HashMap::new();
                 for (key, value) in expr_map {
-                    let value_value = self.evaluate_expr(&value, true, scope_indices);
+                    let value_value = self.evaluate_expr(value, true, scope_indices);
                     obj.insert(key.to_string(), value_value);
                 }
                 Value::Object(obj)

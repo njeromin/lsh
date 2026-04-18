@@ -52,7 +52,7 @@ pub fn exec_cmd<R: io::Read, W: io::Write, WE: io::Write>(
             Ok(status) => status,
             Err(e) => {
                 ui::print_error(&mut ctx.err, &e.to_string());
-                return -1;
+                -1
             }
         },
     }
@@ -84,22 +84,22 @@ pub fn spawn_proc<R: io::Read, W: io::Write, WE: io::Write>(
 
     match c.spawn() {
         Ok(mut child) => {
-            if matches!(ctx.input_mode, IoStreamMode::Pipe) {
-                if let Some(mut stdin) = child.stdin.take() {
-                    io::copy(&mut ctx.input, &mut stdin)?;
-                }
+            if matches!(ctx.input_mode, IoStreamMode::Pipe)
+                && let Some(mut stdin) = child.stdin.take()
+            {
+                io::copy(&mut ctx.input, &mut stdin)?;
             }
 
-            if matches!(ctx.out_mode, IoStreamMode::Pipe) {
-                if let Some(mut stdout) = child.stdout.take() {
-                    io::copy(&mut stdout, &mut ctx.out)?;
-                }
+            if matches!(ctx.out_mode, IoStreamMode::Pipe)
+                && let Some(mut stdout) = child.stdout.take()
+            {
+                io::copy(&mut stdout, &mut ctx.out)?;
             }
 
-            if matches!(ctx.err_mode, IoStreamMode::Pipe) {
-                if let Some(mut stderr) = child.stderr.take() {
-                    io::copy(&mut stderr, &mut ctx.err)?;
-                }
+            if matches!(ctx.err_mode, IoStreamMode::Pipe)
+                && let Some(mut stderr) = child.stderr.take()
+            {
+                io::copy(&mut stderr, &mut ctx.err)?;
             }
 
             Ok(child.wait()?.code().unwrap_or(0))

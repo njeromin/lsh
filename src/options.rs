@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fmt;
 
 use crate::eval::value::Value;
 
@@ -9,12 +10,12 @@ pub enum EditMode {
     Vi,
 }
 
-impl ToString for EditMode {
-    fn to_string(&self) -> String {
+impl fmt::Display for EditMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            EditMode::Default => "default".to_string(),
-            EditMode::Emacs => "emacs".to_string(),
-            EditMode::Vi => "vi".to_string(),
+            EditMode::Default => write!(f, "default"),
+            EditMode::Emacs => write!(f, "emacs"),
+            EditMode::Vi => write!(f, "vi"),
         }
     }
 }
@@ -30,9 +31,9 @@ impl From<&str> for EditMode {
     }
 }
 
-impl Into<rustyline::EditMode> for EditMode {
-    fn into(self) -> rustyline::EditMode {
-        match self {
+impl From<EditMode> for rustyline::EditMode {
+    fn from(value: EditMode) -> Self {
+        match value {
             EditMode::Default => rustyline::EditMode::Vi,
             EditMode::Emacs => rustyline::EditMode::Emacs,
             EditMode::Vi => rustyline::EditMode::Vi,
@@ -46,8 +47,8 @@ pub struct Options {
     pub edit_mode: EditMode,
 }
 
-impl Options {
-    pub fn default() -> Self {
+impl Default for Options {
+    fn default() -> Self {
         Self {
             tab_stop: 4,
             edit_mode: EditMode::Default,
@@ -55,23 +56,23 @@ impl Options {
     }
 }
 
-impl Into<HashMap<String, Value>> for Options {
-    fn into(self) -> HashMap<String, Value> {
+impl From<Options> for HashMap<String, Value> {
+    fn from(value: Options) -> Self {
         let mut map = HashMap::new();
 
-        map.insert("tab_stop".to_string(), Value::Number(self.tab_stop as f64));
+        map.insert("tab_stop".to_string(), Value::Number(value.tab_stop as f64));
         map.insert(
             "edit_mode".to_string(),
-            Value::String(self.edit_mode.to_string()),
+            Value::String(value.edit_mode.to_string()),
         );
 
         map
     }
 }
 
-impl Into<Value> for Options {
-    fn into(self) -> Value {
-        Value::Object(self.into())
+impl From<Options> for Value {
+    fn from(value: Options) -> Self {
+        Value::Object(value.into())
     }
 }
 

@@ -108,7 +108,7 @@ fn interactive_session(
         let tokens = match lexer::lex_input(src_id, &input) {
             Ok(tokens) => tokens,
             Err(diag) => {
-                diagnostics::print_diagnostic(&mut cerr, &diag, &src_map);
+                diagnostics::print_diagnostic(&mut cerr, &diag, src_map);
                 continue;
             }
         };

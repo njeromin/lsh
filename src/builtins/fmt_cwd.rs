@@ -17,7 +17,7 @@ fn format_cwd(path: &Path, home_dir: &Path) -> String {
             format!("~/{}", stripped)
         }
     } else {
-        return path.to_string_lossy().into_owned();
+        path.to_string_lossy().into_owned()
     }
 }
 

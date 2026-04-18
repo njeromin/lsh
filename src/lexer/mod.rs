@@ -299,11 +299,11 @@ fn push_identifier_or_number(tokens: &mut Vec<Token>, ident_string: String, offs
     let is_numeric = ident_string
         .chars()
         .all(|c| c.is_ascii_digit() || c == '.' || c == '-');
-    if is_numeric {
-        if let Ok(num) = ident_string.parse::<f64>() {
-            tokens.push(Token::new(TokenKind::Number(num), offset));
-            return;
-        }
+    if is_numeric
+        && let Ok(num) = ident_string.parse::<f64>()
+    {
+        tokens.push(Token::new(TokenKind::Number(num), offset));
+        return;
     }
 
     tokens.push(Token::new(TokenKind::String(ident_string), offset));
@@ -346,7 +346,7 @@ mod tests {
 
         src_map.remove(src_id);
 
-        return toks;
+        toks
     }
 
     #[test]

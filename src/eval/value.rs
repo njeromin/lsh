@@ -49,13 +49,13 @@ impl fmt::Display for Value {
             Self::Bool(bool) => write!(f, "{bool}"),
             Self::Object(map) => {
                 // TODO: Proper recursive object printing.
-                write!(f, "{{\n")?;
+                writeln!(f, "{{")?;
 
                 for (key, value) in map {
-                    write!(f, "  {}: {:?}\n", key, value.to_string())?;
+                    writeln!(f, "  {}: {:?}", key, value.to_string())?;
                 }
 
-                write!(f, "}}\n")
+                writeln!(f, "}}")
             }
             Self::Function(func) => write!(
                 f,

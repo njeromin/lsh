@@ -32,7 +32,7 @@ impl Diagnostic {
         message: &str,
     ) -> Self {
         Self {
-            kind: kind,
+            kind,
             message: message.to_string(),
             source: SourceInfo {
                 source_id,
