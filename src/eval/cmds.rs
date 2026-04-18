@@ -12,10 +12,6 @@ use crate::{
     ui,
 };
 
-pub fn is_valid_cmd(cmd: &str) -> bool {
-    builtins::is_valid_builtin(cmd) || which(cmd).is_ok()
-}
-
 pub fn exec_cmd<R: io::Read, W: io::Write, WE: io::Write>(
     evaluator: &mut Evaluator,
     cmd: &str,
@@ -23,38 +19,17 @@ pub fn exec_cmd<R: io::Read, W: io::Write, WE: io::Write>(
     env_assignments: &[(String, String)],
     ctx: &mut lsh::IoCtx<R, W, WE>,
 ) -> i32 {
-    match cmd {
-        "exit" => {
-            builtins::exit::exit(evaluator, ctx, args);
-            0
+    if let Some(builtin) = builtins::lookup(cmd) {
+        builtins::dispatch(builtin.kind, evaluator, ctx, args);
+        return 0;
+    }
+
+    match spawn_proc(cmd, args, env_assignments, ctx) {
+        Ok(status) => status,
+        Err(e) => {
+            ui::print_error(&mut ctx.err, &e.to_string());
+            -1
         }
-        "source" => {
-            builtins::source::source(evaluator, ctx, args);
-            0
-        }
-        "exec" => {
-            builtins::exec::exec(evaluator, ctx, args);
-            0
-        }
-        "alias" => {
-            builtins::alias::alias(evaluator, ctx, args);
-            0
-        }
-        "cd" => {
-            builtins::cd::cd(evaluator, ctx, args);
-            0
-        }
-        "fmt-cwd" => {
-            builtins::fmt_cwd::fmt_cwd(evaluator, ctx, args);
-            0
-        }
-        _ => match spawn_proc(cmd, args, env_assignments, ctx) {
-            Ok(status) => status,
-            Err(e) => {
-                ui::print_error(&mut ctx.err, &e.to_string());
-                -1
-            }
-        },
     }
 }
 
