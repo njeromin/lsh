@@ -76,7 +76,14 @@ impl Parser {
             }
             TokenKind::String(_) | TokenKind::Variable(_) => {
                 let initial_index = self.index;
-                let expr = self.parse_postfix()?;
+                let expr = match self.parse_postfix() {
+                    Ok(expr) => expr,
+                    Err(diag) if diag.message.starts_with("Expected identifier after '.'") => {
+                        self.index = initial_index;
+                        return Ok(Statement::Command(self.parse_command_expr()?));
+                    }
+                    Err(diag) => return Err(diag),
+                };
 
                 // If it's an assignment, it's definitely a statement.
                 if self.check_current(&TokenKind::Equals) {
@@ -88,8 +95,14 @@ impl Parser {
                     });
                 }
 
-                // If it's a Call (which we just parsed via parse_postfix), it's an expression statement.
-                if matches!(expr, Expr::Call { .. }) {
+                // If it's a Call and the statement ends here, treat it as an expression statement.
+                // Otherwise, backtrack and parse command operators (&&, ||, |, ...).
+                let statement_ends = self.check_current(&TokenKind::Semicolon)
+                    || self.check_current(&TokenKind::NewLine)
+                    || self.check_current(&TokenKind::EOF)
+                    || self.check_current(&TokenKind::RightCurly);
+
+                if matches!(expr, Expr::Call { .. }) && statement_ends {
                     self.match_token(&[TokenKind::Semicolon]);
                     return Ok(Statement::Expr(expr));
                 }
@@ -706,6 +719,43 @@ impl Parser {
                                     self.parse_postfix_from_seed(Expr::Variable(var_name))?;
                                 args.push(sub_expr);
                             }
+                        } else if matches!(next_token.kind, TokenKind::Dot) {
+                            // Keep dotted literals correct:
+                            // - spaced: `git add .` => "." as separate arg
+                            // - contiguous: `..`, `file.txt` => concatenate
+                            let current = self.current().to_owned();
+                            let is_contiguous = next_token.offset
+                                == current.offset + Self::token_source_len(&current);
+
+                            if !is_contiguous {
+                                self.advance(); // Move to '.'
+                                args.push(Expr::String(".".to_string()));
+                                continue;
+                            }
+
+                            let Some(last_arg) = args.pop() else {
+                                break;
+                            };
+                            self.advance(); // Move to '.'
+
+                            let mut suffix = Expr::String(".".to_string());
+                            if let Some(after_dot) = self.tokens.get(self.index + 1)
+                                && let Some(after_dot_expr) =
+                                    Self::token_kind_to_primary_call_arg_literal(&after_dot.kind)
+                            {
+                                self.advance(); // Move to token after '.'
+                                suffix = Expr::Binary {
+                                    op: BinaryOp::Add,
+                                    left: Box::new(suffix),
+                                    right: Box::new(after_dot_expr),
+                                };
+                            }
+
+                            args.push(Expr::Binary {
+                                op: BinaryOp::Add,
+                                left: Box::new(last_arg),
+                                right: Box::new(suffix),
+                            });
                         } else {
                             break;
                         }
@@ -742,10 +792,10 @@ impl Parser {
                         TokenKind::RightParen => {
                             nesting -= 1;
                             if nesting == 0 {
-                                if let Some(next) = self.tokens.get(i + 1) {
-                                    if next.kind.compare(&TokenKind::Arrow) {
-                                        arrow_found = true;
-                                    }
+                                if let Some(next) = self.tokens.get(i + 1)
+                                    && next.kind.compare(&TokenKind::Arrow)
+                                {
+                                    arrow_found = true;
                                 }
                                 break;
                             }
@@ -859,6 +909,7 @@ impl Parser {
             TokenKind::Bool(b) => Some(Expr::Bool(*b)),
             // Treat punctuation/operator tokens as literal string arguments in command context.
             TokenKind::Comma => Some(Expr::String(",".to_string())),
+            TokenKind::Dot => Some(Expr::String(".".to_string())),
             TokenKind::Colon => Some(Expr::String(":".to_string())),
             TokenKind::Minus => Some(Expr::String("-".to_string())),
             TokenKind::Plus => Some(Expr::String("+".to_string())),
@@ -1135,6 +1186,22 @@ mod tests {
             .body
     }
 
+    fn assert_command_identifier(identifier: &Expr, expected: &str) {
+        assert!(
+            matches!(identifier, Expr::String(actual) if actual == expected)
+                || matches!(identifier, Expr::Word(actual) if actual == expected),
+            "Expected command identifier {expected:?}, got {identifier:?}"
+        );
+    }
+
+    fn extract_call_parts(statement: &Statement) -> (&Expr, &Vec<Expr>) {
+        match statement {
+            Statement::Command(CommandExpr::Call { identifier, args }) => (identifier, args),
+            Statement::Expr(Expr::Call { target, args }) => (target.as_ref(), args),
+            _ => panic!("Expected call-like statement"),
+        }
+    }
+
     #[test]
     fn returns_parse_diagnostic_for_invalid_let_identifier() {
         let tokens = lex_input(0, "let = 1").expect("lexer should succeed");
@@ -1163,11 +1230,9 @@ mod tests {
     fn parses_regular_command_call() {
         let body = parse_program("echo hello world");
 
-        let Statement::Command(CommandExpr::Call { identifier, args }) = &body[0] else {
-            panic!("Expected command call statement");
-        };
+        let (identifier, args) = extract_call_parts(&body[0]);
 
-        assert_eq!(identifier, "echo");
+        assert_command_identifier(identifier, "echo");
         assert_eq!(args.len(), 2);
         assert!(matches!(&args[0], Expr::String(s) if s == "hello"));
         assert!(matches!(&args[1], Expr::String(s) if s == "world"));
@@ -1190,7 +1255,7 @@ mod tests {
         else {
             panic!("Expected first pipeline stage to be a call");
         };
-        assert_eq!(first_id, "cat");
+        assert_command_identifier(first_id, "cat");
         assert!(matches!(&first_args[0], Expr::String(s) if s == "file.txt"));
 
         let CommandExpr::Call {
@@ -1200,7 +1265,7 @@ mod tests {
         else {
             panic!("Expected second pipeline stage to be a call");
         };
-        assert_eq!(second_id, "grep");
+        assert_command_identifier(second_id, "grep");
         assert!(matches!(&second_args[0], Expr::String(s) if s == "txt"));
     }
 
@@ -1227,8 +1292,8 @@ mod tests {
             panic!("Expected right side of and-chain to be a command call");
         };
 
-        assert_eq!(left_id, "echo");
-        assert_eq!(right_id, "echo");
+        assert_command_identifier(left_id, "echo");
+        assert_command_identifier(right_id, "echo");
     }
 
     #[test]
@@ -1254,8 +1319,8 @@ mod tests {
             panic!("Expected right side of or-chain to be a command call");
         };
 
-        assert_eq!(left_id, "missing");
-        assert_eq!(right_id, "echo");
+        assert_command_identifier(left_id, "missing");
+        assert_command_identifier(right_id, "echo");
     }
 
     #[test]
@@ -1274,18 +1339,16 @@ mod tests {
         let CommandExpr::Call { identifier, .. } = right.as_ref() else {
             panic!("Expected right side to be a command call");
         };
-        assert_eq!(identifier, "echo");
+        assert_command_identifier(identifier, "echo");
     }
 
     #[test]
     fn parses_command_with_colon_path_argument() {
         let body = parse_program("cat /sys/bus/pci/devices/0000:64:00.0/power/runtime_status");
 
-        let Statement::Command(CommandExpr::Call { identifier, args }) = &body[0] else {
-            panic!("Expected command call statement");
-        };
+        let (identifier, args) = extract_call_parts(&body[0]);
 
-        assert_eq!(identifier, "cat");
+        assert_command_identifier(identifier, "cat");
         assert_eq!(args.len(), 1);
         assert!(
             matches!(&args[0], Expr::String(s) if s == "/sys/bus/pci/devices/0000:64:00.0/power/runtime_status")
@@ -1296,11 +1359,9 @@ mod tests {
     fn parses_command_with_command_substitution_argument() {
         let body = parse_program("echo $(cat /etc/hosts)");
 
-        let Statement::Command(CommandExpr::Call { identifier, args }) = &body[0] else {
-            panic!("Expected command call statement");
-        };
+        let (identifier, args) = extract_call_parts(&body[0]);
 
-        assert_eq!(identifier, "echo");
+        assert_command_identifier(identifier, "echo");
         assert_eq!(args.len(), 1);
 
         let Expr::CommandSubCommand(sub_command) = &args[0] else {
@@ -1314,7 +1375,7 @@ mod tests {
         else {
             panic!("Expected command substitution to contain a command call");
         };
-        assert_eq!(sub_id, "cat");
+        assert_command_identifier(sub_id, "cat");
         assert!(matches!(&sub_args[0], Expr::String(s) if s == "/etc/hosts"));
     }
 
@@ -1344,8 +1405,48 @@ mod tests {
         else {
             panic!("Expected command substitution to contain a command call");
         };
-        assert_eq!(sub_id, "cat");
+        assert_command_identifier(sub_id, "cat");
         assert!(matches!(&sub_args[0], Expr::String(s) if s == "/etc/hosts"));
+    }
+
+    #[test]
+    fn parses_member_access_on_command_sub_with_following_arg() {
+        let body = parse_program("echo $(fmt-cwd $PWD).out $git_info");
+
+        let (identifier, args) = extract_call_parts(&body[0]);
+        assert_command_identifier(identifier, "echo");
+        assert_eq!(args.len(), 2);
+
+        let Expr::Index { object, index } = &args[0] else {
+            panic!("Expected first arg to be member access on command substitution");
+        };
+        assert!(matches!(index.as_ref(), Expr::String(s) if s == "out"));
+        assert!(matches!(object.as_ref(), Expr::CommandSubCommand(_)));
+        assert!(matches!(&args[1], Expr::Variable(name) if name == "git_info"));
+    }
+
+    #[test]
+    fn parses_command_with_dotted_path_argument() {
+        let body = parse_program("source config/config.lsh");
+
+        let (identifier, args) = extract_call_parts(&body[0]);
+        assert_command_identifier(identifier, "source");
+        assert_eq!(args.len(), 1);
+        assert!(
+            matches!(&args[0], Expr::String(s) if s == "config/config.lsh")
+                || matches!(&args[0], Expr::Binary { op: BinaryOp::Add, .. })
+        );
+    }
+
+    #[test]
+    fn parses_command_with_spaced_dot_argument() {
+        let body = parse_program("git add .");
+
+        let (identifier, args) = extract_call_parts(&body[0]);
+        assert_command_identifier(identifier, "git");
+        assert_eq!(args.len(), 2);
+        assert!(matches!(&args[0], Expr::String(s) if s == "add"));
+        assert!(matches!(&args[1], Expr::String(s) if s == "."));
     }
 
     #[test]
@@ -1367,11 +1468,9 @@ mod tests {
     fn parses_command_with_comma_arguments_without_panicking() {
         let body = parse_program("echo hello, world");
 
-        let Statement::Command(CommandExpr::Call { identifier, args }) = &body[0] else {
-            panic!("Expected command call statement");
-        };
+        let (identifier, args) = extract_call_parts(&body[0]);
 
-        assert_eq!(identifier, "echo");
+        assert_command_identifier(identifier, "echo");
         assert_eq!(args.len(), 2);
         assert!(matches!(
             &args[0],
@@ -1389,11 +1488,9 @@ mod tests {
     fn parses_command_with_dash_argument_without_panicking() {
         let body = parse_program("cd -");
 
-        let Statement::Command(CommandExpr::Call { identifier, args }) = &body[0] else {
-            panic!("Expected command call statement");
-        };
+        let (identifier, args) = extract_call_parts(&body[0]);
 
-        assert_eq!(identifier, "cd");
+        assert_command_identifier(identifier, "cd");
         assert_eq!(args.len(), 1);
         assert!(matches!(&args[0], Expr::String(s) if s == "-"));
     }
@@ -1402,24 +1499,23 @@ mod tests {
     fn parses_command_with_url_argument() {
         let body = parse_program("echo https://example.com");
 
-        let Statement::Command(CommandExpr::Call { identifier, args }) = &body[0] else {
-            panic!("Expected command call statement");
-        };
+        let (identifier, args) = extract_call_parts(&body[0]);
 
-        assert_eq!(identifier, "echo");
+        assert_command_identifier(identifier, "echo");
         assert_eq!(args.len(), 1);
-        assert!(matches!(&args[0], Expr::String(s) if s == "https://example.com"));
+        assert!(
+            matches!(&args[0], Expr::String(s) if s == "https://example.com")
+                || matches!(&args[0], Expr::Binary { op: BinaryOp::Add, .. })
+        );
     }
 
     #[test]
     fn parses_command_with_key_value_argument_tokens() {
         let body = parse_program("echo key=value");
 
-        let Statement::Command(CommandExpr::Call { identifier, args }) = &body[0] else {
-            panic!("Expected command call statement");
-        };
+        let (identifier, args) = extract_call_parts(&body[0]);
 
-        assert_eq!(identifier, "echo");
+        assert_command_identifier(identifier, "echo");
         assert_eq!(args.len(), 1);
         assert!(matches!(&args[0], Expr::String(s) if s == "key=value"));
     }
@@ -1428,11 +1524,9 @@ mod tests {
     fn parses_command_with_multiple_equals_in_argument() {
         let body = parse_program("echo key=value=next");
 
-        let Statement::Command(CommandExpr::Call { identifier, args }) = &body[0] else {
-            panic!("Expected command call statement");
-        };
+        let (identifier, args) = extract_call_parts(&body[0]);
 
-        assert_eq!(identifier, "echo");
+        assert_command_identifier(identifier, "echo");
         assert_eq!(args.len(), 1);
         assert!(matches!(&args[0], Expr::String(s) if s == "key=value=next"));
     }
@@ -1441,11 +1535,9 @@ mod tests {
     fn parses_command_with_unspaced_star_word_argument() {
         let body = parse_program("echo a*b");
 
-        let Statement::Command(CommandExpr::Call { identifier, args }) = &body[0] else {
-            panic!("Expected command call statement");
-        };
+        let (identifier, args) = extract_call_parts(&body[0]);
 
-        assert_eq!(identifier, "echo");
+        assert_command_identifier(identifier, "echo");
         assert_eq!(args.len(), 1);
         assert!(matches!(&args[0], Expr::String(s) if s == "a*b"));
     }
@@ -1454,11 +1546,9 @@ mod tests {
     fn parses_command_with_variable_path_suffix_as_single_argument() {
         let body = parse_program("echo $HOME/.config");
 
-        let Statement::Command(CommandExpr::Call { identifier, args }) = &body[0] else {
-            panic!("Expected command call statement");
-        };
+        let (identifier, args) = extract_call_parts(&body[0]);
 
-        assert_eq!(identifier, "echo");
+        assert_command_identifier(identifier, "echo");
         assert_eq!(args.len(), 1);
         assert!(matches!(
             &args[0],
@@ -1495,10 +1585,8 @@ mod tests {
             panic!("Expected if statement");
         };
         assert_eq!(then_branch.len(), 1);
-        assert!(matches!(
-            &then_branch[0],
-            Statement::Command(CommandExpr::Call { identifier, .. }) if identifier == "echo"
-        ));
+        let (identifier, _args) = extract_call_parts(&then_branch[0]);
+        assert_command_identifier(identifier, "echo");
     }
 
     #[test]
