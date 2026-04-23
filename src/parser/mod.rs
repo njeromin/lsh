@@ -74,6 +74,7 @@ impl Parser {
 
                 Ok(Statement::Block(statements))
             }
+            TokenKind::Dot | TokenKind::Slash => Ok(Statement::Command(self.parse_command_expr()?)),
             TokenKind::String(_) | TokenKind::Variable(_) => {
                 let initial_index = self.index;
                 let expr = match self.parse_postfix() {
@@ -180,25 +181,22 @@ impl Parser {
             env_assignments.push(assignment);
         }
 
-        let identifier = match &self.current().kind {
-            TokenKind::String(s) => Expr::String(s.clone()),
-            other => {
-                return self.error_here(format!(
-                    "Expected command name, found {}.",
-                    Self::token_kind_label(other)
-                ));
-            }
+        let Some(identifier) = self.parse_command_argument()? else {
+            return self.error_here(format!(
+                "Expected command name, found {}.",
+                Self::token_kind_label(&self.current().kind)
+            ));
         };
 
-        if self.check_peek(1, &TokenKind::LeftParen) {
+        if self.check_current(&TokenKind::LeftParen) {
+            let previous_token = &self.tokens[self.index - 1];
             let current_token = self.current();
-            let next_token = self.peek_token(1);
-            if next_token.offset == current_token.offset + Self::token_source_len(current_token) {
+            if current_token.offset
+                == previous_token.offset + Self::token_source_len(previous_token)
+            {
                 return self.error_here("Command names cannot be immediately followed by '(' - did you mean a function call?");
             }
         }
-
-        self.advance();
 
         let mut args = vec![];
         while !self.check_current(&TokenKind::Pipe)
@@ -627,7 +625,10 @@ impl Parser {
     }
 
     fn parse_target(&mut self) -> Result<Expr, Diagnostic> {
-        let expr = self.parse_primary()?;
+        let expr = match self.parse_primary()? {
+            Expr::Word(name) => Expr::Variable(name),
+            other => other,
+        };
         self.parse_target_on_current(expr)
     }
 
@@ -781,8 +782,23 @@ impl Parser {
                         if let Some(arg_expr) =
                             Self::token_kind_to_primary_call_arg_literal(&next_token.kind)
                         {
+                            let current = self.current().to_owned();
+                            let is_contiguous = next_token.offset
+                                == current.offset + Self::token_source_len(&current);
                             self.advance(); // Move to literal.
-                            args.push(arg_expr);
+
+                            if is_contiguous && !args.is_empty() {
+                                let previous = args
+                                    .pop()
+                                    .expect("Expected previous argument while concatenating.");
+                                args.push(Expr::Binary {
+                                    op: BinaryOp::Add,
+                                    left: Box::new(previous),
+                                    right: Box::new(arg_expr),
+                                });
+                            } else {
+                                args.push(arg_expr);
+                            }
                         } else if let TokenKind::Variable(var) = &next_token.kind {
                             let var_name = var.clone();
                             self.advance(); // Move to variable.
@@ -850,9 +866,6 @@ impl Parser {
                                 continue;
                             }
 
-                            let Some(last_arg) = args.pop() else {
-                                break;
-                            };
                             self.advance(); // Move to '.'
 
                             let mut suffix = Expr::String(".".to_string());
@@ -868,11 +881,15 @@ impl Parser {
                                 };
                             }
 
-                            args.push(Expr::Binary {
-                                op: BinaryOp::Add,
-                                left: Box::new(last_arg),
-                                right: Box::new(suffix),
-                            });
+                            if let Some(last_arg) = args.pop() {
+                                args.push(Expr::Binary {
+                                    op: BinaryOp::Add,
+                                    left: Box::new(last_arg),
+                                    right: Box::new(suffix),
+                                });
+                            } else {
+                                args.push(suffix);
+                            }
                         } else {
                             break;
                         }
@@ -1797,6 +1814,43 @@ mod tests {
     }
 
     #[test]
+    fn parses_command_with_contiguous_dot_path_argument() {
+        let body = parse_program("ls ./examples/");
+
+        let (identifier, args) = extract_call_parts(&body[0]);
+        assert_command_identifier(identifier, "ls");
+        assert_eq!(args.len(), 1);
+        assert!(
+            matches!(&args[0], Expr::String(s) if s == "./examples/")
+                || matches!(
+                    &args[0],
+                    Expr::Binary {
+                        op: BinaryOp::Add,
+                        ..
+                    }
+                )
+        );
+    }
+
+    #[test]
+    fn parses_command_with_contiguous_path_identifier() {
+        let body = parse_program("./examples/anonymous-functions.lsh");
+
+        let (identifier, args) = extract_call_parts(&body[0]);
+        assert_eq!(args.len(), 0);
+        assert!(
+            matches!(identifier, Expr::String(s) if s == "./examples/anonymous-functions.lsh")
+                || matches!(
+                    identifier,
+                    Expr::Binary {
+                        op: BinaryOp::Add,
+                        ..
+                    }
+                )
+        );
+    }
+
+    #[test]
     fn parses_command_with_stdout_redirection() {
         let body = parse_program("echo hello -> out.txt");
 
@@ -1978,6 +2032,18 @@ mod tests {
         else {
             panic!("Expected top-level binary add expression");
         };
+    }
+
+    #[test]
+    fn parses_function_declaration_target_as_variable() {
+        let body = parse_program("fn add(a, b) { return $a + $b; }");
+
+        let Statement::FunctionDeclaration { target, params, .. } = &body[0] else {
+            panic!("Expected function declaration");
+        };
+
+        assert!(matches!(target, Expr::Variable(name) if name == "add"));
+        assert_eq!(params, &vec!["a".to_string(), "b".to_string()]);
     }
 
     #[test]

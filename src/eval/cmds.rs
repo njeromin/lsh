@@ -4,7 +4,6 @@ use std::{
 };
 
 use lsh::IoStreamMode;
-use which::which;
 
 use crate::{
     builtins::{self},

@@ -21,6 +21,11 @@ pub enum EvalFlow {
     Return(Value),
 }
 
+struct EvalOutcome {
+    flow: EvalFlow,
+    last_status: i32,
+}
+
 #[derive(Default)]
 pub struct Scope {
     vars: HashMap<String, Value>,
@@ -278,19 +283,19 @@ impl Evaluator {
         &self.aliases
     }
 
-    pub fn evaluate(&mut self, prog: Program) {
-        let _ = self.evaluate_statements(&prog.body, &mut vec![0]);
+    pub fn evaluate(&mut self, prog: Program) -> i32 {
+        self.evaluate_statements(&prog.body, &mut vec![0]).last_status
     }
 
     fn evaluate_in_new_scope(
         &mut self,
         statements: &[Statement],
         scope_indices: &mut Vec<usize>,
-    ) -> EvalFlow {
+    ) -> EvalOutcome {
         let scope_index = self.make_scope();
         scope_indices.push(scope_index);
 
-        let flow = self.evaluate_statements(statements, scope_indices);
+        let outcome = self.evaluate_statements(statements, scope_indices);
 
         let popped_scope_index = scope_indices
             .pop()
@@ -305,26 +310,30 @@ impl Evaluator {
             .pop()
             .expect("Failed to pop evaluator scope after scoped evaluation.");
 
-        flow
+        outcome
     }
 
     fn evaluate_statements(
         &mut self,
         statements: &[Statement],
         scope_indices: &mut Vec<usize>,
-    ) -> EvalFlow {
+    ) -> EvalOutcome {
+        let mut last_status = 0;
+
         for statement in statements {
             match statement {
                 Statement::Expr(expr) => {
                     self.evaluate_expr(expr, false, scope_indices);
+                    last_status = 0;
                 }
                 Statement::Command(cmd_expr) => {
-                    let (_code, out, err) = self.evaluate_command_expr_with_input(
+                    let (code, out, err) = self.evaluate_command_expr_with_input(
                         cmd_expr,
                         vec![],
                         scope_indices,
                         false,
                     );
+                    last_status = code;
                     if !out.is_empty() {
                         use std::io::Write as _;
                         let _ = io::stdout().write_all(&out);
@@ -336,6 +345,7 @@ impl Evaluator {
                 }
                 Statement::Let { name, value } => {
                     let expr = self.evaluate_expr(value, true, scope_indices);
+                    last_status = 0;
 
                     if let Some(last_scope_index) = scope_indices.last()
                         && let Some(scope) = self.scopes.get_mut(*last_scope_index)
@@ -348,6 +358,7 @@ impl Evaluator {
                 Statement::Assign { target, value } => {
                     let assigned_value = self.evaluate_expr(value, true, scope_indices);
                     self.assign_target(target, assigned_value, scope_indices);
+                    last_status = 0;
                 }
                 Statement::If {
                     condition,
@@ -357,16 +368,25 @@ impl Evaluator {
                     let cond_res = self.evaluate_expr(condition, true, scope_indices);
 
                     if cond_res.is_truthy() {
-                        if let EvalFlow::Return(value) =
-                            self.evaluate_in_new_scope(then_branch, scope_indices)
-                        {
-                            return EvalFlow::Return(value);
+                        let outcome = self.evaluate_in_new_scope(then_branch, scope_indices);
+                        last_status = outcome.last_status;
+                        if let EvalFlow::Return(value) = outcome.flow {
+                            return EvalOutcome {
+                                flow: EvalFlow::Return(value),
+                                last_status,
+                            };
                         }
                     } else if let Some(else_branch_statements) = else_branch
-                        && let EvalFlow::Return(value) =
-                            self.evaluate_in_new_scope(else_branch_statements, scope_indices)
                     {
-                        return EvalFlow::Return(value);
+                        let outcome =
+                            self.evaluate_in_new_scope(else_branch_statements, scope_indices);
+                        last_status = outcome.last_status;
+                        if let EvalFlow::Return(value) = outcome.flow {
+                            return EvalOutcome {
+                                flow: EvalFlow::Return(value),
+                                last_status,
+                            };
+                        }
                     }
                 }
                 Statement::While { condition, body } => {
@@ -374,10 +394,13 @@ impl Evaluator {
                         .evaluate_expr(condition, true, scope_indices)
                         .is_truthy()
                     {
-                        if let EvalFlow::Return(value) =
-                            self.evaluate_in_new_scope(body, scope_indices)
-                        {
-                            return EvalFlow::Return(value);
+                        let outcome = self.evaluate_in_new_scope(body, scope_indices);
+                        last_status = outcome.last_status;
+                        if let EvalFlow::Return(value) = outcome.flow {
+                            return EvalOutcome {
+                                flow: EvalFlow::Return(value),
+                                last_status,
+                            };
                         }
                     }
                 }
@@ -391,6 +414,7 @@ impl Evaluator {
                         body: body.clone(),
                     });
                     self.assign_target(target, func_value, scope_indices);
+                    last_status = 0;
                 }
                 Statement::Return(maybe_expr) => {
                     let result = if let Some(expr) = maybe_expr {
@@ -399,19 +423,28 @@ impl Evaluator {
                         Value::Null
                     };
 
-                    return EvalFlow::Return(result);
+                    return EvalOutcome {
+                        flow: EvalFlow::Return(result),
+                        last_status,
+                    };
                 }
                 Statement::Block(block) => {
-                    if let EvalFlow::Return(value) =
-                        self.evaluate_in_new_scope(block, scope_indices)
-                    {
-                        return EvalFlow::Return(value);
+                    let outcome = self.evaluate_in_new_scope(block, scope_indices);
+                    last_status = outcome.last_status;
+                    if let EvalFlow::Return(value) = outcome.flow {
+                        return EvalOutcome {
+                            flow: EvalFlow::Return(value),
+                            last_status,
+                        };
                     }
                 }
             }
         }
 
-        EvalFlow::Continue
+        EvalOutcome {
+            flow: EvalFlow::Continue,
+            last_status,
+        }
     }
 
     fn make_scope(&mut self) -> usize {
@@ -826,7 +859,7 @@ impl Evaluator {
             panic!("Failed to create function call scope.");
         }
 
-        let flow = self.evaluate_statements(&func.body, scope_indices);
+        let outcome = self.evaluate_statements(&func.body, scope_indices);
 
         let popped_scope_index = scope_indices
             .pop()
@@ -841,7 +874,7 @@ impl Evaluator {
             .pop()
             .expect("Failed to pop evaluator scope after function call.");
 
-        match flow {
+        match outcome.flow {
             EvalFlow::Continue => Value::Null,
             EvalFlow::Return(value) => value,
         }

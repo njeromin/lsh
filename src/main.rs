@@ -5,13 +5,19 @@ use std::{
 };
 
 use crossterm::{cursor, queue};
-use rustyline::{DefaultEditor, config::Configurer, error::ReadlineError};
+use rustyline::{
+    Editor,
+    config::Configurer,
+    error::ReadlineError,
+    history::DefaultHistory,
+};
 
 use crate::{
     diagnostics::source_map::SourceMap,
     eval::{Evaluator, exec::exec_file, value::Value},
     options::Options,
     parser::Parser,
+    terminal::{editor::LineEditorHelper, osc},
 };
 
 pub mod builtins;
@@ -23,6 +29,7 @@ pub mod lexer;
 pub mod options;
 pub mod parser;
 pub mod paths;
+pub mod terminal;
 pub mod ui;
 
 const DEFAULT_PROMPT: &str = "\x1b[35m›\x1b[0m ";
@@ -67,7 +74,8 @@ fn interactive_session(
         ui::print_error(&mut cerr, e.to_string().as_str());
     }
 
-    let mut editor = DefaultEditor::new()?;
+    let mut editor = Editor::<LineEditorHelper, DefaultHistory>::new()?;
+    editor.set_helper(Some(LineEditorHelper::new()));
     let _ = editor.load_history(&config_dir.join("history.txt"));
     let mut last_applied_options: Option<Options> = None;
 
@@ -83,6 +91,11 @@ fn interactive_session(
                 editor.set_edit_mode(opts.edit_mode.into());
                 last_applied_options = Some(opts);
             }
+        }
+
+        osc::write_133("A");
+        if let Some(helper) = editor.helper() {
+            helper.reset_prompt_marks();
         }
 
         let input = match editor.readline(get_prompt(eval)) {
@@ -109,6 +122,7 @@ fn interactive_session(
             Ok(tokens) => tokens,
             Err(diag) => {
                 diagnostics::print_diagnostic(&mut cerr, &diag, src_map);
+                osc::write_133("D;1");
                 let _ = src_map.remove(src_id);
                 continue;
             }
@@ -121,6 +135,7 @@ fn interactive_session(
             Ok(prog) => prog,
             Err(diag) => {
                 diagnostics::print_diagnostic(&mut cerr, &diag, src_map);
+                osc::write_133("D;1");
                 let _ = src_map.remove(src_id);
                 continue;
             }
@@ -128,7 +143,9 @@ fn interactive_session(
 
         debug::print_parser(&prog);
 
-        eval.evaluate(prog);
+        osc::write_133("C");
+        let status = eval.evaluate(prog);
+        osc::write_133(&format!("D;{status}"));
         let _ = src_map.remove(src_id);
     }
 }
