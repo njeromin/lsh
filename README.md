@@ -95,15 +95,6 @@ DEBUG_LEXER=1 cargo run -q
 DEBUG_PARSER=1 cargo run -q
 ```
 
-## Repository layout
-
-- [`src/lexer`](./src/lexer): tokenization
-- [`src/parser`](./src/parser): AST + parsing
-- [`src/eval`](./src/eval): evaluator and command execution
-- [`src/builtins`](./src/builtins): builtin commands
-- [`examples`](./examples): script examples
-- [`nix`](./nix): flake modules for shell/build/checks
-
 ## Notes and current limits
 
 - This is not a POSIX shell implementation.
