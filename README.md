@@ -2,6 +2,8 @@
 
 `lsh` is a small non-POSIX compliant shell written in Rust. It supports command composition features like pipelines using `|`, `&&`/`||`, env-prefix assignments, and redirection using `->`.
 
+![lsh demo](assets/demo.gif)
+
 ## Quick start
 
 ### With Cargo
@@ -77,7 +79,7 @@ At startup, `lsh` looks for `config.lsh` in:
 - otherwise your platform config dir (`.../lsh/config.lsh`)
 - fallback: `./config/config.lsh`
 
-This repo includes a sample config at [`config/config.lsh`](./config/config.lsh) with prompt customization and aliases.
+This repo includes a sample config at [`config/config.lsh`](./config/config.lsh) with prompt customisation and aliases.
 
 ## Development
 
@@ -98,5 +100,4 @@ DEBUG_PARSER=1 cargo run -q
 ## Notes and current limits
 
 - This is not a POSIX shell implementation.
-- Quoting/word-splitting behavior is purpose-built and still being refined.
 - Redirection is handled differently to most shells using `->` instead of `>`.
