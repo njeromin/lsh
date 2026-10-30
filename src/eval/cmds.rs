@@ -11,7 +11,7 @@ use crate::{
     ui,
 };
 
-pub fn exec_cmd<R: io::Read, W: io::Write, WE: io::Write>(
+pub fn exec_cmd<R: io::Read + Send, W: io::Write + Send, WE: io::Write + Send>(
     evaluator: &mut Evaluator,
     cmd: &str,
     args: Vec<String>,
@@ -32,7 +32,7 @@ pub fn exec_cmd<R: io::Read, W: io::Write, WE: io::Write>(
     }
 }
 
-pub fn spawn_proc<R: io::Read, W: io::Write, WE: io::Write>(
+pub fn spawn_proc<R: io::Read + Send, W: io::Write + Send, WE: io::Write + Send>(
     cmd: &str,
     args: Vec<String>,
     env_assignments: &[(String, String)],
@@ -64,25 +64,51 @@ pub fn spawn_proc<R: io::Read, W: io::Write, WE: io::Write>(
 
     match c.spawn() {
         Ok(mut child) => {
-            if matches!(ctx.input_mode, IoStreamMode::Pipe)
-                && let Some(mut stdin) = child.stdin.take()
-            {
-                io::copy(&mut ctx.input, &mut stdin)?;
-            }
+            std::thread::scope(|s| {
+                if matches!(ctx.input_mode, IoStreamMode::Pipe)
+                    && let Some(mut stdin) = child.stdin.take()
+                {
+                    let input = &mut ctx.input;
+                    s.spawn(move || {
+                        let _ = io::copy(input, &mut stdin);
+                    });
+                }
 
-            if matches!(ctx.out_mode, IoStreamMode::Pipe)
-                && let Some(mut stdout) = child.stdout.take()
-            {
-                io::copy(&mut stdout, &mut ctx.out)?;
-            }
+                if matches!(ctx.out_mode, IoStreamMode::Pipe)
+                    && let Some(mut stdout) = child.stdout.take()
+                {
+                    let out = &mut ctx.out;
+                    s.spawn(move || {
+                        let _ = io::copy(&mut stdout, out);
+                    });
+                }
 
-            if matches!(ctx.err_mode, IoStreamMode::Pipe)
-                && let Some(mut stderr) = child.stderr.take()
-            {
-                io::copy(&mut stderr, &mut ctx.err)?;
-            }
+                if matches!(ctx.err_mode, IoStreamMode::Pipe)
+                    && let Some(mut stderr) = child.stderr.take()
+                {
+                    let err = &mut ctx.err;
+                    s.spawn(move || {
+                        let _ = io::copy(&mut stderr, err);
+                    });
+                }
+            });
 
-            Ok(child.wait()?.code().unwrap_or(0))
+            let status = child.wait()?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::process::ExitStatusExt;
+                if let Some(code) = status.code() {
+                    Ok(code)
+                } else if let Some(sig) = status.signal() {
+                    Ok(128 + sig)
+                } else {
+                    Ok(1)
+                }
+            }
+            #[cfg(not(unix))]
+            {
+                Ok(status.code().unwrap_or(1))
+            }
         }
         Err(e) => {
             // TODO: Errors could probably be handled more cleanly.
