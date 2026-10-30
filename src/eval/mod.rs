@@ -26,6 +26,13 @@ struct EvalOutcome {
     last_status: i32,
 }
 
+struct ExternalPipelineStage {
+    cmd: String,
+    args: Vec<String>,
+    env_assignments: Vec<(String, String)>,
+    stdout_redirect: Option<String>,
+}
+
 #[derive(Default)]
 pub struct Scope {
     vars: HashMap<String, Value>,
@@ -34,6 +41,7 @@ pub struct Scope {
 pub struct Evaluator {
     scopes: Vec<Scope>,
     aliases: HashMap<String, String>,
+    pub last_status: i32,
 }
 
 impl Evaluator {
@@ -41,6 +49,7 @@ impl Evaluator {
         Evaluator {
             scopes: vec![Scope::default()],
             aliases: HashMap::new(),
+            last_status: 0,
         }
     }
 
@@ -324,7 +333,7 @@ impl Evaluator {
             match statement {
                 Statement::Expr(expr) => {
                     self.evaluate_expr(expr, false, scope_indices);
-                    last_status = 0;
+                    last_status = self.last_status;
                 }
                 Statement::Command(cmd_expr) => {
                     let (code, out, err) = self.evaluate_command_expr_with_input(
@@ -334,6 +343,7 @@ impl Evaluator {
                         false,
                     );
                     last_status = code;
+                    self.last_status = code;
                     if !out.is_empty() {
                         use std::io::Write as _;
                         let _ = io::stdout().write_all(&out);
@@ -494,6 +504,270 @@ impl Evaluator {
         } else {
             (0, output, vec![])
         }
+    }
+
+    fn try_execute_streaming_pipeline(
+        &mut self,
+        stages: &[CommandExpr],
+        input: Vec<u8>,
+        scope_indices: &mut Vec<usize>,
+        capture_output: bool,
+    ) -> Option<(i32, Vec<u8>, Vec<u8>)> {
+        if stages.len() < 2 {
+            return None;
+        }
+
+        let mut resolved_stages = Vec::with_capacity(stages.len());
+
+        for (stage_idx, stage) in stages.iter().enumerate() {
+            let CommandExpr::Call {
+                env_assignments,
+                identifier,
+                args,
+                stdout_redirect,
+            } = stage
+            else {
+                return None;
+            };
+
+            // Intermediate stages must not have their own file redirection.
+            if stage_idx + 1 < stages.len() && stdout_redirect.is_some() {
+                return None;
+            }
+
+            let temp_scope_index = self.make_scope();
+            scope_indices.push(temp_scope_index);
+
+            let mut env_assignment_values = vec![];
+            for (name, value_expr) in env_assignments {
+                let value = self
+                    .evaluate_expr(value_expr, true, scope_indices)
+                    .to_string();
+                self.push_var(temp_scope_index, name.clone(), Value::String(value.clone()));
+                env_assignment_values.push((name.clone(), value));
+            }
+
+            let stdout_redirect_path =
+                self.resolve_stdout_redirect_path(stdout_redirect, scope_indices);
+
+            let identifier_val = self.evaluate_expr(identifier, true, scope_indices);
+
+            let popped = scope_indices.pop();
+            if popped != Some(temp_scope_index) {
+                panic!("Scope stack mismatch");
+            }
+            self.scopes.pop();
+
+            if matches!(identifier_val, Value::Function(_)) {
+                return None;
+            }
+
+            let identifier_str = identifier_val.to_string();
+            if self
+                .resolve_named_value(&identifier_str, scope_indices)
+                .is_some_and(|v| matches!(v, Value::Function(_)))
+            {
+                return None;
+            }
+
+            if crate::builtins::lookup(&identifier_str).is_some() {
+                return None;
+            }
+
+            let (res_cmd, res_args) = self.resolve_command(identifier_str);
+            let all_args = self.build_command_args(res_args, args, scope_indices);
+
+            resolved_stages.push(ExternalPipelineStage {
+                cmd: res_cmd,
+                args: all_args,
+                env_assignments: env_assignment_values,
+                stdout_redirect: stdout_redirect_path,
+            });
+        }
+
+        Some(self.execute_external_pipeline(resolved_stages, input, capture_output))
+    }
+
+    fn execute_external_pipeline(
+        &mut self,
+        stages: Vec<ExternalPipelineStage>,
+        input: Vec<u8>,
+        capture_output: bool,
+    ) -> (i32, Vec<u8>, Vec<u8>) {
+        use std::process::{Command, Stdio};
+
+        let total_stages = stages.len();
+        if total_stages == 0 {
+            return (0, vec![], vec![]);
+        }
+
+        let mut children: Vec<std::process::Child> = Vec::with_capacity(total_stages);
+        let mut prev_stdout: Option<std::process::ChildStdout> = None;
+
+        for (i, stage) in stages.into_iter().enumerate() {
+            let is_first = i == 0;
+            let is_last = i + 1 == total_stages;
+
+            let mut c = Command::new(&stage.cmd);
+            c.args(stage.args);
+            c.envs(
+                stage
+                    .env_assignments
+                    .iter()
+                    .map(|(k, v)| (k.as_str(), v.as_str())),
+            );
+
+            // Stdin
+            if is_first {
+                if !input.is_empty() {
+                    c.stdin(Stdio::piped());
+                } else {
+                    c.stdin(Stdio::inherit());
+                }
+            } else {
+                let stdin_source = prev_stdout
+                    .take()
+                    .expect("Previous stage stdout must be available");
+                c.stdin(Stdio::from(stdin_source));
+            }
+
+            // Stdout
+            if !is_last {
+                c.stdout(Stdio::piped());
+            } else if let Some(redirect_path) = stage.stdout_redirect {
+                match File::create(&redirect_path) {
+                    Ok(file) => {
+                        c.stdout(Stdio::from(file));
+                    }
+                    Err(e) => {
+                        for mut child in children {
+                            let _ = child.kill();
+                            let _ = child.wait();
+                        }
+                        return (-1, vec![], e.to_string().into_bytes());
+                    }
+                }
+            } else if capture_output {
+                c.stdout(Stdio::piped());
+            } else {
+                c.stdout(Stdio::inherit());
+            }
+
+            // Stderr
+            if capture_output {
+                c.stderr(Stdio::piped());
+            } else {
+                c.stderr(Stdio::inherit());
+            }
+
+            match c.spawn() {
+                Ok(mut child) => {
+                    if !is_last {
+                        prev_stdout = child.stdout.take();
+                    }
+                    children.push(child);
+                }
+                Err(e) => {
+                    for mut child in children {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                    }
+                    let err_msg = if e.kind() == io::ErrorKind::NotFound {
+                        format!("Command '{}' not found.", stage.cmd)
+                    } else {
+                        e.to_string()
+                    };
+                    if !capture_output {
+                        let mut cerr = io::stderr();
+                        crate::ui::print_error(&mut cerr, &err_msg);
+                        return (-1, vec![], vec![]);
+                    } else {
+                        return (-1, vec![], err_msg.into_bytes());
+                    }
+                }
+            }
+        }
+
+        let mut captured_out = Vec::new();
+        let mut captured_err = Vec::new();
+
+        std::thread::scope(|s| {
+            if !input.is_empty()
+                && !children.is_empty()
+                && let Some(mut stdin) = children[0].stdin.take()
+            {
+                s.spawn(move || {
+                    let _ = io::copy(&mut io::Cursor::new(input), &mut stdin);
+                });
+            }
+
+            let stdout_handle = if capture_output && !children.is_empty() {
+                children.last_mut().unwrap().stdout.take().map(|mut stdout| {
+                    s.spawn(move || {
+                        let mut buf = Vec::new();
+                        let _ = io::copy(&mut stdout, &mut buf);
+                        buf
+                    })
+                })
+            } else {
+                None
+            };
+
+            let mut stderr_handles = Vec::new();
+            if capture_output {
+                for child in &mut children {
+                    if let Some(mut stderr) = child.stderr.take() {
+                        stderr_handles.push(s.spawn(move || {
+                            let mut buf = Vec::new();
+                            let _ = io::copy(&mut stderr, &mut buf);
+                            buf
+                        }));
+                    }
+                }
+            }
+
+            if let Some(handle) = stdout_handle
+                && let Ok(out) = handle.join()
+            {
+                captured_out = out;
+            }
+
+            for handle in stderr_handles {
+                if let Ok(err) = handle.join() {
+                    captured_err.extend(err);
+                }
+            }
+        });
+
+        let mut last_code = 0;
+        for (i, mut child) in children.into_iter().enumerate() {
+            let code = match child.wait() {
+                Ok(status) => {
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::process::ExitStatusExt;
+                        if let Some(c) = status.code() {
+                            c
+                        } else if let Some(sig) = status.signal() {
+                            128 + sig
+                        } else {
+                            1
+                        }
+                    }
+                    #[cfg(not(unix))]
+                    {
+                        status.code().unwrap_or(1)
+                    }
+                }
+                Err(_) => -1,
+            };
+
+            if i + 1 == total_stages {
+                last_code = code;
+            }
+        }
+
+        (last_code, captured_out, captured_err)
     }
 
     fn execute_external_command(
@@ -666,6 +940,15 @@ impl Evaluator {
                 result
             }
             CommandExpr::Pipeline(stages) => {
+                if let Some(res) = self.try_execute_streaming_pipeline(
+                    stages,
+                    input.clone(),
+                    scope_indices,
+                    capture_output,
+                ) {
+                    return res;
+                }
+
                 let mut piped_input = input;
                 let mut final_code = 0;
                 let mut combined_err = vec![];
@@ -915,7 +1198,8 @@ impl Evaluator {
 
                 let mut io = lsh::IoCtx::<io::Stdin, io::Stdout, io::Stderr>::default();
 
-                cmds::exec_cmd(self, &res_cmd, args, &[], &mut io);
+                let code = cmds::exec_cmd(self, &res_cmd, args, &[], &mut io);
+                self.last_status = code;
 
                 Value::Null
             }
@@ -932,7 +1216,8 @@ impl Evaluator {
                 }
 
                 let mut io = lsh::IoCtx::<io::Stdin, io::Stdout, io::Stderr>::default();
-                cmds::exec_cmd(self, &res_cmd, args, &[], &mut io);
+                let code = cmds::exec_cmd(self, &res_cmd, args, &[], &mut io);
+                self.last_status = code;
 
                 Value::Null
             }
@@ -1164,5 +1449,31 @@ impl Evaluator {
 impl Default for Evaluator {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{lexer, parser::Parser};
+
+    fn eval_str(code: &str) -> i32 {
+        let tokens = lexer::lex_input(0, code).expect("lex error");
+        let mut parser = Parser::new(0, tokens);
+        let prog = parser.parse_program().expect("parse error");
+        let mut eval = Evaluator::new().with_globals();
+        eval.evaluate(prog)
+    }
+
+    #[test]
+    fn cd_failure_returns_non_zero_and_stops_and_chain() {
+        let status = eval_str("cd /nonexistent_directory_12345 && cd /");
+        assert_eq!(status, 1);
+    }
+
+    #[test]
+    fn pipeline_streaming_returns_last_stage_exit_code() {
+        let status = eval_str("echo 'test stream' | cat");
+        assert_eq!(status, 0);
     }
 }
