@@ -12,6 +12,7 @@ pub enum EditMode {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CompletionType {
+    Menu,
     List,
     Circular,
 }
@@ -19,6 +20,7 @@ pub enum CompletionType {
 impl fmt::Display for CompletionType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            CompletionType::Menu => write!(f, "menu"),
             CompletionType::List => write!(f, "list"),
             CompletionType::Circular => write!(f, "circular"),
         }
@@ -29,7 +31,8 @@ impl From<&str> for CompletionType {
     fn from(s: &str) -> Self {
         match s {
             "circular" => CompletionType::Circular,
-            _ => CompletionType::List,
+            "list" => CompletionType::List,
+            _ => CompletionType::Menu,
         }
     }
 }
@@ -37,7 +40,7 @@ impl From<&str> for CompletionType {
 impl From<CompletionType> for rustyline::CompletionType {
     fn from(value: CompletionType) -> Self {
         match value {
-            CompletionType::List => rustyline::CompletionType::List,
+            CompletionType::Menu | CompletionType::List => rustyline::CompletionType::List,
             CompletionType::Circular => rustyline::CompletionType::Circular,
         }
     }
@@ -86,7 +89,7 @@ impl Default for Options {
         Self {
             tab_stop: 4,
             edit_mode: EditMode::Default,
-            completion_type: CompletionType::List,
+            completion_type: CompletionType::Menu,
         }
     }
 }
@@ -139,7 +142,7 @@ impl From<&HashMap<String, Value>> for Options {
                 Value::String(s) => Some(CompletionType::from(s.as_str())),
                 _ => None,
             })
-            .unwrap_or(CompletionType::List);
+            .unwrap_or(CompletionType::Menu);
 
         Self {
             tab_stop,

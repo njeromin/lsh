@@ -97,6 +97,9 @@ fn interactive_session(
                 editor.set_tab_stop(opts.tab_stop);
                 editor.set_edit_mode(opts.edit_mode.into());
                 editor.set_completion_type(opts.completion_type.into());
+                if let Some(helper) = editor.helper_mut() {
+                    helper.set_completion_type(opts.completion_type);
+                }
                 last_applied_options = Some(opts);
             }
         }

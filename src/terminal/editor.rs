@@ -1,16 +1,19 @@
 use std::borrow::Cow;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
 
 use rustyline::{
     Context, Helper,
-    completion::{Candidate, Completer, FilenameCompleter, Pair},
+    completion::{Completer, FilenameCompleter, Pair},
     highlight::{CmdKind, Highlighter},
     hint::{Hinter, HistoryHinter},
     validate::Validator,
 };
 
+use crate::options::CompletionType;
 use crate::terminal::{
     highlight::SyntaxHighlighter,
+    menu::{self, CompletionItem, CompletionKind},
     osc::{self, Osc133PromptHighlighter},
 };
 
@@ -139,6 +142,7 @@ pub struct LineEditorHelper {
     cached_binaries: Vec<String>,
     cached_aliases: Vec<String>,
     cached_vars: Vec<String>,
+    pub completion_type: CompletionType,
 }
 
 impl Default for LineEditorHelper {
@@ -157,7 +161,12 @@ impl LineEditorHelper {
             cached_binaries: scan_path_binaries(),
             cached_aliases: Vec::new(),
             cached_vars: Vec::new(),
+            completion_type: CompletionType::Menu,
         }
+    }
+
+    pub fn set_completion_type(&mut self, completion_type: CompletionType) {
+        self.completion_type = completion_type;
     }
 
     pub fn set_aliases(&mut self, aliases: Vec<String>) {
@@ -171,48 +180,45 @@ impl LineEditorHelper {
     pub fn reset_prompt_marks(&self) {
         self.osc133.reset_prompt_marks();
     }
-}
 
-impl Completer for LineEditorHelper {
-    type Candidate = Pair;
-
-    fn complete(
+    pub fn get_candidates(
         &self,
         line: &str,
         pos: usize,
         ctx: &Context<'_>,
-    ) -> rustyline::Result<(usize, Vec<Pair>)> {
+    ) -> rustyline::Result<(usize, Vec<CompletionItem>)> {
         match classify_completion_context(line, pos) {
             CompletionContext::Command { prefix, start } => {
-                let mut candidates = BTreeSet::new();
+                let mut map = BTreeMap::new();
 
-                for &builtin in crate::builtins::BUILTIN_NAMES {
-                    if builtin.starts_with(prefix) {
-                        candidates.insert(builtin.to_string());
+                for binary in &self.cached_binaries {
+                    if binary.starts_with(prefix) {
+                        map.insert(binary.clone(), CompletionKind::Binary);
                     }
                 }
 
                 for alias in &self.cached_aliases {
                     if alias.starts_with(prefix) {
-                        candidates.insert(alias.clone());
+                        map.insert(alias.clone(), CompletionKind::Alias);
                     }
                 }
 
-                for binary in &self.cached_binaries {
-                    if binary.starts_with(prefix) {
-                        candidates.insert(binary.clone());
+                for &builtin in crate::builtins::BUILTIN_NAMES {
+                    if builtin.starts_with(prefix) {
+                        map.insert(builtin.to_string(), CompletionKind::Builtin);
                     }
                 }
 
-                let pairs = candidates
+                let items = map
                     .into_iter()
-                    .map(|c| Pair {
-                        display: c.clone(),
-                        replacement: c,
+                    .map(|(name, kind)| CompletionItem {
+                        replacement: name.clone(),
+                        display: name,
+                        kind,
                     })
                     .collect();
 
-                Ok((start, pairs))
+                Ok((start, items))
             }
             CompletionContext::Variable { prefix, start } => {
                 let mut candidates = BTreeSet::new();
@@ -229,17 +235,74 @@ impl Completer for LineEditorHelper {
                     }
                 }
 
-                let pairs = candidates
+                let items = candidates
                     .into_iter()
-                    .map(|c| Pair {
-                        display: c.clone(),
-                        replacement: c,
+                    .map(|c| CompletionItem {
+                        replacement: c.clone(),
+                        display: c,
+                        kind: CompletionKind::Variable,
                     })
                     .collect();
 
-                Ok((start, pairs))
+                Ok((start, items))
             }
-            CompletionContext::Path => self.file_completer.complete(line, pos, ctx),
+            CompletionContext::Path => {
+                let (start, pairs) = self.file_completer.complete(line, pos, ctx)?;
+                let items = pairs
+                    .into_iter()
+                    .map(|p| {
+                        let is_dir = p.replacement.ends_with('/')
+                            || p.display.ends_with('/')
+                            || Path::new(&p.replacement).is_dir();
+                        let kind = if is_dir {
+                            CompletionKind::Directory
+                        } else {
+                            CompletionKind::File
+                        };
+                        CompletionItem {
+                            replacement: p.replacement,
+                            display: p.display,
+                            kind,
+                        }
+                    })
+                    .collect();
+                Ok((start, items))
+            }
+        }
+    }
+}
+
+impl Completer for LineEditorHelper {
+    type Candidate = Pair;
+
+    fn complete(
+        &self,
+        line: &str,
+        pos: usize,
+        ctx: &Context<'_>,
+    ) -> rustyline::Result<(usize, Vec<Pair>)> {
+        let (start, items) = self.get_candidates(line, pos, ctx)?;
+        if items.is_empty() {
+            return Ok((start, Vec::new()));
+        }
+
+        if self.completion_type == CompletionType::Menu && items.len() > 1 {
+            match menu::show_completion_menu(&items, 7) {
+                Some(idx) => Ok((start, vec![Pair {
+                    display: items[idx].display.clone(),
+                    replacement: items[idx].replacement.clone(),
+                }])),
+                None => Ok((start, Vec::new())),
+            }
+        } else {
+            let pairs = items
+                .into_iter()
+                .map(|item| Pair {
+                    display: item.display,
+                    replacement: item.replacement,
+                })
+                .collect();
+            Ok((start, pairs))
         }
     }
 }
@@ -256,10 +319,10 @@ impl Hinter for LineEditorHelper {
         // 2. Fallback: single / top completion candidate when typing at the end of the line
         if !line.is_empty()
             && pos == line.len()
-            && let Ok((start, candidates)) = self.complete(line, pos, ctx)
-            && !candidates.is_empty()
+            && let Ok((start, items)) = self.get_candidates(line, pos, ctx)
+            && !items.is_empty()
         {
-            let replacement = candidates[0].replacement();
+            let replacement = &items[0].replacement;
             let typed_prefix = &line[start..pos];
             if replacement.starts_with(typed_prefix)
                 && replacement.len() > typed_prefix.len()
@@ -399,16 +462,7 @@ mod tests {
 
     #[test]
     fn formats_ghost_text_with_dimmed_ansi_style() {
-        let helper = LineEditorHelper {
-            osc133: Osc133PromptHighlighter::new(false),
-            syntax: SyntaxHighlighter::new(),
-            file_completer: FilenameCompleter::new(),
-            history_hinter: HistoryHinter::new(),
-            cached_binaries: Vec::new(),
-            cached_aliases: Vec::new(),
-            cached_vars: Vec::new(),
-        };
-
+        let helper = LineEditorHelper::new();
         let hint = helper.highlight_hint("eckout main");
         assert_eq!(hint, "\x1b[38;5;242meckout main\x1b[0m");
     }
@@ -418,6 +472,7 @@ mod tests {
         use rustyline::history::DefaultHistory;
 
         let mut helper = LineEditorHelper::new();
+        helper.set_completion_type(CompletionType::List);
         helper.cached_binaries = vec!["cargo".to_string(), "cat".to_string()];
         helper.set_aliases(vec!["co".to_string()]);
 
@@ -432,6 +487,46 @@ mod tests {
         assert!(names.contains(&"co".to_string())); // Alias
         assert!(names.contains(&"cargo".to_string())); // Binary
         assert!(names.contains(&"cat".to_string())); // Binary
+    }
+
+    #[test]
+    fn candidates_have_correct_category_badges() {
+        use rustyline::history::DefaultHistory;
+
+        let mut helper = LineEditorHelper::new();
+        helper.cached_binaries = vec!["cargo".to_string()];
+        helper.set_aliases(vec!["co".to_string()]);
+
+        let history = DefaultHistory::new();
+        let ctx = Context::new(&history);
+
+        let (start, items) = helper.get_candidates("c", 1, &ctx).expect("completion failed");
+        assert_eq!(start, 0);
+
+        let builtin_item = items.iter().find(|it| it.replacement == "cd").unwrap();
+        assert_eq!(builtin_item.kind, CompletionKind::Builtin);
+
+        let alias_item = items.iter().find(|it| it.replacement == "co").unwrap();
+        assert_eq!(alias_item.kind, CompletionKind::Alias);
+
+        let bin_item = items.iter().find(|it| it.replacement == "cargo").unwrap();
+        assert_eq!(bin_item.kind, CompletionKind::Binary);
+    }
+
+    #[test]
+    fn completes_with_menu_type_returns_single_selected_item() {
+        use rustyline::history::DefaultHistory;
+
+        let mut helper = LineEditorHelper::new();
+        helper.cached_binaries = vec!["cargo".to_string(), "cat".to_string()];
+
+        let history = DefaultHistory::new();
+        let ctx = Context::new(&history);
+
+        let (start, candidates) = helper.complete("c", 1, &ctx).expect("completion failed");
+        assert_eq!(start, 0);
+        // In non-interactive test environment, menu resolves to 1 candidate
+        assert_eq!(candidates.len(), 1);
     }
 
     #[test]
