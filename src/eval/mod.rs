@@ -309,6 +309,14 @@ impl Evaluator {
         &self.aliases
     }
 
+    pub fn get_var_names(&self) -> Vec<String> {
+        let mut vars = Vec::new();
+        for scope in &self.scopes {
+            vars.extend(scope.vars.keys().cloned());
+        }
+        vars
+    }
+
     pub fn evaluate(&mut self, prog: Program) -> i32 {
         self.evaluate_statements(&prog.body, &mut vec![0]).last_status
     }

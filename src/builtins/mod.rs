@@ -11,6 +11,8 @@ pub mod source;
 
 // pub type BuiltinFn<R, W, WE> = fn(&mut Evaluator, &mut lsh::IoCtx<R, W, WE>, Vec<String>);
 
+pub const BUILTIN_NAMES: &[&str] = &["exit", "source", "exec", "alias", "cd", "fmt-cwd"];
+
 pub enum BuiltinKind {
     Exit,
     Source,

@@ -6,7 +6,7 @@ use std::{
 
 use crossterm::{cursor, queue};
 use rustyline::{
-    Editor,
+    CompletionType, Config, Editor,
     config::Configurer,
     error::ReadlineError,
     history::DefaultHistory,
@@ -76,7 +76,10 @@ fn interactive_session(
         ui::print_error(&mut cerr, e.to_string().as_str());
     }
 
-    let mut editor = Editor::<LineEditorHelper, DefaultHistory>::new()?;
+    let config = Config::builder()
+        .completion_type(CompletionType::List)
+        .build();
+    let mut editor = Editor::<LineEditorHelper, DefaultHistory>::with_config(config)?;
     editor.set_helper(Some(LineEditorHelper::new()));
     let _ = editor.load_history(&config_dir.join("history.txt"));
     let mut last_applied_options: Option<Options> = None;
@@ -93,13 +96,17 @@ fn interactive_session(
             if last_applied_options.as_ref() != Some(&opts) {
                 editor.set_tab_stop(opts.tab_stop);
                 editor.set_edit_mode(opts.edit_mode.into());
+                editor.set_completion_type(opts.completion_type.into());
                 last_applied_options = Some(opts);
             }
         }
 
         osc::write_133("A");
-        if let Some(helper) = editor.helper() {
+        if let Some(helper) = editor.helper_mut() {
             helper.reset_prompt_marks();
+            let aliases = eval.get_aliases().keys().cloned().collect();
+            helper.set_aliases(aliases);
+            helper.set_vars(eval.get_var_names());
         }
 
         let input = match editor.readline(get_prompt(eval)) {

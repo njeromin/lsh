@@ -10,6 +10,39 @@ pub enum EditMode {
     Vi,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompletionType {
+    List,
+    Circular,
+}
+
+impl fmt::Display for CompletionType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            CompletionType::List => write!(f, "list"),
+            CompletionType::Circular => write!(f, "circular"),
+        }
+    }
+}
+
+impl From<&str> for CompletionType {
+    fn from(s: &str) -> Self {
+        match s {
+            "circular" => CompletionType::Circular,
+            _ => CompletionType::List,
+        }
+    }
+}
+
+impl From<CompletionType> for rustyline::CompletionType {
+    fn from(value: CompletionType) -> Self {
+        match value {
+            CompletionType::List => rustyline::CompletionType::List,
+            CompletionType::Circular => rustyline::CompletionType::Circular,
+        }
+    }
+}
+
 impl fmt::Display for EditMode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -45,6 +78,7 @@ impl From<EditMode> for rustyline::EditMode {
 pub struct Options {
     pub tab_stop: u8,
     pub edit_mode: EditMode,
+    pub completion_type: CompletionType,
 }
 
 impl Default for Options {
@@ -52,6 +86,7 @@ impl Default for Options {
         Self {
             tab_stop: 4,
             edit_mode: EditMode::Default,
+            completion_type: CompletionType::List,
         }
     }
 }
@@ -64,6 +99,10 @@ impl From<Options> for HashMap<String, Value> {
         map.insert(
             "edit_mode".to_string(),
             Value::String(value.edit_mode.to_string()),
+        );
+        map.insert(
+            "completion_type".to_string(),
+            Value::String(value.completion_type.to_string()),
         );
 
         map
@@ -94,9 +133,18 @@ impl From<&HashMap<String, Value>> for Options {
             })
             .unwrap_or(EditMode::Default);
 
+        let completion_type = map
+            .get("completion_type")
+            .and_then(|v| match v {
+                Value::String(s) => Some(CompletionType::from(s.as_str())),
+                _ => None,
+            })
+            .unwrap_or(CompletionType::List);
+
         Self {
             tab_stop,
             edit_mode,
+            completion_type,
         }
     }
 }
