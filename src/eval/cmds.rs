@@ -61,8 +61,26 @@ pub fn spawn_proc<R: io::Read + Send, W: io::Write + Send, WE: io::Write + Send>
         IoStreamMode::Null => Stdio::null(),
     });
 
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        if crate::terminal::signals::is_interactive_tty() {
+            c.process_group(0);
+        }
+    }
+
     match c.spawn() {
         Ok(mut child) => {
+            let child_pid = child.id() as i32;
+            let is_foreground = matches!(ctx.input_mode, IoStreamMode::Inherit)
+                || matches!(ctx.out_mode, IoStreamMode::Inherit);
+
+            let _guard = if is_foreground && crate::terminal::signals::is_interactive_tty() {
+                crate::terminal::signals::TerminalForegroundGuard::give_to_pgid(child_pid)
+            } else {
+                crate::terminal::signals::TerminalForegroundGuard::inactive()
+            };
+
             std::thread::scope(|s| {
                 if matches!(ctx.input_mode, IoStreamMode::Pipe)
                     && let Some(mut stdin) = child.stdin.take()
@@ -99,7 +117,11 @@ pub fn spawn_proc<R: io::Read + Send, W: io::Write + Send, WE: io::Write + Send>
                 if let Some(code) = status.code() {
                     Ok(code)
                 } else if let Some(sig) = status.signal() {
-                    Ok(128 + sig)
+                    if sig == libc::SIGINT {
+                        use std::io::Write as _;
+                        let _ = writeln!(io::stderr());
+                    }
+                    Ok(crate::terminal::signals::signal_exit_code(sig))
                 } else {
                     Ok(1)
                 }

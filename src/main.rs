@@ -67,6 +67,8 @@ fn interactive_session(
     src_map: &mut SourceMap,
     config_dir: &Path,
 ) -> rustyline::Result<()> {
+    terminal::signals::init_interactive_terminal();
+
     let mut cout = io::stdout();
     let mut cerr = io::stderr();
 
@@ -80,6 +82,8 @@ fn interactive_session(
     let mut last_applied_options: Option<Options> = None;
 
     loop {
+        terminal::signals::reset_interrupted();
+
         if let Some(opts) = eval.get_var(0, "options").and_then(|v| match v {
             Value::Object(opts) => Some(opts),
             _ => None,
@@ -109,7 +113,10 @@ fn interactive_session(
 
                 line.to_owned()
             }
-            Err(ReadlineError::Interrupted) => continue,
+            Err(ReadlineError::Interrupted) => {
+                terminal::signals::reset_interrupted();
+                continue;
+            }
             Err(e) => {
                 ui::print_error(&mut cerr, e.to_string().as_str());
                 continue;

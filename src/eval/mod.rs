@@ -2,13 +2,23 @@ pub mod cmds;
 pub mod exec;
 pub mod value;
 
-use std::{collections::HashMap, env, fs::File, io};
+use std::{
+    collections::HashMap,
+    env,
+    fs::File,
+    io,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 
 use crate::{
     eval::value::{FunctionValue, Value},
     expand::{self, ExpandCtx},
     options::Options,
     parser::ast::{BinaryOp, CommandExpr, Expr, Program, Statement},
+    terminal::signals::{STATUS_SIGINT, signal_exit_code},
 };
 
 #[derive(Debug)]
@@ -42,6 +52,7 @@ pub struct Evaluator {
     scopes: Vec<Scope>,
     aliases: HashMap<String, String>,
     pub last_status: i32,
+    pub interrupted: Arc<AtomicBool>,
 }
 
 impl Evaluator {
@@ -50,7 +61,13 @@ impl Evaluator {
             scopes: vec![Scope::default()],
             aliases: HashMap::new(),
             last_status: 0,
+            interrupted: crate::terminal::signals::get_interrupt_flag(),
         }
+    }
+
+    pub fn with_interrupt_flag(mut self, flag: Arc<AtomicBool>) -> Evaluator {
+        self.interrupted = flag;
+        self
     }
 
     pub fn with_globals(mut self) -> Evaluator {
@@ -330,6 +347,14 @@ impl Evaluator {
         let mut last_status = 0;
 
         for statement in statements {
+            if self.interrupted.swap(false, Ordering::Relaxed) {
+                self.last_status = STATUS_SIGINT;
+                return EvalOutcome {
+                    flow: EvalFlow::Return(Value::Null),
+                    last_status: STATUS_SIGINT,
+                };
+            }
+
             match statement {
                 Statement::Expr(expr) => {
                     self.evaluate_expr(expr, false, scope_indices);
@@ -351,6 +376,12 @@ impl Evaluator {
                     if !err.is_empty() {
                         use std::io::Write as _;
                         let _ = io::stderr().write_all(&err);
+                    }
+                    if code == STATUS_SIGINT || self.interrupted.swap(false, Ordering::Relaxed) {
+                        return EvalOutcome {
+                            flow: EvalFlow::Return(Value::Null),
+                            last_status: STATUS_SIGINT,
+                        };
                     }
                 }
                 Statement::Let { name, value } => {
@@ -404,8 +435,21 @@ impl Evaluator {
                         .evaluate_expr(condition, true, scope_indices)
                         .is_truthy()
                     {
+                        if self.interrupted.swap(false, Ordering::Relaxed) {
+                            self.last_status = STATUS_SIGINT;
+                            last_status = STATUS_SIGINT;
+                            break;
+                        }
+
                         let outcome = self.evaluate_in_new_scope(body, scope_indices);
                         last_status = outcome.last_status;
+                        if outcome.last_status == STATUS_SIGINT
+                            || self.interrupted.swap(false, Ordering::Relaxed)
+                        {
+                            self.last_status = STATUS_SIGINT;
+                            last_status = STATUS_SIGINT;
+                            break;
+                        }
                         if let EvalFlow::Return(value) = outcome.flow {
                             return EvalOutcome {
                                 flow: EvalFlow::Return(value),
@@ -611,6 +655,7 @@ impl Evaluator {
 
         let mut children: Vec<std::process::Child> = Vec::with_capacity(total_stages);
         let mut prev_stdout: Option<std::process::ChildStdout> = None;
+        let mut leader_pid: i32 = 0;
 
         for (i, stage) in stages.into_iter().enumerate() {
             let is_first = i == 0;
@@ -624,6 +669,18 @@ impl Evaluator {
                     .iter()
                     .map(|(k, v)| (k.as_str(), v.as_str())),
             );
+
+            #[cfg(unix)]
+            {
+                use std::os::unix::process::CommandExt;
+                if crate::terminal::signals::is_interactive_tty() {
+                    if is_first {
+                        c.process_group(0);
+                    } else {
+                        c.process_group(leader_pid);
+                    }
+                }
+            }
 
             // Stdin
             if is_first {
@@ -670,6 +727,9 @@ impl Evaluator {
 
             match c.spawn() {
                 Ok(mut child) => {
+                    if is_first {
+                        leader_pid = child.id() as i32;
+                    }
                     if !is_last {
                         prev_stdout = child.stdout.take();
                     }
@@ -695,6 +755,12 @@ impl Evaluator {
                 }
             }
         }
+
+        let _guard = if !capture_output && crate::terminal::signals::is_interactive_tty() {
+            crate::terminal::signals::TerminalForegroundGuard::give_to_pgid(leader_pid)
+        } else {
+            crate::terminal::signals::TerminalForegroundGuard::inactive()
+        };
 
         let mut captured_out = Vec::new();
         let mut captured_err = Vec::new();
@@ -757,7 +823,11 @@ impl Evaluator {
                         if let Some(c) = status.code() {
                             c
                         } else if let Some(sig) = status.signal() {
-                            128 + sig
+                            if sig == libc::SIGINT && !capture_output {
+                                use std::io::Write as _;
+                                let _ = writeln!(io::stderr());
+                            }
+                            signal_exit_code(sig)
                         } else {
                             1
                         }
@@ -1477,12 +1547,56 @@ mod tests {
     }
 
     fn eval_var(code: &str, var_name: &str) -> Option<Value> {
+        let (eval, _) = eval_with_evaluator(code);
+        eval.scopes.first().and_then(|s| s.vars.get(var_name).cloned())
+    }
+
+    fn eval_with_evaluator(code: &str) -> (Evaluator, i32) {
         let tokens = lexer::lex_input(0, code).expect("lex error");
         let mut parser = Parser::new(0, tokens);
         let prog = parser.parse_program().expect("parse error");
         let mut eval = Evaluator::new().with_globals();
-        eval.evaluate(prog);
-        eval.scopes.first().and_then(|s| s.vars.get(var_name).cloned())
+        let status = eval.evaluate(prog);
+        (eval, status)
+    }
+
+    #[test]
+    fn signal_interrupt_aborts_evaluation_with_status_130() {
+        let code = r#"
+            let reached_first = 0
+            let reached_second = 0
+            $reached_first = 1
+            $reached_second = 2
+        "#;
+
+        let tokens = lexer::lex_input(0, code).expect("lex error");
+        let mut parser = Parser::new(0, tokens);
+        let prog = parser.parse_program().expect("parse error");
+        let flag = Arc::new(AtomicBool::new(true));
+        let mut eval = Evaluator::new().with_globals().with_interrupt_flag(flag);
+        let status = eval.evaluate(prog);
+
+        assert_eq!(status, STATUS_SIGINT);
+        assert_eq!(eval.scopes.first().and_then(|s| s.vars.get("reached_second")), None);
+    }
+
+    #[test]
+    fn signal_interrupt_aborts_while_loop_with_status_130() {
+        let code = r#"
+            let count = 0
+            while true {
+                $count = 1
+            }
+        "#;
+
+        let tokens = lexer::lex_input(0, code).expect("lex error");
+        let mut parser = Parser::new(0, tokens);
+        let prog = parser.parse_program().expect("parse error");
+        let flag = Arc::new(AtomicBool::new(true));
+        let mut eval = Evaluator::new().with_globals().with_interrupt_flag(flag);
+        let status = eval.evaluate(prog);
+
+        assert_eq!(status, STATUS_SIGINT);
     }
 
     #[test]
