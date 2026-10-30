@@ -471,6 +471,14 @@ impl Evaluator {
         }
     }
 
+    fn make_command_result(code: i32, out: String, err: String) -> Value {
+        let mut res = HashMap::new();
+        res.insert(String::from("code"), Value::Number(code as f64));
+        res.insert(String::from("out"), Value::String(out));
+        res.insert(String::from("err"), Value::String(err));
+        Value::Object(res)
+    }
+
     fn resolve_stdout_redirect_path(
         &mut self,
         stdout_redirect: &Option<Expr>,
@@ -1258,14 +1266,27 @@ impl Evaluator {
 
                     BinaryOp::Mul => match (left_res, right_res) {
                         (Value::Number(l), Value::Number(r)) => Value::Number(l * r),
-                        (Value::String(l), Value::Number(r)) => {
-                            Value::String(l.repeat(r.round() as usize))
+                        (Value::String(s), Value::Number(n))
+                        | (Value::Number(n), Value::String(s)) => {
+                            if n.is_nan() || n <= 0.0 {
+                                Value::String(String::new())
+                            } else if n > 1_000_000.0 || n.is_infinite() {
+                                Value::Null
+                            } else {
+                                Value::String(s.repeat(n.round() as usize))
+                            }
                         }
                         _ => Value::Null,
                     },
 
                     BinaryOp::Div => match (left_res, right_res.cast(left_type)) {
-                        (Value::Number(l), Value::Number(r)) => Value::Number(l / r),
+                        (Value::Number(l), Value::Number(r)) => {
+                            if r == 0.0 || r.is_nan() {
+                                Value::Null
+                            } else {
+                                Value::Number(l / r)
+                            }
+                        }
                         _ => Value::Null,
                     },
 
@@ -1328,7 +1349,7 @@ impl Evaluator {
 
                         if let Value::Function(func) = &target_val {
                             let value = self.call_user_function(func, args, scope_indices);
-                            return Value::String(value.to_string());
+                            return Self::make_command_result(0, value.to_string(), String::new());
                         }
 
                         let identifier = target_val.to_string();
@@ -1337,7 +1358,7 @@ impl Evaluator {
                             self.resolve_named_value(&identifier, scope_indices)
                         {
                             let value = self.call_user_function(&func, args, scope_indices);
-                            return Value::String(value.to_string());
+                            return Self::make_command_result(0, value.to_string(), String::new());
                         }
 
                         let (res_cmd, res_args) = self.resolve_command(identifier);
@@ -1354,26 +1375,18 @@ impl Evaluator {
 
                         let exit_status = cmds::exec_cmd(self, &res_cmd, all_args, &[], &mut io);
 
-                        let mut res = HashMap::new();
-
-                        res.insert(String::from("code"), Value::Number(exit_status as f64));
-                        res.insert(
-                            String::from("out"),
-                            Value::String(String::from_utf8(io.out).unwrap_or_default()),
-                        );
-                        res.insert(
-                            String::from("err"),
-                            Value::String(String::from_utf8(io.err).unwrap_or_default()),
-                        );
-
-                        Value::Object(res)
+                        Self::make_command_result(
+                            exit_status,
+                            String::from_utf8(io.out).unwrap_or_default(),
+                            String::from_utf8(io.err).unwrap_or_default(),
+                        )
                     }
                     Expr::Word(word) => {
                         if let Some(Value::Function(func)) =
                             self.resolve_named_value(word, scope_indices)
                         {
                             let value = self.call_user_function(&func, &[], scope_indices);
-                            return Value::String(value.to_string());
+                            return Self::make_command_result(0, value.to_string(), String::new());
                         }
 
                         let (res_cmd, all_args) = self.resolve_command(word.to_owned());
@@ -1390,19 +1403,11 @@ impl Evaluator {
 
                         let exit_status = cmds::exec_cmd(self, &res_cmd, all_args, &[], &mut io);
 
-                        let mut res = HashMap::new();
-
-                        res.insert(String::from("code"), Value::Number(exit_status as f64));
-                        res.insert(
-                            String::from("out"),
-                            Value::String(String::from_utf8(io.out).unwrap_or_default()),
-                        );
-                        res.insert(
-                            String::from("err"),
-                            Value::String(String::from_utf8(io.err).unwrap_or_default()),
-                        );
-
-                        Value::Object(res)
+                        Self::make_command_result(
+                            exit_status,
+                            String::from_utf8(io.out).unwrap_or_default(),
+                            String::from_utf8(io.err).unwrap_or_default(),
+                        )
                     }
                     other => {
                         // Fallback: allow non-command expressions inside $(...)
@@ -1418,17 +1423,11 @@ impl Evaluator {
                     scope_indices,
                     true,
                 );
-                let mut res = HashMap::new();
-                res.insert(String::from("code"), Value::Number(code as f64));
-                res.insert(
-                    String::from("out"),
-                    Value::String(String::from_utf8(out).unwrap_or_default()),
-                );
-                res.insert(
-                    String::from("err"),
-                    Value::String(String::from_utf8(err).unwrap_or_default()),
-                );
-                Value::Object(res)
+                Self::make_command_result(
+                    code,
+                    String::from_utf8(out).unwrap_or_default(),
+                    String::from_utf8(err).unwrap_or_default(),
+                )
             }
             Expr::AnonymousFunction { params, body } => Value::Function(FunctionValue {
                 params: params.clone(),
@@ -1475,5 +1474,70 @@ mod tests {
     fn pipeline_streaming_returns_last_stage_exit_code() {
         let status = eval_str("echo 'test stream' | cat");
         assert_eq!(status, 0);
+    }
+
+    fn eval_var(code: &str, var_name: &str) -> Option<Value> {
+        let tokens = lexer::lex_input(0, code).expect("lex error");
+        let mut parser = Parser::new(0, tokens);
+        let prog = parser.parse_program().expect("parse error");
+        let mut eval = Evaluator::new().with_globals();
+        eval.evaluate(prog);
+        eval.scopes.first().and_then(|s| s.vars.get(var_name).cloned())
+    }
+
+    #[test]
+    fn command_sub_on_user_function_returns_object_with_out_and_code() {
+        let code = r#"
+            fn add(a, b) {
+                return $a + $b
+            }
+            let res = $(add 2 3)
+            let out_val = $(add 2 3).out
+            let code_val = $(add 2 3).code
+        "#;
+        assert_eq!(eval_var(code, "out_val"), Some(Value::String("5".to_string())));
+        assert_eq!(eval_var(code, "code_val"), Some(Value::Number(0.0)));
+    }
+
+    #[test]
+    fn string_multiplication_is_commutative_and_safe() {
+        let code = r#"
+            let a = "ab" * 3
+            let b = 3 * "ab"
+            let zero = "ab" * 0
+            let neg = "ab" * -2
+            let huge = "ab" * 10000000
+        "#;
+        assert_eq!(eval_var(code, "a"), Some(Value::String("ababab".to_string())));
+        assert_eq!(eval_var(code, "b"), Some(Value::String("ababab".to_string())));
+        assert_eq!(eval_var(code, "zero"), Some(Value::String(String::new())));
+        assert_eq!(eval_var(code, "neg"), Some(Value::String(String::new())));
+        assert_eq!(eval_var(code, "huge"), Some(Value::Null));
+    }
+
+    #[test]
+    fn division_by_zero_returns_null() {
+        let code = r#"
+            let ok = 10 / 2
+            let zero = 10 / 0
+        "#;
+        assert_eq!(eval_var(code, "ok"), Some(Value::Number(5.0)));
+        assert_eq!(eval_var(code, "zero"), Some(Value::Null));
+    }
+
+    #[test]
+    fn null_equality_in_evaluator_conditions() {
+        let code = r#"
+            let matched_null_first = 0
+            let matched_empty_first = 0
+            if $missing == "" {
+                $matched_null_first = 1
+            }
+            if "" == $missing {
+                $matched_empty_first = 1
+            }
+        "#;
+        assert_eq!(eval_var(code, "matched_null_first"), Some(Value::Number(1.0)));
+        assert_eq!(eval_var(code, "matched_empty_first"), Some(Value::Number(1.0)));
     }
 }

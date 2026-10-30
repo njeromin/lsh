@@ -346,6 +346,11 @@ fn push_identifier_or_number(tokens: &mut Vec<Token>, ident_string: String, offs
         return;
     }
 
+    if ident_string == "/" {
+        tokens.push(Token::new(TokenKind::Slash, offset));
+        return;
+    }
+
     if let Some(keyword_kind) = match_keyword(ident_string.as_str()) {
         tokens.push(Token::new(keyword_kind, offset));
         return;

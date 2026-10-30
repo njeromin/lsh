@@ -778,13 +778,20 @@ impl Parser {
                     let mut args = vec![];
 
                     while let Some(next_token) = self.tokens.get(self.index + 1) {
+                        let current = self.current().to_owned();
+                        let is_contiguous = next_token.offset
+                            == current.offset + Self::token_source_len(&current);
+
+                        if matches!(next_token.kind, TokenKind::Star | TokenKind::Slash)
+                            && !is_contiguous
+                        {
+                            break;
+                        }
+
                         // This should really just use some form of parse_primary/parse_expr.
                         if let Some(arg_expr) =
                             Self::token_kind_to_primary_call_arg_literal(&next_token.kind)
                         {
-                            let current = self.current().to_owned();
-                            let is_contiguous = next_token.offset
-                                == current.offset + Self::token_source_len(&current);
                             self.advance(); // Move to literal.
 
                             if is_contiguous && !args.is_empty() {
