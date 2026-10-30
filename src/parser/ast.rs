@@ -41,6 +41,7 @@ pub enum Expr {
     Number(f64),
     Bool(bool),
     String(String),
+    QuotedString(String),
     Object(HashMap<String, Expr>),
     Variable(String),
 

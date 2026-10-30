@@ -7,6 +7,17 @@ use crate::lexer::{
     token::{Token, TokenKind},
 };
 
+const COMMAND_SUB_STYLE: &str = "\x1b[38;5;208m";
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Delimiter {
+    DollarParen,
+    Paren,
+    Bracket,
+    Brace,
+}
+
+#[derive(Default)]
 pub struct SyntaxHighlighter;
 
 impl SyntaxHighlighter {
@@ -25,6 +36,7 @@ impl SyntaxHighlighter {
 
         let mut highlighted = String::with_capacity(line.len() + tokens.len() * 12);
         let mut cursor = 0;
+        let mut delim_stack = Vec::new();
 
         for (index, token) in tokens.iter().enumerate() {
             if matches!(token.kind, TokenKind::EOF) {
@@ -38,10 +50,48 @@ impl SyntaxHighlighter {
                 continue;
             }
 
+            let mut is_command_sub_close = false;
+            match token.kind {
+                TokenKind::DollarLeftParen => delim_stack.push(Delimiter::DollarParen),
+                TokenKind::LeftParen => delim_stack.push(Delimiter::Paren),
+                TokenKind::LeftBracket => delim_stack.push(Delimiter::Bracket),
+                TokenKind::LeftCurly => delim_stack.push(Delimiter::Brace),
+                TokenKind::RightBracket => {
+                    while let Some(d) = delim_stack.pop() {
+                        if d == Delimiter::Bracket {
+                            break;
+                        }
+                    }
+                }
+                TokenKind::RightCurly => {
+                    while let Some(d) = delim_stack.pop() {
+                        if d == Delimiter::Brace {
+                            break;
+                        }
+                    }
+                }
+                TokenKind::RightParen => {
+                    while let Some(d) = delim_stack.pop() {
+                        match d {
+                            Delimiter::DollarParen => {
+                                is_command_sub_close = true;
+                                break;
+                            }
+                            Delimiter::Paren => {
+                                is_command_sub_close = false;
+                                break;
+                            }
+                            _ => continue,
+                        }
+                    }
+                }
+                _ => {}
+            }
+
             highlighted.push_str(&line[cursor..start]);
 
             let span = &line[start..end];
-            if let Some(style) = token_style(token, span) {
+            if let Some(style) = token_style(token, span, is_command_sub_close) {
                 highlighted.push_str(style);
                 highlighted.push_str(span);
                 highlighted.push_str("\x1b[0m");
@@ -90,7 +140,11 @@ fn token_end(line: &str, tokens: &[Token], index: usize) -> usize {
     end
 }
 
-fn token_style(token: &Token, span: &str) -> Option<&'static str> {
+fn token_style(token: &Token, _span: &str, is_command_sub_close: bool) -> Option<&'static str> {
+    if matches!(token.kind, TokenKind::RightParen) && is_command_sub_close {
+        return Some(COMMAND_SUB_STYLE);
+    }
+
     match token.kind {
         TokenKind::Let
         | TokenKind::If
@@ -101,13 +155,13 @@ fn token_style(token: &Token, span: &str) -> Option<&'static str> {
         | TokenKind::Return => Some("\x1b[1;35m"),
         TokenKind::Variable(_) => Some("\x1b[36m"),
         TokenKind::Number(_) | TokenKind::Bool(_) => Some("\x1b[33m"),
-        TokenKind::String(_) if span.starts_with('"') || span.starts_with('\'') => Some("\x1b[32m"),
+        TokenKind::QuotedString(_) => Some("\x1b[32m"),
         TokenKind::Pipe
         | TokenKind::And
         | TokenKind::Or
         | TokenKind::DollarLeftParen
         | TokenKind::FatArrow
-        | TokenKind::ThinArrow => Some("\x1b[38;5;208m"),
+        | TokenKind::ThinArrow => Some(COMMAND_SUB_STYLE),
         TokenKind::Plus
         | TokenKind::Minus
         | TokenKind::PlusEquals
@@ -136,5 +190,41 @@ fn token_style(token: &Token, span: &str) -> Option<&'static str> {
         | TokenKind::Semicolon
         | TokenKind::Colon => Some("\x1b[2m"),
         TokenKind::String(_) | TokenKind::NewLine | TokenKind::EOF => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn command_sub_closing_paren_matches_dollar_left_paren_style() {
+        let highlighter = SyntaxHighlighter::new();
+        let input = "echo $(greet \"text\")";
+        let output = highlighter.highlight(input, 0);
+
+        assert!(output.contains(&format!("{COMMAND_SUB_STYLE}$(\x1b[0m")));
+        assert!(output.contains(&format!("{COMMAND_SUB_STYLE})\x1b[0m")));
+    }
+
+    #[test]
+    fn regular_parens_retain_dim_punctuation_style() {
+        let highlighter = SyntaxHighlighter::new();
+        let input = "fn greet(who) {}";
+        let output = highlighter.highlight(input, 0);
+
+        assert!(output.contains("\x1b[2m(\x1b[0m"));
+        assert!(output.contains("\x1b[2m)\x1b[0m"));
+        assert!(!output.contains(&format!("{COMMAND_SUB_STYLE})")));
+    }
+
+    #[test]
+    fn nested_command_substitutions_match_correctly() {
+        let highlighter = SyntaxHighlighter::new();
+        let input = "echo $(cat $(get-path))";
+        let output = highlighter.highlight(input, 0);
+
+        let occurrences = output.matches(&format!("{COMMAND_SUB_STYLE})\x1b[0m")).count();
+        assert_eq!(occurrences, 2);
     }
 }

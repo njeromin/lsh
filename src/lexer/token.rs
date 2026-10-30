@@ -4,6 +4,7 @@ use std::{fmt, mem};
 pub enum TokenKind {
     Variable(String),
     String(String),
+    QuotedString(String),
     Number(f64),
     Bool(bool),
     Plus,
@@ -58,6 +59,7 @@ impl fmt::Display for TokenKind {
             match self {
                 Self::Variable(var) => format!("Variable({var})"),
                 Self::String(str) => format!("String({str})"),
+                Self::QuotedString(str) => format!("QuotedString({str})"),
                 Self::Number(num) => format!("Number({num})"),
                 Self::Bool(bool) => format!("Bool({bool})"),
                 Self::Plus => "Plus".to_string(),

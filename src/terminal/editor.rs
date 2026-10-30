@@ -18,6 +18,12 @@ pub struct LineEditorHelper {
     syntax: SyntaxHighlighter,
 }
 
+impl Default for LineEditorHelper {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl LineEditorHelper {
     pub fn new() -> Self {
         Self {

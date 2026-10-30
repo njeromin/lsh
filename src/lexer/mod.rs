@@ -181,7 +181,7 @@ pub fn lex_input(src_id: usize, input: &str) -> Result<Vec<Token>, Diagnostic> {
             ']' => tokens.push(Token::new(TokenKind::RightBracket, offset)),
             '"' | '\'' => {
                 let string = lex_string_literal(src_id, input, offset, char, &mut chars)?;
-                tokens.push(Token::new(TokenKind::String(string), offset));
+                tokens.push(Token::new(TokenKind::QuotedString(string), offset));
             }
             '\n' => {
                 // Only add newline token if not at end of file, and the next char is not a '}'.
@@ -518,7 +518,7 @@ mod tests {
         let kinds = token_kinds("echo \"line1\\nline2\\t\\\\\"");
 
         assert!(matches!(&kinds[0], TokenKind::String(s) if s == "echo"));
-        assert!(matches!(&kinds[1], TokenKind::String(s) if s == "line1\nline2\t\\"));
+        assert!(matches!(&kinds[1], TokenKind::QuotedString(s) if s == "line1\nline2\t\\"));
         assert!(matches!(&kinds[2], TokenKind::EOF));
     }
 
@@ -527,7 +527,7 @@ mod tests {
         let kinds = token_kinds("echo 'a\\nb\\\\c'");
 
         assert!(matches!(&kinds[0], TokenKind::String(s) if s == "echo"));
-        assert!(matches!(&kinds[1], TokenKind::String(s) if s == "a\nb\\c"));
+        assert!(matches!(&kinds[1], TokenKind::QuotedString(s) if s == "a\nb\\c"));
         assert!(matches!(&kinds[2], TokenKind::EOF));
     }
 

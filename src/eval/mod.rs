@@ -532,7 +532,13 @@ impl Evaluator {
             let raw_target = self
                 .evaluate_expr(target_expr, true, scope_indices)
                 .to_string();
-            let expanded = expand::expand_arg(raw_target.clone(), ExpandCtx::default());
+            let expanded = expand::expand_arg(
+                raw_target.clone(),
+                ExpandCtx {
+                    tilde: true,
+                    glob: false,
+                },
+            );
             expanded.into_iter().next().unwrap_or(raw_target)
         })
     }
@@ -1161,6 +1167,27 @@ impl Evaluator {
         Some(value)
     }
 
+    fn expr_has_unquoted_glob_or_tilde(expr: &Expr) -> (bool, bool) {
+        match expr {
+            Expr::QuotedString(_) => (false, false),
+            Expr::String(s) => {
+                let has_tilde = s.starts_with('~');
+                let has_glob = expand::has_glob_metachars(s);
+                (has_tilde, has_glob)
+            }
+            Expr::Binary {
+                op: BinaryOp::Add,
+                left,
+                right,
+            } => {
+                let (lt, lg) = Self::expr_has_unquoted_glob_or_tilde(left);
+                let (_rt, rg) = Self::expr_has_unquoted_glob_or_tilde(right);
+                (lt, lg || rg)
+            }
+            _ => (false, false),
+        }
+    }
+
     fn build_command_args(
         &mut self,
         resolved_args: Vec<String>,
@@ -1171,14 +1198,18 @@ impl Evaluator {
 
         for arg in args {
             let evaluated = self.evaluate_expr(arg, true, scope_indices).to_string();
+            let (has_tilde, has_glob) = Self::expr_has_unquoted_glob_or_tilde(arg);
 
-            match arg {
-                // Match shell behavior more closely: tilde expansion should occur for
-                // source literals, not for computed values (variables / command-sub output).
-                Expr::String(_) => {
-                    all_args.extend(expand::expand_arg(evaluated, ExpandCtx::default()))
-                }
-                _ => all_args.push(evaluated),
+            if has_tilde || has_glob {
+                all_args.extend(expand::expand_arg(
+                    evaluated,
+                    ExpandCtx {
+                        tilde: has_tilde,
+                        glob: has_glob,
+                    },
+                ));
+            } else {
+                all_args.push(evaluated);
             }
         }
 
@@ -1409,7 +1440,7 @@ impl Evaluator {
                 let evaluated_value = self.evaluate_expr(expr, true, scope_indices);
                 Value::String(evaluated_value.get_type().to_string())
             }
-            Expr::String(string) => Value::String(string.to_owned()),
+            Expr::String(string) | Expr::QuotedString(string) => Value::String(string.to_owned()),
             Expr::Number(num) => Value::Number(*num),
             Expr::Bool(bool) => Value::Bool(*bool),
             Expr::CommandSub(expr) => {
@@ -1653,5 +1684,51 @@ mod tests {
         "#;
         assert_eq!(eval_var(code, "matched_null_first"), Some(Value::Number(1.0)));
         assert_eq!(eval_var(code, "matched_empty_first"), Some(Value::Number(1.0)));
+    }
+
+    #[test]
+    fn build_command_args_expands_unquoted_wildcards_and_preserves_quotes() {
+        let mut eval = Evaluator::new();
+        let mut scopes = vec![0];
+
+        // 1. Unquoted wildcard: echo src/*.rs
+        let unquoted_code = "echo src/*.rs";
+        let tokens = lexer::lex_input(0, unquoted_code).unwrap();
+        let mut parser = Parser::new(0, tokens);
+        let prog = parser.parse_program().unwrap();
+        let call_args = match &prog.body[0] {
+            Statement::Command(CommandExpr::Call { args, .. }) => args,
+            Statement::Expr(Expr::Call { args, .. }) => args,
+            _ => panic!("expected call-like statement"),
+        };
+        let args = eval.build_command_args(vec![], call_args, &mut scopes);
+        assert!(args.contains(&"src/lib.rs".to_string()));
+        assert!(args.contains(&"src/main.rs".to_string()));
+
+        // 2. Quoted wildcard: echo "src/*.rs"
+        let quoted_code = "echo \"src/*.rs\"";
+        let tokens = lexer::lex_input(0, quoted_code).unwrap();
+        let mut parser = Parser::new(0, tokens);
+        let prog = parser.parse_program().unwrap();
+        let call_args = match &prog.body[0] {
+            Statement::Command(CommandExpr::Call { args, .. }) => args,
+            Statement::Expr(Expr::Call { args, .. }) => args,
+            _ => panic!("expected call-like statement"),
+        };
+        let args = eval.build_command_args(vec![], call_args, &mut scopes);
+        assert_eq!(args, vec!["src/*.rs".to_string()]);
+
+        // 3. Nonexistent wildcard fallback
+        let fallback_code = "echo nonexistent_*.xyz";
+        let tokens = lexer::lex_input(0, fallback_code).unwrap();
+        let mut parser = Parser::new(0, tokens);
+        let prog = parser.parse_program().unwrap();
+        let call_args = match &prog.body[0] {
+            Statement::Command(CommandExpr::Call { args, .. }) => args,
+            Statement::Expr(Expr::Call { args, .. }) => args,
+            _ => panic!("expected call-like statement"),
+        };
+        let args = eval.build_command_args(vec![], call_args, &mut scopes);
+        assert_eq!(args, vec!["nonexistent_*.xyz".to_string()]);
     }
 }

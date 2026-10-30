@@ -117,7 +117,7 @@ fn print_parser_statement(stmt: &Statement) {
 
 fn print_parser_expr(expr: &Expr) {
     match expr {
-        Expr::String(str) => {
+        Expr::String(str) | Expr::QuotedString(str) => {
             println!("String({str})");
         }
         Expr::Number(num) => {

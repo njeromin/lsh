@@ -75,7 +75,7 @@ impl Parser {
                 Ok(Statement::Block(statements))
             }
             TokenKind::Dot | TokenKind::Slash => Ok(Statement::Command(self.parse_command_expr()?)),
-            TokenKind::String(_) | TokenKind::Variable(_) => {
+            TokenKind::String(_) | TokenKind::QuotedString(_) | TokenKind::Variable(_) => {
                 let initial_index = self.index;
                 let expr = match self.parse_postfix() {
                     Ok(expr) => expr,
@@ -768,6 +768,7 @@ impl Parser {
         let expr = match &self.current().kind {
             TokenKind::Number(n) => Expr::Number(*n),
             TokenKind::Colon => Expr::String(":".to_string()),
+            TokenKind::QuotedString(s) => Expr::QuotedString(s.clone()),
             TokenKind::String(s) => {
                 // Check if this is the start of an anonymous function: x => ...
                 if self.check_peek(1, &TokenKind::FatArrow) {
@@ -993,7 +994,7 @@ impl Parser {
             TokenKind::DollarLeftParen => {
                 self.advance(); // Skip past '$('.
 
-                if matches!(self.current().kind, TokenKind::String(_)) {
+                if matches!(self.current().kind, TokenKind::String(_) | TokenKind::QuotedString(_)) {
                     let cmd_expr = self.parse_command_expr_until(&[TokenKind::RightParen])?;
                     self.consume(
                         &TokenKind::RightParen,
@@ -1030,7 +1031,7 @@ impl Parser {
                     }
 
                     let key = match &self.current().kind {
-                        TokenKind::String(s) => s.clone(),
+                        TokenKind::String(s) | TokenKind::QuotedString(s) => s.clone(),
                         TokenKind::Variable(v) => v.clone(),
                         TokenKind::Number(n) => n.to_string(),
                         _ => return self.error_here("Expected object key"),
@@ -1093,6 +1094,7 @@ impl Parser {
     fn token_kind_to_command_literal(kind: &TokenKind) -> Option<Expr> {
         match kind {
             TokenKind::String(s) => Some(Expr::String(s.clone())),
+            TokenKind::QuotedString(s) => Some(Expr::QuotedString(s.clone())),
             TokenKind::Number(n) => Some(Expr::Number(*n)),
             TokenKind::Bool(b) => Some(Expr::Bool(*b)),
             // Treat punctuation/operator tokens as literal string arguments in command context.
@@ -1114,7 +1116,7 @@ impl Parser {
 
     fn token_kind_to_compound_command_part(kind: &TokenKind) -> Option<String> {
         match kind {
-            TokenKind::String(s) => Some(s.clone()),
+            TokenKind::String(s) | TokenKind::QuotedString(s) => Some(s.clone()),
             TokenKind::Number(n) => Some(n.to_string()),
             TokenKind::Bool(b) => Some(b.to_string()),
             _ => None,
@@ -1125,6 +1127,7 @@ impl Parser {
         match &token.kind {
             TokenKind::Variable(name) => name.len(),
             TokenKind::String(s) => s.len(),
+            TokenKind::QuotedString(s) => s.len() + 2,
             TokenKind::Number(n) => n.to_string().len(),
             TokenKind::Bool(b) => b.to_string().len(),
             TokenKind::And
@@ -1170,6 +1173,7 @@ impl Parser {
     fn token_kind_to_primary_call_arg_literal(kind: &TokenKind) -> Option<Expr> {
         match kind {
             TokenKind::String(s) => Some(Expr::String(s.clone())),
+            TokenKind::QuotedString(s) => Some(Expr::QuotedString(s.clone())),
             TokenKind::Number(n) => Some(Expr::Number(*n)),
             TokenKind::Bool(b) => Some(Expr::Bool(*b)),
             // Keep these for command-like expression args only.
@@ -1369,6 +1373,7 @@ impl Parser {
     fn token_kind_label(kind: &TokenKind) -> String {
         match kind {
             TokenKind::String(s) => format!("'{s}'"),
+            TokenKind::QuotedString(s) => format!("\"{s}\""),
             TokenKind::Variable(v) => format!("'${v}'"),
             TokenKind::Number(n) => format!("'{n}'"),
             TokenKind::Bool(b) => format!("'{b}'"),
@@ -1478,7 +1483,7 @@ mod tests {
 
     fn assert_command_identifier(identifier: &Expr, expected: &str) {
         assert!(
-            matches!(identifier, Expr::String(actual) if actual == expected)
+            matches!(identifier, Expr::String(actual) | Expr::QuotedString(actual) if actual == expected)
                 || matches!(identifier, Expr::Word(actual) if actual == expected),
             "Expected command identifier {expected:?}, got {identifier:?}"
         );
