@@ -164,8 +164,11 @@ pub fn lex_input(src_id: usize, input: &str) -> Result<Vec<Token>, Diagnostic> {
             },
             '#' => {
                 // Skip single-line comments.
-                for (_, comment_char) in chars.by_ref() {
+                for (comment_offset, comment_char) in chars.by_ref() {
                     if comment_char == '\n' {
+                        if chars.peek().is_some_and(|(_, next_char)| *next_char != '}') {
+                            tokens.push(Token::new(TokenKind::NewLine, comment_offset));
+                        }
                         break;
                     }
                 }
@@ -478,9 +481,22 @@ mod tests {
     fn leading_hash_comment_does_not_lex_comment_text() {
         let kinds = token_kinds("# If this is a comment\necho ok");
 
+        assert!(matches!(&kinds[0], TokenKind::NewLine));
+        assert!(matches!(&kinds[1], TokenKind::String(s) if s == "echo"));
+        assert!(matches!(&kinds[2], TokenKind::String(s) if s == "ok"));
+        assert!(matches!(&kinds[3], TokenKind::EOF));
+    }
+
+    #[test]
+    fn inline_comment_preserves_newline_separator() {
+        let kinds = token_kinds("echo a # comment\necho b");
+
         assert!(matches!(&kinds[0], TokenKind::String(s) if s == "echo"));
-        assert!(matches!(&kinds[1], TokenKind::String(s) if s == "ok"));
-        assert!(matches!(&kinds[2], TokenKind::EOF));
+        assert!(matches!(&kinds[1], TokenKind::String(s) if s == "a"));
+        assert!(matches!(&kinds[2], TokenKind::NewLine));
+        assert!(matches!(&kinds[3], TokenKind::String(s) if s == "echo"));
+        assert!(matches!(&kinds[4], TokenKind::String(s) if s == "b"));
+        assert!(matches!(&kinds[5], TokenKind::EOF));
     }
 
     #[test]

@@ -839,18 +839,44 @@ impl Parser {
                             let sub_expr = self.parse_postfix_on_current(sub_expr)?;
                             args.push(sub_expr);
 
-                            // If postfix parsing consumed into the next argument token
-                            // (e.g. `$(cmd).out $var`), consume that argument here so it
-                            // doesn't get skipped by the lookahead loop.
-                            if let Some(arg_expr) =
-                                Self::token_kind_to_primary_call_arg_literal(&self.current().kind)
-                            {
-                                args.push(arg_expr);
-                            } else if let TokenKind::Variable(var) = &self.current().kind {
-                                let var_name = var.clone();
-                                let sub_expr =
-                                    self.parse_postfix_from_seed(Expr::Variable(var_name))?;
-                                args.push(sub_expr);
+                            loop {
+                                if self.check_current(&TokenKind::NewLine)
+                                    || self.check_current(&TokenKind::Semicolon)
+                                    || self.check_current(&TokenKind::EOF)
+                                    || self.check_current(&TokenKind::RightCurly)
+                                    || self.check_current(&TokenKind::Pipe)
+                                    || self.check_current(&TokenKind::And)
+                                    || self.check_current(&TokenKind::Or)
+                                    || self.check_current(&TokenKind::ThinArrow)
+                                {
+                                    should_advance = false;
+                                    break;
+                                }
+
+                                if let Some(arg_expr) =
+                                    Self::token_kind_to_primary_call_arg_literal(&self.current().kind)
+                                {
+                                    args.push(arg_expr);
+                                    break;
+                                } else if let TokenKind::Variable(var) = &self.current().kind {
+                                    let var_name = var.clone();
+                                    let sub_expr =
+                                        self.parse_postfix_from_seed(Expr::Variable(var_name))?;
+                                    args.push(sub_expr);
+                                    break;
+                                } else if self.check_current(&TokenKind::DollarLeftParen) {
+                                    self.advance(); // Move past '$('.
+                                    let sub = self.parse_primary()?;
+                                    let sub = self.parse_postfix_on_current(sub)?;
+                                    args.push(sub);
+                                } else {
+                                    should_advance = false;
+                                    break;
+                                }
+                            }
+
+                            if !should_advance {
+                                break;
                             }
                         } else if matches!(next_token.kind, TokenKind::Dot) {
                             // Keep dotted literals correct:
@@ -2062,5 +2088,32 @@ mod tests {
     fn parses_program_with_only_separators_as_empty() {
         let body = parse_program("\n;\n;;\n");
         assert!(body.is_empty());
+    }
+
+    #[test]
+    fn parses_multiline_commands_with_command_substitution_separately() {
+        let body = parse_program("echo \"first\" $(add 2 3).out\necho \"second\" $(add 10 5).out");
+        assert_eq!(body.len(), 2);
+    }
+
+    #[test]
+    fn parses_multiline_commands_with_inline_comments_separately() {
+        let body = parse_program("echo hello # first comment\necho world # second comment");
+        assert_eq!(body.len(), 2);
+    }
+
+    #[test]
+    fn parses_command_with_multiple_command_substitutions() {
+        let body = parse_program("echo $(add 1 2).out $(add 3 4).out");
+        assert_eq!(body.len(), 1);
+        let (_, args) = extract_call_parts(&body[0]);
+        assert_eq!(args.len(), 2);
+    }
+
+    #[test]
+    fn parses_functions_example_script_into_expected_number_of_statements() {
+        let input = "fn add(a, b) {\n    return $a + $b;\n}\n\nfn greet(name) {\n    return \"Hello, \" + $name\n}\n\necho \"add 2 3 ->\" $(add 2 3).out\necho \"add 10 5 ->\" $(add 10 5).out\necho $(greet \"lsh\").out\n";
+        let body = parse_program(input);
+        assert_eq!(body.len(), 5);
     }
 }
