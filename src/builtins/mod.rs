@@ -60,7 +60,7 @@ pub fn dispatch<R: io::Read, W: io::Write, WE: io::Write>(
     eval: &mut Evaluator,
     ctx: &mut lsh::IoCtx<R, W, WE>,
     args: Vec<String>,
-) {
+) -> i32 {
     match builtin {
         BuiltinKind::Exit => exit::exit(eval, ctx, args),
         BuiltinKind::Source => source::source(eval, ctx, args),

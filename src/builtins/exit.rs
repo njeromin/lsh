@@ -6,7 +6,7 @@ pub fn exit<R: io::Read, W: io::Write, WE: io::Write>(
     _: &mut Evaluator,
     io: &mut lsh::IoCtx<R, W, WE>,
     args: Vec<String>,
-) {
+) -> i32 {
     process::exit(if args.is_empty() {
         0
     } else {

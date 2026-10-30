@@ -41,10 +41,10 @@ pub fn fmt_cwd<R: io::Read, W: io::Write, WE: io::Write>(
     eval: &mut Evaluator,
     io: &mut lsh::IoCtx<R, W, WE>,
     args: Vec<String>,
-) {
+) -> i32 {
     if args.len() > 1 {
         ui::print_error(&mut io.err, "Too many arguments.");
-        return;
+        return 1;
     }
 
     let path = if let Some(path_arg) = args.first() {
@@ -60,7 +60,13 @@ pub fn fmt_cwd<R: io::Read, W: io::Write, WE: io::Write>(
     } else {
         path.to_string_lossy().into_owned()
     };
-    write!(&mut io.out, "{formatted}").expect("Failed to write formatted cwd");
+    if let Err(e) = write!(&mut io.out, "{formatted}")
+        && e.kind() != io::ErrorKind::BrokenPipe
+    {
+        ui::print_error(&mut io.err, format!("Failed to write formatted cwd: {e}").as_str());
+        return 1;
+    }
+    0
 }
 
 #[cfg(test)]

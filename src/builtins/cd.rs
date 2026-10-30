@@ -43,10 +43,10 @@ pub fn cd<R: io::Read, W: io::Write, WE: io::Write>(
     eval: &mut Evaluator,
     io: &mut lsh::IoCtx<R, W, WE>,
     args: Vec<String>,
-) {
+) -> i32 {
     if args.len() > 1 {
         ui::print_error(&mut io.err, "Too many arguments.");
-        return;
+        return 1;
     }
 
     if let Some(arg) = args.first() {
@@ -69,7 +69,7 @@ pub fn cd<R: io::Read, W: io::Write, WE: io::Write>(
                 &mut io.err,
                 format!("Failed to change directory to '{arg}'.").as_str(),
             );
-            return;
+            return 1;
         }
 
         eval.push_var(
@@ -77,7 +77,9 @@ pub fn cd<R: io::Read, W: io::Write, WE: io::Write>(
             String::from("PWD"),
             Value::String(logical_target.to_string_lossy().into_owned()),
         );
+        0
     } else {
         ui::print_error(&mut io.err, "An argument is required.");
+        1
     }
 }

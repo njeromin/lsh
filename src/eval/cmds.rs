@@ -19,8 +19,7 @@ pub fn exec_cmd<R: io::Read + Send, W: io::Write + Send, WE: io::Write + Send>(
     ctx: &mut lsh::IoCtx<R, W, WE>,
 ) -> i32 {
     if let Some(builtin) = builtins::lookup(cmd) {
-        builtins::dispatch(builtin.kind, evaluator, ctx, args);
-        return 0;
+        return builtins::dispatch(builtin.kind, evaluator, ctx, args);
     }
 
     match spawn_proc(cmd, args, env_assignments, ctx) {

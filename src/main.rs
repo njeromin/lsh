@@ -190,8 +190,10 @@ fn main() {
             eval.push_var(0, i.to_string(), Value::String(arg.to_owned()));
         }
 
-        exec_file(&mut eval, PathBuf::from(file_path));
+        let code = exec_file(&mut eval, PathBuf::from(file_path));
+        std::process::exit(code);
     } else if let Err(e) = interactive_session(&mut eval, &mut src_map, &config_dir) {
         ui::print_error(&mut io::stderr(), e.to_string().as_str());
+        std::process::exit(1);
     }
 }

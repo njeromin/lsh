@@ -2,7 +2,7 @@ use std::{fs, io::stderr, path::PathBuf};
 
 use crate::{debug, diagnostics::source_map::SourceMap, eval::Evaluator, lexer, parser::Parser, ui};
 
-pub fn exec_file(evaluator: &mut Evaluator, path: PathBuf) {
+pub fn exec_file(evaluator: &mut Evaluator, path: PathBuf) -> i32 {
     let mut cerr = stderr();
 
     match fs::read_to_string(&path) {
@@ -14,7 +14,7 @@ pub fn exec_file(evaluator: &mut Evaluator, path: PathBuf) {
                 Ok(tokens) => tokens,
                 Err(diag) => {
                     crate::diagnostics::print_diagnostic(&mut cerr, &diag, &source_map);
-                    return;
+                    return 1;
                 }
             };
 
@@ -25,16 +25,17 @@ pub fn exec_file(evaluator: &mut Evaluator, path: PathBuf) {
                 Ok(prog) => prog,
                 Err(diag) => {
                     crate::diagnostics::print_diagnostic(&mut cerr, &diag, &source_map);
-                    return;
+                    return 1;
                 }
             };
 
             debug::print_parser(&prog);
 
-            evaluator.evaluate(prog);
+            evaluator.evaluate(prog)
         }
         Err(e) => {
             ui::print_error(&mut cerr, e.to_string().as_str());
+            1
         }
     }
 }
