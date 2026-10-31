@@ -142,18 +142,24 @@ pub fn calculate_menu_dimensions(
     (width, height)
 }
 
+pub const MIN_VISIBLE_ITEMS: usize = 3;
+
 pub fn calculate_max_visible_height(
     cursor_row: u16,
     term_rows: u16,
     max_visible: usize,
+    total_items: usize,
 ) -> (usize, u16) {
+    let min_items = MIN_VISIBLE_ITEMS.min(max_visible).min(total_items).max(1);
+    let min_needed_rows = (min_items as u16) + 2;
     let space_below = term_rows.saturating_sub(cursor_row + 1);
-    if space_below >= 3 {
+
+    if space_below >= min_needed_rows {
         let max_items = (space_below - 2) as usize;
-        (max_visible.min(max_items).max(1), 0)
+        (max_visible.min(max_items).max(min_items), 0)
     } else {
-        let needed_scroll = (3 - space_below).min(cursor_row);
-        (1, needed_scroll)
+        let needed_scroll = (min_needed_rows - space_below).min(cursor_row);
+        (min_items, needed_scroll)
     }
 }
 
@@ -421,7 +427,7 @@ pub fn show_completion_menu(
         let mut selected = 0;
 
         let (effective_max_visible, scroll_needed) =
-            calculate_max_visible_height(cursor_row, term_rows, max_visible);
+            calculate_max_visible_height(cursor_row, term_rows, max_visible, items.len());
 
         if scroll_needed > 0 {
             let _ = execute!(cout, terminal::ScrollUp(scroll_needed));
@@ -713,27 +719,40 @@ mod tests {
 
     #[test]
     fn calculate_max_visible_height_fits_space_below_without_scrolling() {
-        // cursor at row 10 in 24-row terminal (space_below = 13 >= 3)
-        assert_eq!(calculate_max_visible_height(10, 24, 7), (7, 0));
-        // cursor at row 16 in 24-row terminal (space_below = 7 >= 3)
+        // cursor at row 10 in 24-row terminal (space_below = 13 >= 5)
+        assert_eq!(calculate_max_visible_height(10, 24, 7, 10), (7, 0));
+        // cursor at row 16 in 24-row terminal (space_below = 7 >= 5)
         // max_items = 7 - 2 = 5
-        assert_eq!(calculate_max_visible_height(16, 24, 7), (5, 0));
-        // cursor at row 18 in 24-row terminal (space_below = 5 >= 3)
+        assert_eq!(calculate_max_visible_height(16, 24, 7, 10), (5, 0));
+        // cursor at row 17 in 24-row terminal (space_below = 6 >= 5)
+        // max_items = 6 - 2 = 4
+        assert_eq!(calculate_max_visible_height(17, 24, 7, 10), (4, 0));
+        // cursor at row 18 in 24-row terminal (space_below = 5 >= 5)
         // max_items = 5 - 2 = 3
-        assert_eq!(calculate_max_visible_height(18, 24, 7), (3, 0));
-        // cursor at row 20 in 24-row terminal (space_below = 3 >= 3)
-        // max_items = 3 - 2 = 1
-        assert_eq!(calculate_max_visible_height(20, 24, 7), (1, 0));
+        assert_eq!(calculate_max_visible_height(18, 24, 7, 10), (3, 0));
     }
 
     #[test]
-    fn calculate_max_visible_height_scrolls_minimally_at_terminal_edge() {
-        // cursor at row 21 in 24-row terminal (space_below = 2 < 3)
-        assert_eq!(calculate_max_visible_height(21, 24, 7), (1, 1));
-        // cursor at row 22 in 24-row terminal (space_below = 1 < 3)
-        assert_eq!(calculate_max_visible_height(22, 24, 7), (1, 2));
-        // cursor at row 23 (bottom row) in 24-row terminal (space_below = 0 < 3)
-        assert_eq!(calculate_max_visible_height(23, 24, 7), (1, 3));
+    fn calculate_max_visible_height_ensures_at_least_three_items_at_terminal_edge() {
+        // cursor at row 19 in 24-row terminal (space_below = 4 < 5)
+        assert_eq!(calculate_max_visible_height(19, 24, 7, 10), (3, 1));
+        // cursor at row 20 in 24-row terminal (space_below = 3 < 5)
+        assert_eq!(calculate_max_visible_height(20, 24, 7, 10), (3, 2));
+        // cursor at row 21 in 24-row terminal (space_below = 2 < 5)
+        assert_eq!(calculate_max_visible_height(21, 24, 7, 10), (3, 3));
+        // cursor at row 22 in 24-row terminal (space_below = 1 < 5)
+        assert_eq!(calculate_max_visible_height(22, 24, 7, 10), (3, 4));
+        // cursor at row 23 (bottom row) in 24-row terminal (space_below = 0 < 5)
+        assert_eq!(calculate_max_visible_height(23, 24, 7, 10), (3, 5));
+    }
+
+    #[test]
+    fn calculate_max_visible_height_adapts_to_fewer_total_items() {
+        // Only 2 items in total: min_items = 2, min_needed_rows = 4
+        // At bottom row 23 (space_below = 0), only scrolls 4 rows for 2 items
+        assert_eq!(calculate_max_visible_height(23, 24, 7, 2), (2, 4));
+        // With space_below = 4 (row 19), fits 2 items with 0 scroll
+        assert_eq!(calculate_max_visible_height(19, 24, 7, 2), (2, 0));
     }
 
     #[test]
