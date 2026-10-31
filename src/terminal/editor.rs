@@ -947,7 +947,7 @@ mod tests {
         let history = DefaultHistory::new();
         let ctx = Context::new(&history);
 
-        // "git " with space at pos 4 should return git subcommands and flags
+        // "git " with space at pos 4 should return git subcommands only, flags excluded
         let (start, items) = helper
             .get_candidates("git ", 4, &ctx)
             .expect("completion failed");
@@ -963,10 +963,22 @@ mod tests {
                 .any(|it| it.replacement == "checkout" && it.kind == CompletionKind::Subcommand)
         );
         assert!(
+            !items
+                .iter()
+                .any(|it| it.replacement == "--version")
+        );
+
+        // "git -" at pos 5 should return flags only, subcommands excluded
+        let (start, items) = helper
+            .get_candidates("git -", 5, &ctx)
+            .expect("completion failed");
+        assert_eq!(start, 4);
+        assert!(
             items
                 .iter()
                 .any(|it| it.replacement == "--version" && it.kind == CompletionKind::Flag)
         );
+        assert!(!items.iter().any(|it| it.replacement == "commit"));
 
         // "git co" at pos 6 should filter to commit and checkout
         let (start, items) = helper
@@ -986,9 +998,9 @@ mod tests {
         let history = DefaultHistory::new();
         let ctx = Context::new(&history);
 
-        // "git commit " at pos 11 should return commit flags
+        // "git commit -" at pos 12 should return commit flags
         let (start, items) = helper
-            .get_candidates("git commit ", 11, &ctx)
+            .get_candidates("git commit -", 12, &ctx)
             .expect("completion failed");
         assert_eq!(start, 11);
         assert!(
@@ -1001,6 +1013,12 @@ mod tests {
                 .iter()
                 .any(|it| it.replacement == "--amend" && it.kind == CompletionKind::Flag)
         );
+
+        // "git commit " at pos 11 should fall back to file completion (e.g. Cargo.toml)
+        let (_, items) = helper
+            .get_candidates("git commit ", 11, &ctx)
+            .expect("completion failed");
+        assert!(items.iter().any(|it| it.replacement.contains("Cargo.toml")));
     }
 
     #[test]

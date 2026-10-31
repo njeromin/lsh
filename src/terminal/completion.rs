@@ -593,7 +593,7 @@ impl CompletionRegistry {
         &self,
         cmd: &str,
         args: &[String],
-        _cur_word: &str,
+        cur_word: &str,
     ) -> Option<CompletionResolution> {
         let base_cmd = cmd.rsplit('/').next().unwrap_or(cmd);
         let mut current = self.rules.get(base_cmd)?;
@@ -653,6 +653,12 @@ impl CompletionRegistry {
             }
         }
 
+        if cur_word.starts_with('-') {
+            items.retain(|it| it.kind == CompletionKind::Flag || it.replacement.starts_with('-'));
+        } else {
+            items.retain(|it| it.kind != CompletionKind::Flag && !it.replacement.starts_with('-'));
+        }
+
         if items.is_empty() {
             if current.dirs_only {
                 Some(CompletionResolution::DirectoriesOnly)
@@ -705,12 +711,25 @@ mod tests {
     #[test]
     fn resolves_git_subcommands_and_flags() {
         let reg = CompletionRegistry::with_defaults();
+
+        // Empty prefix returns subcommands only, flags excluded
         let res = reg.resolve("git", &[], "").expect("resolve git failed");
         match res {
             CompletionResolution::Items(items) => {
                 assert!(items.iter().any(|it| it.replacement == "commit"));
                 assert!(items.iter().any(|it| it.replacement == "checkout"));
+                assert!(!items.iter().any(|it| it.replacement == "--version"));
+            }
+            _ => panic!("Expected Items resolution"),
+        }
+
+        // Prefix starting with '-' returns flags only, subcommands excluded
+        let res_flags = reg.resolve("git", &[], "-").expect("resolve git - failed");
+        match res_flags {
+            CompletionResolution::Items(items) => {
                 assert!(items.iter().any(|it| it.replacement == "--version"));
+                assert!(items.iter().any(|it| it.replacement == "--help"));
+                assert!(!items.iter().any(|it| it.replacement == "commit"));
             }
             _ => panic!("Expected Items resolution"),
         }
@@ -719,8 +738,14 @@ mod tests {
     #[test]
     fn resolves_git_commit_flags() {
         let reg = CompletionRegistry::with_defaults();
+
+        // Empty prefix for git commit returns None (flags excluded, falls back to files)
+        let res_empty = reg.resolve("git", &["commit".to_string()], "");
+        assert_eq!(res_empty, None);
+
+        // Prefix '-' returns git commit flags
         let res = reg
-            .resolve("git", &["commit".to_string()], "")
+            .resolve("git", &["commit".to_string()], "-")
             .expect("resolve git commit failed");
         match res {
             CompletionResolution::Items(items) => {
