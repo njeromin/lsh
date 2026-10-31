@@ -5,7 +5,7 @@ Output assets/demo.gif
 Set Shell "bash"
 Set FontSize 16
 Set Width 900
-Set Height 520
+Set Height 560
 Set Padding 20
 Set Theme "Catppuccin Mocha"
 Set WindowBar Colorful
@@ -16,7 +16,7 @@ Set TypingSpeed 45ms
 
 # Launch lsh with local configuration
 Hide
-Type "cargo build -q"
+Type "cargo build --release -q"
 Enter
 Sleep 1s
 Type "export LSH_CONFIG_DIR=./config; alias lsh=./target/release/lsh"
@@ -46,19 +46,42 @@ Sleep 400ms
 Enter
 Sleep 1.5s
 
-# 4. Arrow redirection syntax
+# 4. Interactive completion menu with live filtering & badges
+Type "git "
+Sleep 500ms
+Tab
+Sleep 1.5s
+Type "co"
+Sleep 1s
+Down
+Sleep 400ms
+Up
+Sleep 400ms
+Enter
+Sleep 600ms
+Type " -"
+Tab
+Sleep 1.5s
+Enter
+Sleep 600ms
+Type " 'feat: interactive completion'"
+Sleep 1.5s
+Ctrl+C
+Sleep 800ms
+
+# 5. Arrow redirection syntax
 Type "echo 'structured non-posix shell' -> demo.txt"
 Sleep 400ms
 Enter
 Sleep 1.2s
 
-# 5. Unix pipeline chaining
+# 6. Unix pipeline chaining
 Type "cat demo.txt | tr 'a-z' 'A-Z'"
 Sleep 400ms
 Enter
 Sleep 1.5s
 
-# 6. Scoped environment variable
+# 7. Scoped environment variable
 Type "ENV_VAR=scoped echo $ENV_VAR"
 Sleep 400ms
 Enter
