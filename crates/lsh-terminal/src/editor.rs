@@ -507,7 +507,7 @@ impl Hinter for LineEditorHelper {
             return Some(hint);
         }
 
-        // Fallback: single / top completion candidate when typing at the end of the line
+        // Fallback: single / top completion candidate when typing at the end of the line with a non-empty prefix
         if !line.is_empty()
             && pos == line.len()
             && let Ok((start, items)) = self.get_candidates(line, pos, ctx)
@@ -515,7 +515,10 @@ impl Hinter for LineEditorHelper {
         {
             let replacement = &items[0].replacement;
             let typed_prefix = &line[start..pos];
-            if replacement.starts_with(typed_prefix) && replacement.len() > typed_prefix.len() {
+            if !typed_prefix.is_empty()
+                && replacement.starts_with(typed_prefix)
+                && replacement.len() > typed_prefix.len()
+            {
                 return Some(replacement[typed_prefix.len()..].to_string());
             }
         }
@@ -788,6 +791,21 @@ mod tests {
 
         let hint = helper.hint("uniq", 4, &ctx);
         assert_eq!(hint, Some("ue_command".to_string()));
+    }
+
+    #[test]
+    fn does_not_hint_ghost_text_on_empty_prefix_or_after_quote() {
+        use rustyline::history::DefaultHistory;
+
+        let helper = LineEditorHelper::new();
+        let history = DefaultHistory::new();
+        let ctx = Context::new(&history);
+
+        // After a space (e.g. "cat ")
+        assert_eq!(helper.hint("cat ", 4, &ctx), None);
+
+        // After a closing quote (e.g. git commit -m 'feat: test')
+        assert_eq!(helper.hint("git commit -m 'feat: test'", 26, &ctx), None);
     }
 
     #[test]
