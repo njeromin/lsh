@@ -131,6 +131,12 @@ pub fn filter_completion_items(items: &[CompletionItem], query: &str) -> Vec<Com
                 let mut item = it.clone();
                 item.match_indices = Vec::new();
                 Some((item, m.score))
+            } else if let Some(desc) = &it.description
+                && let Some(m) = fuzzy_match(desc, query)
+            {
+                let mut item = it.clone();
+                item.match_indices = Vec::new();
+                Some((item, m.score.saturating_sub(10)))
             } else {
                 None
             }
@@ -237,5 +243,32 @@ mod tests {
         assert_eq!(dco_matches.len(), 1);
         assert_eq!(dco_matches[0].display, "docker-compose");
         assert_eq!(dco_matches[0].match_indices, vec![0, 7, 8]);
+    }
+
+    #[test]
+    fn filter_completion_items_matches_description() {
+        let mut item1 = CompletionItem::new("1234", "1234", CompletionKind::Value);
+        item1.description = Some("firefox".to_string());
+
+        let mut item2 = CompletionItem::new("5678", "5678", CompletionKind::Value);
+        item2.description = Some("alacritty".to_string());
+
+        let items = vec![item1, item2];
+
+        // "fire" matches item 1 via description even though display is numeric "1234"
+        let matches = filter_completion_items(&items, "fire");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].replacement, "1234");
+        assert_eq!(matches[0].description, Some("firefox".to_string()));
+
+        // "ala" matches item 2 via description
+        let matches = filter_completion_items(&items, "ala");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].replacement, "5678");
+
+        // Numeric PID match still works directly
+        let matches = filter_completion_items(&items, "12");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].replacement, "1234");
     }
 }

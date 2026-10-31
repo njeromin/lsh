@@ -7,6 +7,10 @@ pub fn populate_default_rules(rules: &mut HashMap<String, CompletionRule>) {
     populate_git_rules(rules);
     populate_cargo_rules(rules);
     populate_builtin_rules(rules);
+    populate_kill_rules(rules);
+    populate_node_rules(rules);
+    populate_ssh_rules(rules);
+    populate_make_rules(rules);
 }
 
 fn populate_git_rules(rules: &mut HashMap<String, CompletionRule>) {
@@ -429,4 +433,201 @@ fn populate_builtin_rules(rules: &mut HashMap<String, CompletionRule>) {
     let mut pushd_rule = CompletionRule::new();
     pushd_rule.dirs_only = true;
     rules.insert("pushd".to_string(), pushd_rule);
+}
+
+fn populate_kill_rules(rules: &mut HashMap<String, CompletionRule>) {
+    let mut kill_rule = CompletionRule::new();
+    kill_rule.candidates = vec![
+        CandidateSpec::from_raw("-9:Kill signal (SIGKILL)", CompletionKind::Flag),
+        CandidateSpec::from_raw("-15:Termination signal (SIGTERM)", CompletionKind::Flag),
+        CandidateSpec::from_raw("-2:Interrupt signal (SIGINT)", CompletionKind::Flag),
+        CandidateSpec::from_raw("-1:Hangup signal (SIGHUP)", CompletionKind::Flag),
+        CandidateSpec::from_raw(
+            "-STOP:Pause process execution (SIGSTOP)",
+            CompletionKind::Flag,
+        ),
+        CandidateSpec::from_raw(
+            "-CONT:Resume paused process (SIGCONT)",
+            CompletionKind::Flag,
+        ),
+        CandidateSpec::from_raw("-l:List all signal names", CompletionKind::Flag),
+    ];
+    kill_rule.exec =
+        Some("ps -u \"$USER\" -o pid=,comm= 2>/dev/null | awk '{print $1 \":\" $2}'".to_string());
+    rules.insert("kill".to_string(), kill_rule);
+}
+
+const PKG_SCRIPTS_CMD: &str = "node -e \"const p=require('./package.json');Object.entries(p.scripts||{}).forEach(([k,v])=>console.log(k+':'+v.slice(0,50)))\" 2>/dev/null || awk -F'\"' '/\"scripts\"[[:space:]]*:[[:space:]]*\\{/,/\\}/ {if ($2 != \"\" && $2 != \"scripts\") print $2}' package.json 2>/dev/null";
+
+fn populate_node_rules(rules: &mut HashMap<String, CompletionRule>) {
+    // 1. npm
+    let mut npm_rule = CompletionRule::new();
+    npm_rule.candidates = vec![
+        CandidateSpec::from_raw(
+            "run:Run arbitrary package scripts",
+            CompletionKind::Subcommand,
+        ),
+        CandidateSpec::from_raw("test:Run package test script", CompletionKind::Subcommand),
+        CandidateSpec::from_raw("start:Start package", CompletionKind::Subcommand),
+        CandidateSpec::from_raw("build:Run build script", CompletionKind::Subcommand),
+        CandidateSpec::from_raw("install:Install dependencies", CompletionKind::Subcommand),
+        CandidateSpec::from_raw("i:Install dependencies", CompletionKind::Subcommand),
+        CandidateSpec::from_raw("add:Add a package", CompletionKind::Subcommand),
+        CandidateSpec::from_raw(
+            "publish:Publish package to registry",
+            CompletionKind::Subcommand,
+        ),
+        CandidateSpec::from_raw("init:Create a package.json file", CompletionKind::Subcommand),
+        CandidateSpec::from_raw(
+            "outdated:Check for outdated packages",
+            CompletionKind::Subcommand,
+        ),
+        CandidateSpec::from_raw("update:Update packages", CompletionKind::Subcommand),
+        CandidateSpec::from_raw("audit:Run security audit", CompletionKind::Subcommand),
+        CandidateSpec::from_raw("-v:Print version", CompletionKind::Flag),
+        CandidateSpec::from_raw("--version:Print version", CompletionKind::Flag),
+        CandidateSpec::from_raw("--help:Print help", CompletionKind::Flag),
+    ];
+    let mut npm_run = CompletionRule::new();
+    npm_run.exec = Some(PKG_SCRIPTS_CMD.to_string());
+    npm_rule.subcommands.insert("run".to_string(), npm_run);
+    rules.insert("npm".to_string(), npm_rule);
+
+    // 2. yarn
+    let mut yarn_rule = CompletionRule::new();
+    yarn_rule.candidates = vec![
+        CandidateSpec::from_raw(
+            "add:Install a package and dependencies",
+            CompletionKind::Subcommand,
+        ),
+        CandidateSpec::from_raw(
+            "remove:Remove package from dependencies",
+            CompletionKind::Subcommand,
+        ),
+        CandidateSpec::from_raw(
+            "install:Install all dependencies",
+            CompletionKind::Subcommand,
+        ),
+        CandidateSpec::from_raw(
+            "run:Run a defined package script",
+            CompletionKind::Subcommand,
+        ),
+        CandidateSpec::from_raw("build:Run package build script", CompletionKind::Subcommand),
+        CandidateSpec::from_raw("test:Run package test script", CompletionKind::Subcommand),
+        CandidateSpec::from_raw("start:Run package start script", CompletionKind::Subcommand),
+        CandidateSpec::from_raw("init:Create a new package", CompletionKind::Subcommand),
+        CandidateSpec::from_raw(
+            "publish:Publish package to npm registry",
+            CompletionKind::Subcommand,
+        ),
+        CandidateSpec::from_raw(
+            "upgrade:Upgrade packages to latest version",
+            CompletionKind::Subcommand,
+        ),
+        CandidateSpec::from_raw(
+            "why:Show why a package is installed",
+            CompletionKind::Subcommand,
+        ),
+        CandidateSpec::from_raw("-v:Print version", CompletionKind::Flag),
+        CandidateSpec::from_raw("--version:Print version", CompletionKind::Flag),
+        CandidateSpec::from_raw("--help:Print help", CompletionKind::Flag),
+    ];
+    yarn_rule.exec = Some(PKG_SCRIPTS_CMD.to_string());
+    let mut yarn_run = CompletionRule::new();
+    yarn_run.exec = Some(PKG_SCRIPTS_CMD.to_string());
+    yarn_rule.subcommands.insert("run".to_string(), yarn_run);
+    rules.insert("yarn".to_string(), yarn_rule);
+
+    // 3. pnpm
+    let mut pnpm_rule = CompletionRule::new();
+    pnpm_rule.candidates = vec![
+        CandidateSpec::from_raw(
+            "add:Install a package and dependencies",
+            CompletionKind::Subcommand,
+        ),
+        CandidateSpec::from_raw(
+            "install:Install all dependencies",
+            CompletionKind::Subcommand,
+        ),
+        CandidateSpec::from_raw("i:Install all dependencies", CompletionKind::Subcommand),
+        CandidateSpec::from_raw(
+            "remove:Remove packages from package.json",
+            CompletionKind::Subcommand,
+        ),
+        CandidateSpec::from_raw(
+            "run:Run a defined package script",
+            CompletionKind::Subcommand,
+        ),
+        CandidateSpec::from_raw("test:Run package test script", CompletionKind::Subcommand),
+        CandidateSpec::from_raw("start:Run package start script", CompletionKind::Subcommand),
+        CandidateSpec::from_raw("build:Run package build script", CompletionKind::Subcommand),
+        CandidateSpec::from_raw("init:Create a package.json file", CompletionKind::Subcommand),
+        CandidateSpec::from_raw(
+            "publish:Publish package to registry",
+            CompletionKind::Subcommand,
+        ),
+        CandidateSpec::from_raw(
+            "update:Update packages to latest version",
+            CompletionKind::Subcommand,
+        ),
+        CandidateSpec::from_raw("-v:Print version", CompletionKind::Flag),
+        CandidateSpec::from_raw("--version:Print version", CompletionKind::Flag),
+        CandidateSpec::from_raw("--help:Print help", CompletionKind::Flag),
+    ];
+    pnpm_rule.exec = Some(PKG_SCRIPTS_CMD.to_string());
+    let mut pnpm_run = CompletionRule::new();
+    pnpm_run.exec = Some(PKG_SCRIPTS_CMD.to_string());
+    pnpm_rule.subcommands.insert("run".to_string(), pnpm_run);
+    rules.insert("pnpm".to_string(), pnpm_rule);
+}
+
+fn populate_ssh_rules(rules: &mut HashMap<String, CompletionRule>) {
+    let mut ssh_rule = CompletionRule::new();
+    ssh_rule.candidates = vec![
+        CandidateSpec::from_raw(
+            "-p:Port to connect to on the remote host",
+            CompletionKind::Flag,
+        ),
+        CandidateSpec::from_raw(
+            "-i:Select identity (private key) file",
+            CompletionKind::Flag,
+        ),
+        CandidateSpec::from_raw("-v:Verbose mode (debug connection)", CompletionKind::Flag),
+        CandidateSpec::from_raw("-X:Enable X11 forwarding", CompletionKind::Flag),
+        CandidateSpec::from_raw("-Y:Enable trusted X11 forwarding", CompletionKind::Flag),
+        CandidateSpec::from_raw("-N:Do not execute a remote command", CompletionKind::Flag),
+        CandidateSpec::from_raw("-L:Local port forwarding", CompletionKind::Flag),
+        CandidateSpec::from_raw("-R:Remote port forwarding", CompletionKind::Flag),
+        CandidateSpec::from_raw(
+            "-D:Dynamic application-level port forwarding",
+            CompletionKind::Flag,
+        ),
+        CandidateSpec::from_raw("-C:Enable compression", CompletionKind::Flag),
+    ];
+    ssh_rule.exec = Some("sh -c \"{ awk '/^[[:space:]]*Host[[:space:]]+/ {for (i=2; i<=NF; i++) if ($i !~ /[*?]/) print $i\\\":SSH Config Host\\\"}' ~/.ssh/config 2>/dev/null; awk '{split($1, a, \\\",\\\"); for (i in a) if (a[i] !~ /^\\\\|/ && a[i] !~ /[*?]/) print a[i]\\\":Known Host\\\"}' ~/.ssh/known_hosts 2>/dev/null; } | awk -F: '!seen[$1]++'\"".to_string());
+    rules.insert("ssh".to_string(), ssh_rule);
+}
+
+fn populate_make_rules(rules: &mut HashMap<String, CompletionRule>) {
+    let mut make_rule = CompletionRule::new();
+    make_rule.candidates = vec![
+        CandidateSpec::from_raw("-j:Number of simultaneous jobs", CompletionKind::Flag),
+        CandidateSpec::from_raw("-f:Use specified file as a makefile", CompletionKind::Flag),
+        CandidateSpec::from_raw("-B:Unconditionally make all targets", CompletionKind::Flag),
+        CandidateSpec::from_raw(
+            "-k:Continue as much as possible after an error",
+            CompletionKind::Flag,
+        ),
+        CandidateSpec::from_raw(
+            "-n:Dry run (print commands without running)",
+            CompletionKind::Flag,
+        ),
+        CandidateSpec::from_raw("-s:Silent mode (do not echo commands)", CompletionKind::Flag),
+        CandidateSpec::from_raw(
+            "-C:Change directory before executing make",
+            CompletionKind::Flag,
+        ),
+    ];
+    make_rule.exec = Some("awk -F':' '/^[a-zA-Z0-9_-]+[[:space:]]*:/ && $1 !~ /^\\./ {sub(/[[:space:]]+$/, \"\", $1); print $1\":Makefile target\"}' Makefile makefile GNUmakefile 2>/dev/null | sort -u".to_string());
+    rules.insert("make".to_string(), make_rule);
 }

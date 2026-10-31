@@ -282,4 +282,85 @@ mod tests {
         assert!(reg.remove("myctl"));
         assert!(reg.resolve("myctl", &[], "").is_none());
     }
+
+    #[test]
+    fn resolves_kill_signals_and_processes() {
+        let reg = CompletionRegistry::with_defaults();
+
+        // "kill -" returns signal flags
+        let res_flags = reg.resolve("kill", &[], "-").expect("resolve kill - failed");
+        match res_flags {
+            CompletionResolution::Items(items) => {
+                assert!(items.iter().any(|it| it.replacement == "-9"));
+                assert!(items.iter().any(|it| it.replacement == "-15"));
+                assert!(items.iter().any(|it| it.replacement == "-STOP"));
+                assert!(items.iter().all(|it| it.kind == CompletionKind::Flag));
+            }
+            _ => panic!("Expected Items resolution for kill -"),
+        }
+
+        // "kill " returns non-flags (PIDs from ps exec)
+        if let Some(CompletionResolution::Items(items)) = reg.resolve("kill", &[], "") {
+            assert!(items.iter().all(|it| it.kind != CompletionKind::Flag));
+        }
+    }
+
+    #[test]
+    fn resolves_npm_yarn_pnpm_subcommands_and_flags() {
+        let reg = CompletionRegistry::with_defaults();
+
+        // "npm " returns subcommands only
+        let res = reg.resolve("npm", &[], "").expect("resolve npm failed");
+        match res {
+            CompletionResolution::Items(items) => {
+                assert!(items.iter().any(|it| it.replacement == "run"));
+                assert!(items.iter().any(|it| it.replacement == "test"));
+                assert!(items.iter().any(|it| it.replacement == "install"));
+                assert!(!items.iter().any(|it| it.replacement == "-v"));
+            }
+            _ => panic!("Expected Items resolution for npm"),
+        }
+
+        // "npm -" returns flags only
+        let res_flags = reg.resolve("npm", &[], "-").expect("resolve npm - failed");
+        match res_flags {
+            CompletionResolution::Items(items) => {
+                assert!(items.iter().any(|it| it.replacement == "-v"));
+                assert!(items.iter().any(|it| it.replacement == "--version"));
+                assert!(!items.iter().any(|it| it.replacement == "run"));
+            }
+            _ => panic!("Expected Items resolution for npm -"),
+        }
+
+        // "yarn " and "pnpm " have subcommands
+        assert!(reg.resolve("yarn", &[], "").is_some());
+        assert!(reg.resolve("pnpm", &[], "").is_some());
+    }
+
+    #[test]
+    fn resolves_ssh_and_make_flags() {
+        let reg = CompletionRegistry::with_defaults();
+
+        // "ssh -" returns flags
+        let res_ssh = reg.resolve("ssh", &[], "-").expect("resolve ssh - failed");
+        match res_ssh {
+            CompletionResolution::Items(items) => {
+                assert!(items.iter().any(|it| it.replacement == "-p"));
+                assert!(items.iter().any(|it| it.replacement == "-i"));
+                assert!(items.iter().any(|it| it.replacement == "-v"));
+            }
+            _ => panic!("Expected Items resolution for ssh -"),
+        }
+
+        // "make -" returns flags
+        let res_make = reg.resolve("make", &[], "-").expect("resolve make - failed");
+        match res_make {
+            CompletionResolution::Items(items) => {
+                assert!(items.iter().any(|it| it.replacement == "-j"));
+                assert!(items.iter().any(|it| it.replacement == "-B"));
+                assert!(items.iter().any(|it| it.replacement == "-C"));
+            }
+            _ => panic!("Expected Items resolution for make -"),
+        }
+    }
 }
