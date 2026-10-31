@@ -3,7 +3,7 @@ use crossterm::{
     style::{self, Stylize},
 };
 
-use crate::{diagnostics::source_map::SourceMap, ui::print_error};
+use crate::{diagnostics::source_map::SourceMap, terminal::print_error};
 
 pub mod source_map;
 
@@ -141,12 +141,20 @@ pub fn print_diagnostic<W: std::io::Write>(out: &mut W, diag: &Diagnostic, sourc
     .expect("Failed to print diagnostic");
 
     for note in &diag.notes {
-        queue!(out, style::Print(" |  ".blue()), style::Print(format!("{note}\n")))
-            .expect("Failed to print diagnostic note");
+        queue!(
+            out,
+            style::Print(" |  ".blue()),
+            style::Print(format!("{note}\n"))
+        )
+        .expect("Failed to print diagnostic note");
     }
 
     if let Some(hint) = &diag.hint {
-        queue!(out, style::Print(" |  ".blue()), style::Print(format!("{hint}\n")))
-            .expect("Failed to print diagnostic hint");
+        queue!(
+            out,
+            style::Print(" |  ".blue()),
+            style::Print(format!("{hint}\n"))
+        )
+        .expect("Failed to print diagnostic hint");
     }
 }

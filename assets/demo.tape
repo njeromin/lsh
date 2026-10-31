@@ -1,5 +1,4 @@
 # VHS Tape for lsh demo
-# Run with: nix run nixpkgs#vhs assets/demo.tape (or `vhs assets/demo.tape`)
 
 Output assets/demo.gif
 
@@ -20,11 +19,11 @@ Hide
 Type "cargo build -q"
 Enter
 Sleep 1s
-Type "export LSH_CONFIG_DIR=./config"
+Type "export LSH_CONFIG_DIR=./config; alias lsh=./target/release/lsh"
 Enter
 Type "clear"
 Enter
-Type "./target/debug/lsh"
+Type "lsh"
 Enter
 Sleep 1s
 Show

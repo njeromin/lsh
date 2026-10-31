@@ -780,8 +780,8 @@ impl Parser {
 
                     while let Some(next_token) = self.tokens.get(self.index + 1) {
                         let current = self.current().to_owned();
-                        let is_contiguous = next_token.offset
-                            == current.offset + Self::token_source_len(&current);
+                        let is_contiguous =
+                            next_token.offset == current.offset + Self::token_source_len(&current);
 
                         if matches!(next_token.kind, TokenKind::Star | TokenKind::Slash)
                             && !is_contiguous
@@ -861,9 +861,9 @@ impl Parser {
                                     break;
                                 }
 
-                                if let Some(arg_expr) =
-                                    Self::token_kind_to_primary_call_arg_literal(&self.current().kind)
-                                {
+                                if let Some(arg_expr) = Self::token_kind_to_primary_call_arg_literal(
+                                    &self.current().kind,
+                                ) {
                                     args.push(arg_expr);
                                     break;
                                 } else if let TokenKind::Variable(var) = &self.current().kind {
@@ -994,7 +994,10 @@ impl Parser {
             TokenKind::DollarLeftParen => {
                 self.advance(); // Skip past '$('.
 
-                if matches!(self.current().kind, TokenKind::String(_) | TokenKind::QuotedString(_)) {
+                if matches!(
+                    self.current().kind,
+                    TokenKind::String(_) | TokenKind::QuotedString(_)
+                ) {
                     let cmd_expr = self.parse_command_expr_until(&[TokenKind::RightParen])?;
                     self.consume(
                         &TokenKind::RightParen,
@@ -1545,7 +1548,10 @@ mod tests {
             .expect_err("parser should return parse diagnostic");
         assert!(matches!(err.kind, DiagnosticKind::ParseError));
         assert!(err.message.contains("Unexpected '=' in expression."));
-        assert!(matches!(err.hint.as_deref(), Some("If you meant comparison, use '=='.")));
+        assert!(matches!(
+            err.hint.as_deref(),
+            Some("If you meant comparison, use '=='.")
+        ));
     }
 
     #[test]

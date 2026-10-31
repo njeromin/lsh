@@ -4,12 +4,17 @@ use crate::eval::Evaluator;
 
 pub mod alias;
 pub mod cd;
+pub mod complete;
 pub mod exec;
 pub mod exit;
 pub mod fmt_cwd;
 pub mod source;
 
 // pub type BuiltinFn<R, W, WE> = fn(&mut Evaluator, &mut lsh::IoCtx<R, W, WE>, Vec<String>);
+
+pub const BUILTIN_NAMES: &[&str] = &[
+    "exit", "source", "exec", "alias", "cd", "fmt-cwd", "complete",
+];
 
 pub enum BuiltinKind {
     Exit,
@@ -18,6 +23,7 @@ pub enum BuiltinKind {
     Alias,
     Cd,
     FmtCwd,
+    Complete,
 }
 
 pub struct BuiltinSpec {
@@ -51,6 +57,10 @@ pub fn lookup(name: &str) -> Option<BuiltinSpec> {
             name: "fmt-cwd",
             kind: BuiltinKind::FmtCwd,
         }),
+        "complete" => Some(BuiltinSpec {
+            name: "complete",
+            kind: BuiltinKind::Complete,
+        }),
         _ => None,
     }
 }
@@ -68,5 +78,6 @@ pub fn dispatch<R: io::Read, W: io::Write, WE: io::Write>(
         BuiltinKind::Alias => alias::alias(eval, ctx, args),
         BuiltinKind::Cd => cd::cd(eval, ctx, args),
         BuiltinKind::FmtCwd => fmt_cwd::fmt_cwd(eval, ctx, args),
+        BuiltinKind::Complete => complete::complete(eval, ctx, args),
     }
 }

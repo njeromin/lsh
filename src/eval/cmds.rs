@@ -8,7 +8,7 @@ use lsh::IoStreamMode;
 use crate::{
     builtins::{self},
     eval::Evaluator,
-    ui,
+    terminal,
 };
 
 pub fn exec_cmd<R: io::Read + Send, W: io::Write + Send, WE: io::Write + Send>(
@@ -25,7 +25,7 @@ pub fn exec_cmd<R: io::Read + Send, W: io::Write + Send, WE: io::Write + Send>(
     match spawn_proc(cmd, args, env_assignments, ctx) {
         Ok(status) => status,
         Err(e) => {
-            ui::print_error(&mut ctx.err, &e.to_string());
+            terminal::print_error(&mut ctx.err, &e.to_string());
             -1
         }
     }
@@ -136,9 +136,9 @@ pub fn spawn_proc<R: io::Read + Send, W: io::Write + Send, WE: io::Write + Send>
 
             // If cmd cannot be found, do custom error message, otherwise just print the message.
             if e.kind() == io::ErrorKind::NotFound {
-                ui::print_error(&mut ctx.err, format!("Command '{cmd}' not found.").as_str());
+                terminal::print_error(&mut ctx.err, format!("Command '{cmd}' not found.").as_str());
             } else {
-                ui::print_error(&mut ctx.err, e.to_string().as_str());
+                terminal::print_error(&mut ctx.err, e.to_string().as_str());
             }
 
             Ok(-1)

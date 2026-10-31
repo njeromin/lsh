@@ -6,9 +6,7 @@ use std::{
 
 use crossterm::{cursor, queue};
 use rustyline::{
-    Editor,
-    config::Configurer,
-    error::ReadlineError,
+    CompletionType, Config, Editor, config::Configurer, error::ReadlineError,
     history::DefaultHistory,
 };
 
@@ -30,7 +28,6 @@ pub mod options;
 pub mod parser;
 pub mod paths;
 pub mod terminal;
-pub mod ui;
 
 const DEFAULT_PROMPT: &str = "\x1b[35m›\x1b[0m ";
 
@@ -73,11 +70,16 @@ fn interactive_session(
     let mut cerr = io::stderr();
 
     if let Err(e) = queue!(cout, cursor::SetCursorStyle::BlinkingBar) {
-        ui::print_error(&mut cerr, e.to_string().as_str());
+        terminal::print_error(&mut cerr, e.to_string().as_str());
     }
 
-    let mut editor = Editor::<LineEditorHelper, DefaultHistory>::new()?;
-    editor.set_helper(Some(LineEditorHelper::new()));
+    let config = Config::builder()
+        .completion_type(CompletionType::List)
+        .build();
+    let mut editor = Editor::<LineEditorHelper, DefaultHistory>::with_config(config)?;
+    let mut helper = LineEditorHelper::new();
+    helper.set_completion_registry(std::sync::Arc::clone(&eval.completion_registry));
+    editor.set_helper(Some(helper));
     let _ = editor.load_history(&config_dir.join("history.txt"));
     let mut last_applied_options: Option<Options> = None;
 
@@ -93,13 +95,21 @@ fn interactive_session(
             if last_applied_options.as_ref() != Some(&opts) {
                 editor.set_tab_stop(opts.tab_stop);
                 editor.set_edit_mode(opts.edit_mode.into());
+                editor.set_completion_type(opts.completion_type.into());
+                if let Some(helper) = editor.helper_mut() {
+                    helper.set_completion_type(opts.completion_type);
+                    helper.set_nerd_icons(opts.nerd_icons);
+                }
                 last_applied_options = Some(opts);
             }
         }
 
         osc::write_133("A");
-        if let Some(helper) = editor.helper() {
+        if let Some(helper) = editor.helper_mut() {
             helper.reset_prompt_marks();
+            let aliases = eval.get_aliases().keys().cloned().collect();
+            helper.set_aliases(aliases);
+            helper.set_vars(eval.get_var_names());
         }
 
         let input = match editor.readline(get_prompt(eval)) {
@@ -118,7 +128,7 @@ fn interactive_session(
                 continue;
             }
             Err(e) => {
-                ui::print_error(&mut cerr, e.to_string().as_str());
+                terminal::print_error(&mut cerr, e.to_string().as_str());
                 continue;
             }
         };
@@ -200,7 +210,7 @@ fn main() {
         let code = exec_file(&mut eval, PathBuf::from(file_path));
         std::process::exit(code);
     } else if let Err(e) = interactive_session(&mut eval, &mut src_map, &config_dir) {
-        ui::print_error(&mut io::stderr(), e.to_string().as_str());
+        terminal::print_error(&mut io::stderr(), e.to_string().as_str());
         std::process::exit(1);
     }
 }

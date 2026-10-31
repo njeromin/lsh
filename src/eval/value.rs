@@ -146,7 +146,8 @@ impl Value {
                 if n.is_nan() {
                     false
                 } else {
-                    s.parse::<f64>().is_ok_and(|parsed| !parsed.is_nan() && n == &parsed)
+                    s.parse::<f64>()
+                        .is_ok_and(|parsed| !parsed.is_nan() && n == &parsed)
                 }
             }
 
@@ -195,8 +196,14 @@ mod tests {
         assert_ne!(Value::Number(42.0), Value::Number(43.0));
         assert_ne!(Value::Number(f64::NAN), Value::Number(f64::NAN));
 
-        assert_eq!(Value::String("abc".to_string()), Value::String("abc".to_string()));
-        assert_ne!(Value::String("abc".to_string()), Value::String("xyz".to_string()));
+        assert_eq!(
+            Value::String("abc".to_string()),
+            Value::String("abc".to_string())
+        );
+        assert_ne!(
+            Value::String("abc".to_string()),
+            Value::String("xyz".to_string())
+        );
 
         assert_eq!(Value::Bool(true), Value::Bool(true));
         assert_eq!(Value::Bool(false), Value::Bool(false));
