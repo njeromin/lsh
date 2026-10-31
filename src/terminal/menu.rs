@@ -142,41 +142,19 @@ pub fn calculate_menu_dimensions(
     (width, height)
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MenuPosition {
-    Below,
-    Above,
-}
-
-pub fn determine_menu_position(
-    cursor_row: u16,
-    term_rows: u16,
-    needed_rows: u16,
-) -> MenuPosition {
-    let space_below = term_rows.saturating_sub(cursor_row + 1);
-    let space_above = cursor_row;
-
-    if space_below >= needed_rows {
-        MenuPosition::Below
-    } else if space_above >= needed_rows || space_above > space_below {
-        MenuPosition::Above
-    } else {
-        MenuPosition::Below
-    }
-}
-
 pub fn calculate_max_visible_height(
-    position: MenuPosition,
     cursor_row: u16,
     term_rows: u16,
     max_visible: usize,
-) -> usize {
-    let avail = match position {
-        MenuPosition::Below => term_rows.saturating_sub(cursor_row + 1),
-        MenuPosition::Above => cursor_row,
-    };
-    let max_avail = avail.saturating_sub(2).max(1) as usize;
-    max_visible.min(max_avail)
+) -> (usize, u16) {
+    let space_below = term_rows.saturating_sub(cursor_row + 1);
+    if space_below >= 3 {
+        let max_items = (space_below - 2) as usize;
+        (max_visible.min(max_items).max(1), 0)
+    } else {
+        let needed_scroll = (3 - space_below).min(cursor_row);
+        (1, needed_scroll)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -187,7 +165,6 @@ pub struct MenuLayout {
     pub cursor_row: u16,
     pub cursor_col: u16,
     pub nerd_icons: bool,
-    pub position: MenuPosition,
 }
 
 pub fn draw_menu<W: Write>(
@@ -198,22 +175,9 @@ pub fn draw_menu<W: Write>(
 ) -> io::Result<()> {
     let (start_idx, end_idx) = calculate_viewport(items.len(), selected, layout.height);
 
-    let (top_row, item_start_row, bottom_row) = match layout.position {
-        MenuPosition::Below => (
-            layout.cursor_row + 1,
-            layout.cursor_row + 2,
-            layout.cursor_row + 2 + layout.height as u16,
-        ),
-        MenuPosition::Above => {
-            let needed_rows = layout.height as u16 + 2;
-            let start_row = layout.cursor_row.saturating_sub(needed_rows);
-            (
-                start_row,
-                start_row + 1,
-                start_row + 1 + layout.height as u16,
-            )
-        }
-    };
+    let top_row = layout.cursor_row + 1;
+    let item_start_row = layout.cursor_row + 2;
+    let bottom_row = layout.cursor_row + 2 + layout.height as u16;
 
     // Top border
     let border_title = if start_idx > 0 {
@@ -324,28 +288,13 @@ pub fn erase_menu<W: Write>(
     needed_rows: u16,
     cursor_row: u16,
     cursor_col: u16,
-    position: MenuPosition,
 ) -> io::Result<()> {
-    match position {
-        MenuPosition::Below => {
-            for row in (cursor_row + 1)..=(cursor_row + needed_rows) {
-                queue!(
-                    writer,
-                    cursor::MoveTo(0, row),
-                    terminal::Clear(terminal::ClearType::CurrentLine),
-                )?;
-            }
-        }
-        MenuPosition::Above => {
-            let start_row = cursor_row.saturating_sub(needed_rows);
-            for row in start_row..cursor_row {
-                queue!(
-                    writer,
-                    cursor::MoveTo(0, row),
-                    terminal::Clear(terminal::ClearType::CurrentLine),
-                )?;
-            }
-        }
+    for row in (cursor_row + 1)..=(cursor_row + needed_rows) {
+        queue!(
+            writer,
+            cursor::MoveTo(0, row),
+            terminal::Clear(terminal::ClearType::CurrentLine),
+        )?;
     }
     queue!(
         writer,
@@ -464,17 +413,21 @@ pub fn show_completion_menu(
 
         let mut cout = io::stdout();
 
-        let (cursor_col, cursor_row) = cursor::position().unwrap_or((0, 0));
+        let (cursor_col, mut cursor_row) = cursor::position().unwrap_or((0, 0));
         let (term_cols, term_rows) = terminal::size().unwrap_or((80, 24));
 
         let mut filter_suffix = String::new();
         let mut active_items = items.to_vec();
         let mut selected = 0;
 
-        let needed_initial_rows = items.len().min(max_visible) as u16 + 2;
-        let position = determine_menu_position(cursor_row, term_rows, needed_initial_rows);
-        let effective_max_visible =
-            calculate_max_visible_height(position, cursor_row, term_rows, max_visible);
+        let (effective_max_visible, scroll_needed) =
+            calculate_max_visible_height(cursor_row, term_rows, max_visible);
+
+        if scroll_needed > 0 {
+            let _ = execute!(cout, terminal::ScrollUp(scroll_needed));
+            cursor_row = cursor_row.saturating_sub(scroll_needed);
+            let _ = queue!(cout, cursor::MoveTo(cursor_col, cursor_row));
+        }
 
         let make_layout = |active: &[CompletionItem], filter_len: usize| {
             let (w, h) =
@@ -489,7 +442,6 @@ pub fn show_completion_menu(
                     cursor_row,
                     cursor_col: cur_col,
                     nerd_icons,
-                    position,
                 },
                 h as u16 + 2,
             )
@@ -587,7 +539,6 @@ pub fn show_completion_menu(
                                 max_needed_rows,
                                 cursor_row,
                                 cursor_col + filter_suffix.chars().count() as u16,
-                                position,
                             );
 
                             active_items = new_items;
@@ -626,7 +577,6 @@ pub fn show_completion_menu(
                                     max_needed_rows,
                                     cursor_row,
                                     cursor_col + filter_suffix.chars().count() as u16,
-                                    position,
                                 );
 
                                 let (l, needed) = make_layout(&active_items, filter_suffix.chars().count());
@@ -641,7 +591,7 @@ pub fn show_completion_menu(
             }
         };
 
-        let _ = erase_menu(&mut cout, max_needed_rows, cursor_row, cursor_col, position);
+        let _ = erase_menu(&mut cout, max_needed_rows, cursor_row, cursor_col);
         if matches!(result, MenuResult::Cancelled) && !filter_suffix.is_empty() {
             let _ = queue!(
                 cout,
@@ -762,33 +712,32 @@ mod tests {
     }
 
     #[test]
-    fn determine_menu_position_chooses_below_when_space_permits() {
-        // cursor at row 10 in 24-row terminal, needed 9 rows
-        // space below = 24 - 11 = 13 >= 9
-        assert_eq!(
-            determine_menu_position(10, 24, 9),
-            MenuPosition::Below
-        );
+    fn calculate_max_visible_height_fits_space_below_without_scrolling() {
+        // cursor at row 10 in 24-row terminal (space_below = 13 >= 3)
+        assert_eq!(calculate_max_visible_height(10, 24, 7), (7, 0));
+        // cursor at row 16 in 24-row terminal (space_below = 7 >= 3)
+        // max_items = 7 - 2 = 5
+        assert_eq!(calculate_max_visible_height(16, 24, 7), (5, 0));
+        // cursor at row 18 in 24-row terminal (space_below = 5 >= 3)
+        // max_items = 5 - 2 = 3
+        assert_eq!(calculate_max_visible_height(18, 24, 7), (3, 0));
+        // cursor at row 20 in 24-row terminal (space_below = 3 >= 3)
+        // max_items = 3 - 2 = 1
+        assert_eq!(calculate_max_visible_height(20, 24, 7), (1, 0));
     }
 
     #[test]
-    fn determine_menu_position_chooses_above_near_screen_bottom() {
-        // cursor at row 22 in 24-row terminal, needed 9 rows
-        // space below = 24 - 23 = 1 < 9, space above = 22 >= 9
-        assert_eq!(
-            determine_menu_position(22, 24, 9),
-            MenuPosition::Above
-        );
-
-        // cursor at row 23 (bottom row) in 24-row terminal
-        assert_eq!(
-            determine_menu_position(23, 24, 9),
-            MenuPosition::Above
-        );
+    fn calculate_max_visible_height_scrolls_minimally_at_terminal_edge() {
+        // cursor at row 21 in 24-row terminal (space_below = 2 < 3)
+        assert_eq!(calculate_max_visible_height(21, 24, 7), (1, 1));
+        // cursor at row 22 in 24-row terminal (space_below = 1 < 3)
+        assert_eq!(calculate_max_visible_height(22, 24, 7), (1, 2));
+        // cursor at row 23 (bottom row) in 24-row terminal (space_below = 0 < 3)
+        assert_eq!(calculate_max_visible_height(23, 24, 7), (1, 3));
     }
 
     #[test]
-    fn draw_menu_above_anchors_bottom_border_to_cursor_row_minus_one() {
+    fn draw_menu_renders_strictly_below_cursor_row() {
         let items = vec![
             CompletionItem {
                 replacement: "cargo".to_string(),
@@ -802,7 +751,7 @@ mod tests {
             },
         ];
 
-        let cursor_row = 20;
+        let cursor_row = 10;
         let layout = MenuLayout {
             width: 30,
             height: 2,
@@ -810,35 +759,36 @@ mod tests {
             cursor_row,
             cursor_col: 5,
             nerd_icons: false,
-            position: MenuPosition::Above,
         };
 
         let mut buf = Vec::new();
         draw_menu(&mut buf, &items, 0, layout).unwrap();
         let rendered = String::from_utf8_lossy(&buf);
 
-        // Top border is at start_row = cursor_row - (height + 2) = 20 - 4 = 16
-        // Bottom border is at cursor_row - 1 = 19
-        // In ANSI, 0-indexed row 16 is MoveTo(0, 16) -> row 17 in 1-based VT100
-        assert!(rendered.contains("\x1b[17;1H"));
-        assert!(rendered.contains("\x1b[20;1H"));
-        assert!(rendered.contains("┌────────────────────────────┐"));
-        assert!(rendered.contains("└────────────────────────────┘"));
+        // Top border is at cursor_row + 1 = 11 (VT100 12)
+        // Items are at cursor_row + 2 = 12 (VT100 13) and cursor_row + 3 = 13 (VT100 14)
+        // Bottom border is at cursor_row + 4 = 14 (VT100 15)
+        assert!(rendered.contains("\x1b[12;1H"));
+        assert!(rendered.contains("\x1b[15;1H"));
+        // Prompt line (row 10, VT100 11) is never drawn over
+        assert!(!rendered.contains("\x1b[11;1H┌"));
     }
 
     #[test]
-    fn erase_menu_above_clears_lines_above_cursor() {
+    fn erase_menu_never_erases_cursor_row_or_above() {
         let mut buf = Vec::new();
-        let cursor_row = 20;
+        let cursor_row = 10;
         let needed_rows = 4;
-        erase_menu(&mut buf, needed_rows, cursor_row, 5, MenuPosition::Above).unwrap();
+        erase_menu(&mut buf, needed_rows, cursor_row, 5).unwrap();
         let rendered = String::from_utf8_lossy(&buf);
 
-        // Erases rows 16..20 (0-indexed 16..19): row 16 (VT100 17), row 19 (VT100 20)
-        // Does NOT erase row 20 (prompt row, VT100 21)
-        assert!(rendered.contains("\x1b[17;1H"));
-        assert!(rendered.contains("\x1b[20;1H"));
-        assert!(!rendered.contains("\x1b[21;1H\x1b[2K"));
+        // Erases rows (cursor_row + 1)..=(cursor_row + needed_rows) = 11..=14
+        // In VT100 1-based indexing: rows 12..=15
+        assert!(rendered.contains("\x1b[12;1H\x1b[2K"));
+        assert!(rendered.contains("\x1b[15;1H\x1b[2K"));
+        // Does NOT erase row 10 (prompt row, VT100 11) or any row above
+        assert!(!rendered.contains("\x1b[11;1H\x1b[2K"));
+        assert!(!rendered.contains("\x1b[10;1H\x1b[2K"));
     }
 
     #[test]
@@ -864,7 +814,6 @@ mod tests {
             cursor_row: 10,
             cursor_col: 5,
             nerd_icons: false,
-            position: MenuPosition::Below,
         };
         draw_menu(&mut buf, &items, 0, layout).unwrap();
         let rendered = String::from_utf8_lossy(&buf);
@@ -877,7 +826,7 @@ mod tests {
         assert!(rendered.contains("└"));
 
         let mut erase_buf = Vec::new();
-        erase_menu(&mut erase_buf, 4, 10, 5, MenuPosition::Below).unwrap();
+        erase_menu(&mut erase_buf, 4, 10, 5).unwrap();
         assert!(!erase_buf.is_empty());
     }
 
@@ -905,7 +854,6 @@ mod tests {
             cursor_row: 10,
             cursor_col: 5,
             nerd_icons: false,
-            position: MenuPosition::Below,
         };
         draw_menu(&mut buf, &items, 0, layout).unwrap();
         let rendered = String::from_utf8_lossy(&buf);
@@ -944,7 +892,6 @@ mod tests {
             cursor_row: 10,
             cursor_col: 5,
             nerd_icons: true,
-            position: MenuPosition::Below,
         };
         draw_menu(&mut buf, &items, 0, layout).unwrap();
         let rendered = String::from_utf8_lossy(&buf);
