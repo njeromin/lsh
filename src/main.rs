@@ -6,10 +6,10 @@ use std::{
 
 use crossterm::{cursor, queue};
 use lsh_eval::{Evaluator, Value, exec_file};
-use lsh_sys::signals::{init_interactive_terminal, reset_interrupted};
 use lsh_syntax::{
     SourceMap, debug, diagnostics::print_diagnostic, lexer, parser::Parser, print_error,
 };
+use lsh_sys::signals::{init_interactive_terminal, reset_interrupted};
 use lsh_terminal::{LineEditorHelper, Options, osc};
 use rustyline::{
     CompletionType, Config, Editor, config::Configurer, error::ReadlineError,
