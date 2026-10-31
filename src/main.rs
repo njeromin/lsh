@@ -5,29 +5,18 @@ use std::{
 };
 
 use crossterm::{cursor, queue};
+use lsh_eval::{
+    Evaluator, Value, exec_file,
+    signals::{init_interactive_terminal, reset_interrupted},
+};
+use lsh_syntax::{
+    SourceMap, debug, diagnostics::print_diagnostic, lexer, parser::Parser, print_error,
+};
+use lsh_terminal::{LineEditorHelper, Options, osc};
 use rustyline::{
     CompletionType, Config, Editor, config::Configurer, error::ReadlineError,
     history::DefaultHistory,
 };
-
-use crate::{
-    diagnostics::source_map::SourceMap,
-    eval::{Evaluator, exec::exec_file, value::Value},
-    options::Options,
-    parser::Parser,
-    terminal::{editor::LineEditorHelper, osc},
-};
-
-pub mod builtins;
-pub mod debug;
-pub mod diagnostics;
-pub mod eval;
-pub mod expand;
-pub mod lexer;
-pub mod options;
-pub mod parser;
-pub mod paths;
-pub mod terminal;
 
 const DEFAULT_PROMPT: &str = "\x1b[35m›\x1b[0m ";
 
@@ -64,13 +53,13 @@ fn interactive_session(
     src_map: &mut SourceMap,
     config_dir: &Path,
 ) -> rustyline::Result<()> {
-    terminal::signals::init_interactive_terminal();
+    init_interactive_terminal();
 
     let mut cout = io::stdout();
     let mut cerr = io::stderr();
 
     if let Err(e) = queue!(cout, cursor::SetCursorStyle::BlinkingBar) {
-        terminal::print_error(&mut cerr, e.to_string().as_str());
+        print_error(&mut cerr, e.to_string().as_str());
     }
 
     let config = Config::builder()
@@ -84,7 +73,7 @@ fn interactive_session(
     let mut last_applied_options: Option<Options> = None;
 
     loop {
-        terminal::signals::reset_interrupted();
+        reset_interrupted();
 
         if let Some(opts) = eval.get_var(0, "options").and_then(|v| match v {
             Value::Object(opts) => Some(opts),
@@ -124,11 +113,11 @@ fn interactive_session(
                 line.to_owned()
             }
             Err(ReadlineError::Interrupted) => {
-                terminal::signals::reset_interrupted();
+                reset_interrupted();
                 continue;
             }
             Err(e) => {
-                terminal::print_error(&mut cerr, e.to_string().as_str());
+                print_error(&mut cerr, e.to_string().as_str());
                 continue;
             }
         };
@@ -138,7 +127,7 @@ fn interactive_session(
         let tokens = match lexer::lex_input(src_id, &input) {
             Ok(tokens) => tokens,
             Err(diag) => {
-                diagnostics::print_diagnostic(&mut cerr, &diag, src_map);
+                print_diagnostic(&mut cerr, &diag, src_map);
                 osc::write_133("D;1");
                 let _ = src_map.remove(src_id);
                 continue;
@@ -151,7 +140,7 @@ fn interactive_session(
         let prog = match parser.parse_program() {
             Ok(prog) => prog,
             Err(diag) => {
-                diagnostics::print_diagnostic(&mut cerr, &diag, src_map);
+                print_diagnostic(&mut cerr, &diag, src_map);
                 osc::write_133("D;1");
                 let _ = src_map.remove(src_id);
                 continue;
@@ -210,7 +199,7 @@ fn main() {
         let code = exec_file(&mut eval, PathBuf::from(file_path));
         std::process::exit(code);
     } else if let Err(e) = interactive_session(&mut eval, &mut src_map, &config_dir) {
-        terminal::print_error(&mut io::stderr(), e.to_string().as_str());
+        print_error(&mut io::stderr(), e.to_string().as_str());
         std::process::exit(1);
     }
 }

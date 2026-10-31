@@ -237,11 +237,47 @@ version = "0.1.0"
 dependencies = [
  "crossterm",
  "dirs",
+ "lsh-completions",
+ "lsh-eval",
+ "lsh-syntax",
+ "lsh-terminal",
+ "rustyline",
+]
+
+[[package]]
+name = "lsh-completions"
+version = "0.1.0"
+
+[[package]]
+name = "lsh-eval"
+version = "0.1.0"
+dependencies = [
+ "dirs",
  "glob",
  "libc",
- "rustyline",
+ "lsh-completions",
+ "lsh-syntax",
  "signal-hook",
  "which",
+]
+
+[[package]]
+name = "lsh-syntax"
+version = "0.1.0"
+dependencies = [
+ "crossterm",
+ "dirs",
+]
+
+[[package]]
+name = "lsh-terminal"
+version = "0.1.0"
+dependencies = [
+ "crossterm",
+ "lsh-completions",
+ "lsh-eval",
+ "lsh-syntax",
+ "rustyline",
 ]
 
 [[package]]

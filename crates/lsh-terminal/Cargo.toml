@@ -1,0 +1,11 @@
+[package]
+name = "lsh-terminal"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+lsh-syntax = { path = "../lsh-syntax" }
+lsh-completions = { path = "../lsh-completions" }
+lsh-eval = { path = "../lsh-eval" }
+crossterm = "0.29.0"
+rustyline = { version = "17.0.2", features = ["derive"] }

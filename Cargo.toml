@@ -1,13 +1,23 @@
+[workspace]
+members = [
+    ".",
+    "crates/lsh-syntax",
+    "crates/lsh-completions",
+    "crates/lsh-eval",
+    "crates/lsh-terminal",
+]
+resolver = "2"
+
 [package]
 name = "lsh"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+lsh-syntax = { path = "crates/lsh-syntax" }
+lsh-completions = { path = "crates/lsh-completions" }
+lsh-eval = { path = "crates/lsh-eval" }
+lsh-terminal = { path = "crates/lsh-terminal" }
 crossterm = "0.29.0"
 dirs = "6.0.0"
-glob = "0.3"
-libc = "0.2"
 rustyline = { version = "17.0.2", features = ["derive"] }
-signal-hook = "0.3"
-which = "8.0.0"
