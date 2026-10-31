@@ -30,7 +30,6 @@ pub mod options;
 pub mod parser;
 pub mod paths;
 pub mod terminal;
-pub mod ui;
 
 const DEFAULT_PROMPT: &str = "\x1b[35m›\x1b[0m ";
 
@@ -73,7 +72,7 @@ fn interactive_session(
     let mut cerr = io::stderr();
 
     if let Err(e) = queue!(cout, cursor::SetCursorStyle::BlinkingBar) {
-        ui::print_error(&mut cerr, e.to_string().as_str());
+        terminal::print_error(&mut cerr, e.to_string().as_str());
     }
 
     let config = Config::builder()
@@ -128,7 +127,7 @@ fn interactive_session(
                 continue;
             }
             Err(e) => {
-                ui::print_error(&mut cerr, e.to_string().as_str());
+                terminal::print_error(&mut cerr, e.to_string().as_str());
                 continue;
             }
         };
@@ -210,7 +209,7 @@ fn main() {
         let code = exec_file(&mut eval, PathBuf::from(file_path));
         std::process::exit(code);
     } else if let Err(e) = interactive_session(&mut eval, &mut src_map, &config_dir) {
-        ui::print_error(&mut io::stderr(), e.to_string().as_str());
+        terminal::print_error(&mut io::stderr(), e.to_string().as_str());
         std::process::exit(1);
     }
 }

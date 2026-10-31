@@ -318,7 +318,8 @@ impl Evaluator {
     }
 
     pub fn evaluate(&mut self, prog: Program) -> i32 {
-        self.evaluate_statements(&prog.body, &mut vec![0]).last_status
+        self.evaluate_statements(&prog.body, &mut vec![0])
+            .last_status
     }
 
     fn evaluate_in_new_scope(
@@ -425,8 +426,7 @@ impl Evaluator {
                                 last_status,
                             };
                         }
-                    } else if let Some(else_branch_statements) = else_branch
-                    {
+                    } else if let Some(else_branch_statements) = else_branch {
                         let outcome =
                             self.evaluate_in_new_scope(else_branch_statements, scope_indices);
                         last_status = outcome.last_status;
@@ -761,7 +761,7 @@ impl Evaluator {
                     };
                     if !capture_output {
                         let mut cerr = io::stderr();
-                        crate::ui::print_error(&mut cerr, &err_msg);
+                        crate::terminal::print_error(&mut cerr, &err_msg);
                         return (-1, vec![], vec![]);
                     } else {
                         return (-1, vec![], err_msg.into_bytes());
@@ -790,13 +790,18 @@ impl Evaluator {
             }
 
             let stdout_handle = if capture_output && !children.is_empty() {
-                children.last_mut().unwrap().stdout.take().map(|mut stdout| {
-                    s.spawn(move || {
-                        let mut buf = Vec::new();
-                        let _ = io::copy(&mut stdout, &mut buf);
-                        buf
+                children
+                    .last_mut()
+                    .unwrap()
+                    .stdout
+                    .take()
+                    .map(|mut stdout| {
+                        s.spawn(move || {
+                            let mut buf = Vec::new();
+                            let _ = io::copy(&mut stdout, &mut buf);
+                            buf
+                        })
                     })
-                })
             } else {
                 None
             };
@@ -1587,7 +1592,9 @@ mod tests {
 
     fn eval_var(code: &str, var_name: &str) -> Option<Value> {
         let (eval, _) = eval_with_evaluator(code);
-        eval.scopes.first().and_then(|s| s.vars.get(var_name).cloned())
+        eval.scopes
+            .first()
+            .and_then(|s| s.vars.get(var_name).cloned())
     }
 
     fn eval_with_evaluator(code: &str) -> (Evaluator, i32) {
@@ -1616,7 +1623,12 @@ mod tests {
         let status = eval.evaluate(prog);
 
         assert_eq!(status, STATUS_SIGINT);
-        assert_eq!(eval.scopes.first().and_then(|s| s.vars.get("reached_second")), None);
+        assert_eq!(
+            eval.scopes
+                .first()
+                .and_then(|s| s.vars.get("reached_second")),
+            None
+        );
     }
 
     #[test]
@@ -1648,7 +1660,10 @@ mod tests {
             let out_val = $(add 2 3).out
             let code_val = $(add 2 3).code
         "#;
-        assert_eq!(eval_var(code, "out_val"), Some(Value::String("5".to_string())));
+        assert_eq!(
+            eval_var(code, "out_val"),
+            Some(Value::String("5".to_string()))
+        );
         assert_eq!(eval_var(code, "code_val"), Some(Value::Number(0.0)));
     }
 
@@ -1661,8 +1676,14 @@ mod tests {
             let neg = "ab" * -2
             let huge = "ab" * 10000000
         "#;
-        assert_eq!(eval_var(code, "a"), Some(Value::String("ababab".to_string())));
-        assert_eq!(eval_var(code, "b"), Some(Value::String("ababab".to_string())));
+        assert_eq!(
+            eval_var(code, "a"),
+            Some(Value::String("ababab".to_string()))
+        );
+        assert_eq!(
+            eval_var(code, "b"),
+            Some(Value::String("ababab".to_string()))
+        );
         assert_eq!(eval_var(code, "zero"), Some(Value::String(String::new())));
         assert_eq!(eval_var(code, "neg"), Some(Value::String(String::new())));
         assert_eq!(eval_var(code, "huge"), Some(Value::Null));
@@ -1690,8 +1711,14 @@ mod tests {
                 $matched_empty_first = 1
             }
         "#;
-        assert_eq!(eval_var(code, "matched_null_first"), Some(Value::Number(1.0)));
-        assert_eq!(eval_var(code, "matched_empty_first"), Some(Value::Number(1.0)));
+        assert_eq!(
+            eval_var(code, "matched_null_first"),
+            Some(Value::Number(1.0))
+        );
+        assert_eq!(
+            eval_var(code, "matched_empty_first"),
+            Some(Value::Number(1.0))
+        );
     }
 
     #[test]
@@ -1699,7 +1726,7 @@ mod tests {
         let mut eval = Evaluator::new();
         let mut scopes = vec![0];
 
-        // 1. Unquoted wildcard: echo src/*.rs
+        // Unquoted wildcard: echo src/*.rs
         let unquoted_code = "echo src/*.rs";
         let tokens = lexer::lex_input(0, unquoted_code).unwrap();
         let mut parser = Parser::new(0, tokens);
@@ -1713,7 +1740,7 @@ mod tests {
         assert!(args.contains(&"src/lib.rs".to_string()));
         assert!(args.contains(&"src/main.rs".to_string()));
 
-        // 2. Quoted wildcard: echo "src/*.rs"
+        // Quoted wildcard: echo "src/*.rs"
         let quoted_code = "echo \"src/*.rs\"";
         let tokens = lexer::lex_input(0, quoted_code).unwrap();
         let mut parser = Parser::new(0, tokens);
@@ -1726,7 +1753,7 @@ mod tests {
         let args = eval.build_command_args(vec![], call_args, &mut scopes);
         assert_eq!(args, vec!["src/*.rs".to_string()]);
 
-        // 3. Nonexistent wildcard fallback
+        // Nonexistent wildcard fallback
         let fallback_code = "echo nonexistent_*.xyz";
         let tokens = lexer::lex_input(0, fallback_code).unwrap();
         let mut parser = Parser::new(0, tokens);

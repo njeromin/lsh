@@ -1,6 +1,6 @@
 use std::{fs, io::stderr, path::PathBuf};
 
-use crate::{debug, diagnostics::source_map::SourceMap, eval::Evaluator, lexer, parser::Parser, ui};
+use crate::{debug, diagnostics::source_map::SourceMap, eval::Evaluator, lexer, parser::Parser, terminal};
 
 pub fn exec_file(evaluator: &mut Evaluator, path: PathBuf) -> i32 {
     let mut cerr = stderr();
@@ -34,7 +34,7 @@ pub fn exec_file(evaluator: &mut Evaluator, path: PathBuf) -> i32 {
             evaluator.evaluate(prog)
         }
         Err(e) => {
-            ui::print_error(&mut cerr, e.to_string().as_str());
+            terminal::print_error(&mut cerr, e.to_string().as_str());
             1
         }
     }

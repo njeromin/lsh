@@ -1,6 +1,6 @@
 use std::io;
 
-use crate::{eval::Evaluator, ui};
+use crate::{eval::Evaluator, terminal};
 
 pub fn alias<R: io::Read, W: io::Write, WE: io::Write>(
     eval: &mut Evaluator,
@@ -23,21 +23,21 @@ pub fn alias<R: io::Read, W: io::Write, WE: io::Write>(
                         eval.set_alias(arg1.to_string(), arg2.to_string());
                         0
                     } else {
-                        ui::print_error(&mut io.err, "A value is required.");
+                        terminal::print_error(&mut io.err, "A value is required.");
                         1
                     }
                 } else {
-                    ui::print_error(&mut io.err, "A name is required.");
+                    terminal::print_error(&mut io.err, "A name is required.");
                     1
                 }
             }
             _ => {
-                ui::print_error(&mut io.err, "A subcommand (set/list) is required.");
+                terminal::print_error(&mut io.err, "A subcommand (set/list) is required.");
                 1
             }
         }
     } else {
-        ui::print_error(&mut io.err, "A subcommand (set/list) is required.");
+        terminal::print_error(&mut io.err, "A subcommand (set/list) is required.");
         1
     }
 }

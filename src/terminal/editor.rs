@@ -41,11 +41,7 @@ pub fn find_command_segment(sub: &str) -> &str {
                 }
                 last_sep = i + 1;
             }
-            b'&' if !in_single
-                && !in_double
-                && i + 1 < bytes.len()
-                && bytes[i + 1] == b'&' =>
-            {
+            b'&' if !in_single && !in_double && i + 1 < bytes.len() && bytes[i + 1] == b'&' => {
                 i += 1;
                 last_sep = i + 1;
             }
@@ -64,7 +60,7 @@ pub fn classify_completion_context(line: &str, pos: usize) -> CompletionContext<
         line
     };
 
-    // 1. Check for variable completion: find the current word start.
+    // Check for variable completion: find the current word start.
     let word_start = sub
         .rfind(|c: char| c.is_whitespace() || matches!(c, '=' | '"' | '\''))
         .map(|idx| idx + 1)
@@ -78,7 +74,7 @@ pub fn classify_completion_context(line: &str, pos: usize) -> CompletionContext<
         };
     }
 
-    // 2. Check for command position in current command segment.
+    // Check for command position in current command segment.
     let segment = find_command_segment(sub);
     let leading_spaces = segment.len() - segment.trim_start().len();
     let trimmed = segment.trim_start();
@@ -288,10 +284,13 @@ impl Completer for LineEditorHelper {
 
         if self.completion_type == CompletionType::Menu && items.len() > 1 {
             match menu::show_completion_menu(&items, 7) {
-                Some(idx) => Ok((start, vec![Pair {
-                    display: items[idx].display.clone(),
-                    replacement: items[idx].replacement.clone(),
-                }])),
+                Some(idx) => Ok((
+                    start,
+                    vec![Pair {
+                        display: items[idx].display.clone(),
+                        replacement: items[idx].replacement.clone(),
+                    }],
+                )),
                 None => Ok((start, Vec::new())),
             }
         } else {
@@ -324,9 +323,7 @@ impl Hinter for LineEditorHelper {
         {
             let replacement = &items[0].replacement;
             let typed_prefix = &line[start..pos];
-            if replacement.starts_with(typed_prefix)
-                && replacement.len() > typed_prefix.len()
-            {
+            if replacement.starts_with(typed_prefix) && replacement.len() > typed_prefix.len() {
                 return Some(replacement[typed_prefix.len()..].to_string());
             }
         }
@@ -500,7 +497,9 @@ mod tests {
         let history = DefaultHistory::new();
         let ctx = Context::new(&history);
 
-        let (start, items) = helper.get_candidates("c", 1, &ctx).expect("completion failed");
+        let (start, items) = helper
+            .get_candidates("c", 1, &ctx)
+            .expect("completion failed");
         assert_eq!(start, 0);
 
         let builtin_item = items.iter().find(|it| it.replacement == "cd").unwrap();
@@ -539,7 +538,9 @@ mod tests {
         let history = DefaultHistory::new();
         let ctx = Context::new(&history);
 
-        let (start, candidates) = helper.complete("echo $MY_SHELL", 14, &ctx).expect("completion failed");
+        let (start, candidates) = helper
+            .complete("echo $MY_SHELL", 14, &ctx)
+            .expect("completion failed");
         assert_eq!(start, 5);
 
         let names: Vec<String> = candidates.into_iter().map(|p| p.replacement).collect();
@@ -554,7 +555,9 @@ mod tests {
         let history = DefaultHistory::new();
         let ctx = Context::new(&history);
 
-        let (start, candidates) = helper.complete("cat src/ex", 10, &ctx).expect("completion failed");
+        let (start, candidates) = helper
+            .complete("cat src/ex", 10, &ctx)
+            .expect("completion failed");
         assert_eq!(start, 4);
 
         let names: Vec<String> = candidates.into_iter().map(|p| p.replacement).collect();

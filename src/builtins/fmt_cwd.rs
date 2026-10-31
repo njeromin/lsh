@@ -5,7 +5,7 @@ use std::{
 
 use crate::{
     eval::{Evaluator, value::Value},
-    paths, ui,
+    paths, terminal,
 };
 
 fn format_cwd(path: &Path, home_dir: &Path) -> String {
@@ -43,7 +43,7 @@ pub fn fmt_cwd<R: io::Read, W: io::Write, WE: io::Write>(
     args: Vec<String>,
 ) -> i32 {
     if args.len() > 1 {
-        ui::print_error(&mut io.err, "Too many arguments.");
+        terminal::print_error(&mut io.err, "Too many arguments.");
         return 1;
     }
 
@@ -63,7 +63,7 @@ pub fn fmt_cwd<R: io::Read, W: io::Write, WE: io::Write>(
     if let Err(e) = write!(&mut io.out, "{formatted}")
         && e.kind() != io::ErrorKind::BrokenPipe
     {
-        ui::print_error(&mut io.err, format!("Failed to write formatted cwd: {e}").as_str());
+        terminal::print_error(&mut io.err, format!("Failed to write formatted cwd: {e}").as_str());
         return 1;
     }
     0

@@ -3,7 +3,7 @@ use crossterm::{
     style::{self, Stylize},
 };
 
-use crate::{diagnostics::source_map::SourceMap, ui::print_error};
+use crate::{diagnostics::source_map::SourceMap, terminal::print_error};
 
 pub mod source_map;
 
