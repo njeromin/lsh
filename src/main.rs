@@ -18,32 +18,35 @@ use rustyline::{
 
 const DEFAULT_PROMPT: &str = "\x1b[35m›\x1b[0m ";
 
-fn get_prompt(eval: &mut Evaluator) -> &str {
+fn get_prompt(eval: &mut Evaluator) -> String {
     let before = eval
         .get_var(0, "prompt")
         .and_then(|v| match v {
-            Value::Object(prompt) => prompt.get("before"),
+            Value::Object(prompt) => prompt.read().ok().and_then(|p| p.get("before").cloned()),
             _ => None,
         })
         .and_then(|v| match v {
-            Value::Function(f) => Some(f.clone()),
+            Value::Function(f) => Some(f),
             _ => None,
         });
 
-    if let Some(before_fn) = before {
-        eval.exec_function(&before_fn, vec![]);
+    let prompt_val = eval.get_var(0, "prompt").cloned();
+
+    if let (Some(before_fn), Some(prompt_obj)) = (before, prompt_val) {
+        let prompt_expr = lsh_syntax::ast::Expr::Variable("prompt".to_string());
+        eval.exec_function_with_receiver(&before_fn, vec![], Some((prompt_expr, prompt_obj)));
     }
 
     eval.get_var(0, "prompt")
         .and_then(|v| match v {
-            Value::Object(prompt) => prompt.get("text"),
+            Value::Object(prompt) => prompt.read().ok().and_then(|p| p.get("text").cloned()),
             _ => None,
         })
         .and_then(|v| match v {
-            Value::String(text) => Some(text.as_str()),
+            Value::String(text) => Some(text),
             _ => None,
         })
-        .unwrap_or(DEFAULT_PROMPT)
+        .unwrap_or_else(|| DEFAULT_PROMPT.to_string())
 }
 
 fn interactive_session(
@@ -73,10 +76,7 @@ fn interactive_session(
     loop {
         reset_interrupted();
 
-        if let Some(opts) = eval.get_var(0, "options").and_then(|v| match v {
-            Value::Object(opts) => Some(opts),
-            _ => None,
-        }) {
+        if let Some(opts) = eval.get_var(0, "options") {
             let opts = Options::from(opts);
 
             if last_applied_options.as_ref() != Some(&opts) {
@@ -99,7 +99,8 @@ fn interactive_session(
             helper.set_vars(eval.get_var_names());
         }
 
-        let input = match editor.readline(get_prompt(eval)) {
+        let prompt = get_prompt(eval);
+        let input = match editor.readline(&prompt) {
             Ok(line) => {
                 editor.add_history_entry(&line)?;
 

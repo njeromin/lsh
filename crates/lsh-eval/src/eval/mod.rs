@@ -52,6 +52,9 @@ struct ExternalPipelineStage {
     stdout_redirect: Option<String>,
 }
 
+type NamedReceiver = (String, Value);
+type NamedFunctionWithReceiver = (Arc<FunctionValue>, Option<NamedReceiver>);
+
 #[derive(Default)]
 pub struct Scope {
     vars: HashMap<String, Value>,
@@ -112,7 +115,7 @@ impl Evaluator {
         );
         map.insert("nerd_icons".to_string(), Value::Bool(nerd_icons));
 
-        Value::Object(map)
+        Value::object(map)
     }
 
     pub fn with_globals(mut self) -> Evaluator {
@@ -120,7 +123,7 @@ impl Evaluator {
 
         scope.vars.insert(
             String::from("prompt"),
-            Value::Object(HashMap::from([(
+            Value::object(HashMap::from([(
                 String::from("text"),
                 Value::String(String::from("\x1b[35m$\x1b[0m ")),
             )])),
@@ -132,7 +135,7 @@ impl Evaluator {
 
         scope.vars.insert(
             String::from("palette"),
-            Value::Object(HashMap::from([
+            Value::object(HashMap::from([
                 (
                     String::from("black"),
                     Value::String(String::from("\x1b[30m")),
@@ -305,8 +308,17 @@ impl Evaluator {
     }
 
     pub fn exec_function(&mut self, func: &FunctionValue, args: Vec<Value>) -> Value {
+        self.exec_function_with_receiver(func, args, None)
+    }
+
+    pub fn exec_function_with_receiver(
+        &mut self,
+        func: &FunctionValue,
+        args: Vec<Value>,
+        receiver: Option<(Expr, Value)>,
+    ) -> Value {
         let mut scope_indices = vec![0];
-        self.call_user_function_with_values(func, args, &mut scope_indices)
+        self.call_user_function_with_values_and_receiver(func, args, receiver, &mut scope_indices)
     }
 
     pub fn push_var(&mut self, scope_index: usize, name: String, value: Value) {
@@ -516,7 +528,7 @@ impl Evaluator {
                     params,
                     body,
                 } => {
-                    let func_value = Value::Function(FunctionValue {
+                    let func_value = Value::function(FunctionValue {
                         params: params.clone(),
                         body: body.clone(),
                     });
@@ -573,7 +585,7 @@ impl Evaluator {
         res.insert(String::from("code"), Value::Number(code as f64));
         res.insert(String::from("out"), Value::String(out));
         res.insert(String::from("err"), Value::String(err));
-        Value::Object(res)
+        Value::object(res)
     }
 
     fn resolve_stdout_redirect_path(
@@ -1033,22 +1045,24 @@ impl Evaluator {
                     self.resolve_stdout_redirect_path(stdout_redirect, scope_indices);
 
                 let result = {
-                    let identifier_val = self.evaluate_expr(identifier, true, scope_indices);
+                    let (identifier_val, receiver) =
+                        self.resolve_callable_target(identifier, scope_indices);
 
                     if let Value::Function(func) = &identifier_val {
                         let output = self
-                            .call_user_function(func, args, scope_indices)
+                            .call_user_function_with_receiver(func, args, receiver, scope_indices)
                             .to_string()
                             .into_bytes();
                         Self::maybe_redirect_output(output, stdout_redirect_path.as_deref())
                     } else {
                         let identifier_str = identifier_val.to_string();
 
-                        if let Some(Value::Function(func)) =
-                            self.resolve_named_value(&identifier_str, scope_indices)
+                        if let Some((func, rec_info)) = self
+                            .resolve_named_function_with_receiver(&identifier_str, scope_indices)
                         {
+                            let rec = rec_info.map(|(path, val)| (Self::path_to_expr(&path), val));
                             let output = self
-                                .call_user_function(&func, args, scope_indices)
+                                .call_user_function_with_receiver(&func, args, rec, scope_indices)
                                 .to_string()
                                 .into_bytes();
                             Self::maybe_redirect_output(output, stdout_redirect_path.as_deref())
@@ -1186,9 +1200,18 @@ impl Evaluator {
         }
     }
 
+    fn is_assignable(expr: &Expr) -> bool {
+        matches!(expr, Expr::Variable(_) | Expr::Word(_) | Expr::Index { .. })
+    }
+
     fn assign_target(&mut self, target: &Expr, value: Value, scope_indices: &mut Vec<usize>) {
         match target {
-            Expr::Variable(var_name) => {
+            Expr::Variable(var_name) | Expr::Word(var_name) => {
+                if var_name.contains('.') {
+                    let expanded_target = Self::path_to_expr(var_name);
+                    self.assign_target(&expanded_target, value, scope_indices);
+                    return;
+                }
                 self.assign_var(var_name, value, scope_indices);
             }
             Expr::Index { object, index } => {
@@ -1196,27 +1219,199 @@ impl Evaluator {
                 let key = Self::object_index_key(key_value)
                     .unwrap_or_else(|| panic!("Invalid object index for assignment."));
 
-                let mut object_map = match self.evaluate_expr(object, true, scope_indices) {
-                    Value::Object(map) => map,
-                    Value::Null => HashMap::new(),
-                    _ => panic!("Assignment target must be an object member."),
-                };
+                if key.contains('.') {
+                    let parts: Vec<&str> = key.split('.').collect();
+                    let mut current_obj = *object.clone();
+                    for part in &parts[..parts.len() - 1] {
+                        current_obj = Expr::Index {
+                            object: Box::new(current_obj),
+                            index: Box::new(Expr::String(part.to_string())),
+                        };
+                    }
+                    let last_key = parts.last().unwrap().to_string();
+                    let expanded_target = Expr::Index {
+                        object: Box::new(current_obj),
+                        index: Box::new(Expr::String(last_key)),
+                    };
+                    self.assign_target(&expanded_target, value, scope_indices);
+                    return;
+                }
 
-                object_map.insert(key, value);
-                self.assign_target(object, Value::Object(object_map), scope_indices);
+                let target_obj = self.evaluate_expr(object, true, scope_indices);
+                match target_obj {
+                    Value::Object(map) => {
+                        let mut m = match map.write() {
+                            Ok(g) => g,
+                            Err(p) => p.into_inner(),
+                        };
+                        m.insert(key, value);
+                    }
+                    Value::Null => {
+                        let mut new_map = HashMap::new();
+                        new_map.insert(key, value);
+                        self.assign_target(object, Value::object(new_map), scope_indices);
+                    }
+                    _ => panic!("Assignment target must be an object member."),
+                }
             }
             _ => panic!("Invalid assignment target."),
+        }
+    }
+
+    fn path_to_expr(path: &str) -> Expr {
+        let parts: Vec<&str> = path.split('.').collect();
+        let mut expr = Expr::Variable(parts[0].to_string());
+        for part in &parts[1..] {
+            expr = Expr::Index {
+                object: Box::new(expr),
+                index: Box::new(Expr::String(part.to_string())),
+            };
+        }
+        expr
+    }
+
+    fn resolve_named_function_with_receiver(
+        &self,
+        identifier: &str,
+        scope_indices: &[usize],
+    ) -> Option<NamedFunctionWithReceiver> {
+        let parts: Vec<&str> = identifier.split('.').collect();
+        if parts.is_empty() {
+            return None;
+        }
+
+        let first = parts[0].strip_prefix('$').unwrap_or(parts[0]);
+
+        if parts.len() == 1 {
+            let val = self.scoped_var(first, scope_indices)?;
+            if let Value::Function(f) = val {
+                return Some((f, None));
+            }
+            return None;
+        }
+
+        let mut current_val = self.scoped_var(first, scope_indices)?.clone();
+        let mut receiver_name = first.to_string();
+
+        for part in &parts[1..parts.len() - 1] {
+            receiver_name.push('.');
+            receiver_name.push_str(part);
+            let next_val = match &current_val {
+                Value::Object(map) => {
+                    let m = match map.read() {
+                        Ok(g) => g,
+                        Err(p) => p.into_inner(),
+                    };
+                    m.get(*part).cloned()?
+                }
+                _ => return None,
+            };
+            current_val = next_val;
+        }
+
+        let last_part = parts.last()?;
+        let func_val = match &current_val {
+            Value::Object(map) => {
+                let m = match map.read() {
+                    Ok(g) => g,
+                    Err(p) => p.into_inner(),
+                };
+                m.get(*last_part).cloned()?
+            }
+            _ => return None,
+        };
+
+        if let Value::Function(func) = func_val {
+            Some((func, Some((receiver_name, current_val))))
+        } else {
+            None
+        }
+    }
+
+    fn resolve_callable_target(
+        &mut self,
+        target: &Expr,
+        scope_indices: &mut Vec<usize>,
+    ) -> (Value, Option<(Expr, Value)>) {
+        match target {
+            Expr::Index { object, index } => {
+                let mut receiver_expr = *object.clone();
+                let mut receiver_val = self.evaluate_expr(object, true, scope_indices);
+                let index_val = self.evaluate_expr(index, true, scope_indices);
+                let key = Self::object_index_key(index_val);
+
+                let func_val = match (&receiver_val, key) {
+                    (Value::Object(map), Some(k)) if k.contains('.') => {
+                        let parts: Vec<&str> = k.split('.').collect();
+                        let mut current_val = Value::Object(Arc::clone(map));
+                        for part in &parts[..parts.len() - 1] {
+                            receiver_expr = Expr::Index {
+                                object: Box::new(receiver_expr),
+                                index: Box::new(Expr::String(part.to_string())),
+                            };
+                            current_val = match &current_val {
+                                Value::Object(m) => {
+                                    let guard = match m.read() {
+                                        Ok(g) => g,
+                                        Err(p) => p.into_inner(),
+                                    };
+                                    guard.get(*part).cloned().unwrap_or(Value::Null)
+                                }
+                                _ => Value::Null,
+                            };
+                        }
+                        receiver_val = current_val;
+                        let last_key = parts.last().unwrap();
+                        match &receiver_val {
+                            Value::Object(m) => {
+                                let guard = match m.read() {
+                                    Ok(g) => g,
+                                    Err(p) => p.into_inner(),
+                                };
+                                guard.get(*last_key).cloned().unwrap_or(Value::Null)
+                            }
+                            _ => Value::Null,
+                        }
+                    }
+                    (Value::Object(map), Some(k)) => {
+                        let guard = match map.read() {
+                            Ok(g) => g,
+                            Err(p) => p.into_inner(),
+                        };
+                        guard.get(&k).cloned().unwrap_or(Value::Null)
+                    }
+                    _ => Value::Null,
+                };
+                (func_val, Some((receiver_expr, receiver_val)))
+            }
+            Expr::Word(identifier) | Expr::Variable(identifier) => {
+                if let Some((func, rec_info)) =
+                    self.resolve_named_function_with_receiver(identifier, scope_indices)
+                {
+                    let rec = rec_info.map(|(path, val)| (Self::path_to_expr(&path), val));
+                    (Value::Function(func), rec)
+                } else {
+                    (self.evaluate_expr(target, true, scope_indices), None)
+                }
+            }
+            _ => (self.evaluate_expr(target, true, scope_indices), None),
         }
     }
 
     fn resolve_named_value(&self, identifier: &str, scope_indices: &[usize]) -> Option<Value> {
         let mut parts = identifier.split('.');
         let first_part = parts.next()?;
-        let mut value = self.scoped_var(first_part, scope_indices)?;
+        let mut value = self.scoped_var(first_part, scope_indices)?.clone();
 
         for part in parts {
-            let next_value = match value {
-                Value::Object(map) => map.get(part).cloned(),
+            let next_value = match &value {
+                Value::Object(map) => {
+                    let guard = match map.read() {
+                        Ok(g) => g,
+                        Err(p) => p.into_inner(),
+                    };
+                    guard.get(part).cloned()
+                }
                 _ => None,
             }?;
             value = next_value;
@@ -1274,10 +1469,11 @@ impl Evaluator {
         all_args
     }
 
-    fn call_user_function(
+    fn call_user_function_with_receiver(
         &mut self,
         func: &FunctionValue,
         args: &[Expr],
+        receiver: Option<(Expr, Value)>,
         scope_indices: &mut Vec<usize>,
     ) -> Value {
         let evaluated_args: Vec<Value> = args
@@ -1285,19 +1481,29 @@ impl Evaluator {
             .map(|arg| self.evaluate_expr(arg, true, scope_indices))
             .collect();
 
-        self.call_user_function_with_values(func, evaluated_args, scope_indices)
+        self.call_user_function_with_values_and_receiver(
+            func,
+            evaluated_args,
+            receiver,
+            scope_indices,
+        )
     }
 
-    fn call_user_function_with_values(
+    fn call_user_function_with_values_and_receiver(
         &mut self,
         func: &FunctionValue,
         evaluated_args: Vec<Value>,
+        receiver: Option<(Expr, Value)>,
         scope_indices: &mut Vec<usize>,
     ) -> Value {
         let scope_index = self.make_scope();
         scope_indices.push(scope_index);
 
         if let Some(scope) = self.scopes.get_mut(scope_index) {
+            if let Some((_, ref this_val)) = receiver {
+                scope.vars.insert("this".to_string(), this_val.clone());
+            }
+
             for (param_index, param_name) in func.params.iter().enumerate() {
                 let value = evaluated_args
                     .get(param_index)
@@ -1311,6 +1517,14 @@ impl Evaluator {
 
         let outcome = self.evaluate_statements(&func.body, scope_indices);
 
+        let final_this = if receiver.is_some() {
+            self.scopes
+                .get(scope_index)
+                .and_then(|s| s.vars.get("this").cloned())
+        } else {
+            None
+        };
+
         let popped_scope_index = scope_indices
             .pop()
             .expect("Failed to pop scope index after function call.");
@@ -1323,6 +1537,13 @@ impl Evaluator {
         self.scopes
             .pop()
             .expect("Failed to pop evaluator scope after function call.");
+
+        if let (Some((receiver_expr, initial_this)), Some(updated_this)) = (receiver, final_this)
+            && updated_this != initial_this
+            && Self::is_assignable(&receiver_expr)
+        {
+            self.assign_target(&receiver_expr, updated_this, scope_indices);
+        }
 
         match outcome.flow {
             EvalFlow::Continue => Value::Null,
@@ -1338,18 +1559,15 @@ impl Evaluator {
     ) -> Value {
         match expr {
             Expr::Call { target, args } => {
-                let target_val = self.evaluate_expr(target, true, scope_indices);
+                let (target_val, receiver) = self.resolve_callable_target(target, scope_indices);
 
                 if let Value::Function(func) = &target_val {
-                    return self.call_user_function(func, args, scope_indices);
-                }
-
-                // If target was a Word or Variable that resolved to a function name.
-                if let Expr::Word(identifier) | Expr::Variable(identifier) = target.as_ref()
-                    && let Some(Value::Function(func)) =
-                        self.resolve_named_value(identifier, scope_indices)
-                {
-                    return self.call_user_function(&func, args, scope_indices);
+                    return self.call_user_function_with_receiver(
+                        func,
+                        args,
+                        receiver,
+                        scope_indices,
+                    );
                 }
 
                 // For command execution, we only want to do this if we are not in a secondary expression (like an argument).
@@ -1371,8 +1589,11 @@ impl Evaluator {
                 Value::Null
             }
             Expr::Word(word) => {
-                if let Some(Value::Function(func)) = self.resolve_named_value(word, scope_indices) {
-                    return self.call_user_function(&func, &[], scope_indices);
+                if let Some((func, rec_info)) =
+                    self.resolve_named_function_with_receiver(word, scope_indices)
+                {
+                    let rec = rec_info.map(|(path, val)| (Self::path_to_expr(&path), val));
+                    return self.call_user_function_with_receiver(&func, &[], rec, scope_indices);
                 }
 
                 let (res_cmd, args) = self.resolve_command(word.to_owned());
@@ -1486,9 +1707,33 @@ impl Evaluator {
                 let object_value = self.evaluate_expr(object, true, scope_indices);
                 let index_value = self.evaluate_expr(index, true, scope_indices);
 
-                match (object_value, Self::object_index_key(index_value)) {
+                match (&object_value, Self::object_index_key(index_value)) {
                     (Value::Object(map), Some(key)) => {
-                        map.get(&key).cloned().unwrap_or(Value::Null)
+                        if key.contains('.') {
+                            let mut val = Value::Object(Arc::clone(map));
+                            for part in key.split('.') {
+                                val = match &val {
+                                    Value::Object(m) => {
+                                        let guard = match m.read() {
+                                            Ok(g) => g,
+                                            Err(p) => p.into_inner(),
+                                        };
+                                        guard.get(part).cloned().unwrap_or(Value::Null)
+                                    }
+                                    _ => Value::Null,
+                                };
+                                if matches!(val, Value::Null) {
+                                    break;
+                                }
+                            }
+                            val
+                        } else {
+                            let guard = match map.read() {
+                                Ok(g) => g,
+                                Err(p) => p.into_inner(),
+                            };
+                            guard.get(&key).cloned().unwrap_or(Value::Null)
+                        }
                     }
                     _ => Value::Null,
                 }
@@ -1504,19 +1749,31 @@ impl Evaluator {
             Expr::CommandSub(expr) => {
                 match expr.as_ref() {
                     Expr::Call { target, args } => {
-                        let target_val = self.evaluate_expr(target, true, scope_indices);
+                        let (target_val, receiver) =
+                            self.resolve_callable_target(target, scope_indices);
 
                         if let Value::Function(func) = &target_val {
-                            let value = self.call_user_function(func, args, scope_indices);
+                            let value = self.call_user_function_with_receiver(
+                                func,
+                                args,
+                                receiver,
+                                scope_indices,
+                            );
                             return Self::make_command_result(0, value.to_string(), String::new());
                         }
 
                         let identifier = target_val.to_string();
 
-                        if let Some(Value::Function(func)) =
-                            self.resolve_named_value(&identifier, scope_indices)
+                        if let Some((func, rec_info)) =
+                            self.resolve_named_function_with_receiver(&identifier, scope_indices)
                         {
-                            let value = self.call_user_function(&func, args, scope_indices);
+                            let rec = rec_info.map(|(path, val)| (Self::path_to_expr(&path), val));
+                            let value = self.call_user_function_with_receiver(
+                                &func,
+                                args,
+                                rec,
+                                scope_indices,
+                            );
                             return Self::make_command_result(0, value.to_string(), String::new());
                         }
 
@@ -1541,10 +1798,16 @@ impl Evaluator {
                         )
                     }
                     Expr::Word(word) => {
-                        if let Some(Value::Function(func)) =
-                            self.resolve_named_value(word, scope_indices)
+                        if let Some((func, rec_info)) =
+                            self.resolve_named_function_with_receiver(word, scope_indices)
                         {
-                            let value = self.call_user_function(&func, &[], scope_indices);
+                            let rec = rec_info.map(|(path, val)| (Self::path_to_expr(&path), val));
+                            let value = self.call_user_function_with_receiver(
+                                &func,
+                                &[],
+                                rec,
+                                scope_indices,
+                            );
                             return Self::make_command_result(0, value.to_string(), String::new());
                         }
 
@@ -1588,7 +1851,7 @@ impl Evaluator {
                     String::from_utf8(err).unwrap_or_default(),
                 )
             }
-            Expr::AnonymousFunction { params, body } => Value::Function(FunctionValue {
+            Expr::AnonymousFunction { params, body } => Value::function(FunctionValue {
                 params: params.clone(),
                 body: body.clone(),
             }),
@@ -1598,7 +1861,7 @@ impl Evaluator {
                     let value_value = self.evaluate_expr(value, true, scope_indices);
                     obj.insert(key.to_string(), value_value);
                 }
-                Value::Object(obj)
+                Value::object(obj)
             }
         }
     }
@@ -1814,5 +2077,172 @@ mod tests {
         };
         let args = eval.build_command_args(vec![], call_args, &mut scopes);
         assert_eq!(args, vec!["nonexistent_*.xyz".to_string()]);
+    }
+
+    #[test]
+    fn method_call_binds_this_and_reads_properties() {
+        let res = eval_var(
+            r#"
+            let person = {
+                name: "Alice",
+                greet: () => {
+                    return "Hello, " + $this.name
+                }
+            }
+            let msg = $person.greet()
+            "#,
+            "msg",
+        );
+        assert_eq!(res, Some(Value::String("Hello, Alice".to_string())));
+    }
+
+    #[test]
+    fn method_call_mutates_this_and_persists_to_receiver() {
+        let res = eval_var(
+            r#"
+            let counter = {
+                count: 0,
+                inc: () => {
+                    $this.count = $this.count + 1
+                    return $this.count
+                }
+            }
+            let first = $counter.inc()
+            let second = $counter.inc()
+            let final_count = $counter.count
+            "#,
+            "final_count",
+        );
+        assert_eq!(res, Some(Value::Number(2.0)));
+    }
+
+    #[test]
+    fn command_style_method_call_binds_this_and_args() {
+        let res = eval_var(
+            r#"
+            let greeter = {
+                prefix: "Hi",
+                greet: (target) => {
+                    return $this.prefix + " " + $target
+                }
+            }
+            let msg = $(greeter.greet "Bob").out
+            "#,
+            "msg",
+        );
+        assert_eq!(res, Some(Value::String("Hi Bob".to_string())));
+    }
+
+    #[test]
+    fn nested_method_calls_on_this() {
+        let res = eval_var(
+            r#"
+            let counter = {
+                count: 0,
+                inc: () => {
+                    $this.count = $this.count + 1
+                    return $this.count
+                },
+                add_two: () => {
+                    $this.inc()
+                    $this.inc()
+                    return $this.count
+                }
+            }
+            $counter.add_two()
+            let final_count = $counter.count
+            "#,
+            "final_count",
+        );
+        assert_eq!(res, Some(Value::Number(2.0)));
+    }
+
+    #[test]
+    fn nested_object_method_call_updates_nested_property() {
+        let res = eval_var(
+            r#"
+            let user = {
+                stats: {
+                    score: 10,
+                    add: (pts) => {
+                        $this.score = $this.score + $pts
+                    }
+                }
+            }
+            $user.stats.add 15
+            let final_score = $user.stats.score
+            "#,
+            "final_score",
+        );
+        assert_eq!(res, Some(Value::Number(25.0)));
+    }
+
+    #[test]
+    fn fn_declaration_on_object_binds_this() {
+        let res = eval_var(
+            r#"
+            let obj = { x: 42 }
+            fn obj.get_x() {
+                return $this.x
+            }
+            let val = $obj.get_x()
+            "#,
+            "val",
+        );
+        assert_eq!(res, Some(Value::Number(42.0)));
+    }
+
+    #[test]
+    fn object_variables_share_reference_mutations() {
+        let res = eval_var(
+            r#"
+            let a = { count: 1 }
+            let b = $a
+            $b.count = 42
+            let res = $a.count
+            "#,
+            "res",
+        );
+        assert_eq!(res, Some(Value::Number(42.0)));
+    }
+
+    #[test]
+    fn function_mutates_passed_object_reference() {
+        let res = eval_var(
+            r#"
+            fn mutate_obj(target) {
+                $target.modified = true
+            }
+            let my_obj = { modified: false }
+            mutate_obj $my_obj
+            let res = $my_obj.modified
+            "#,
+            "res",
+        );
+        assert_eq!(res, Some(Value::Bool(true)));
+    }
+
+    #[test]
+    fn object_reference_equality_in_evaluator() {
+        let res = eval_var(
+            r#"
+            let a = { x: 1 }
+            let b = $a
+            let c = { x: 1 }
+            let same_ref = $a == $b
+            "#,
+            "same_ref",
+        );
+        assert_eq!(res, Some(Value::Bool(true)));
+
+        let res_deep = eval_var(
+            r#"
+            let a = { x: 1 }
+            let c = { x: 1 }
+            let deep_eq = $a == $c
+            "#,
+            "deep_eq",
+        );
+        assert_eq!(res_deep, Some(Value::Bool(true)));
     }
 }

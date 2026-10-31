@@ -625,9 +625,16 @@ impl Parser {
     }
 
     fn parse_target(&mut self) -> Result<Expr, Diagnostic> {
-        let expr = match self.parse_primary()? {
-            Expr::Word(name) => Expr::Variable(name),
-            other => other,
+        let expr = match &self.current().kind {
+            TokenKind::String(name) => {
+                let name = name.clone();
+                self.advance();
+                Expr::Variable(name)
+            }
+            _ => match self.parse_primary()? {
+                Expr::Word(name) => Expr::Variable(name),
+                other => other,
+            },
         };
         self.parse_target_on_current(expr)
     }
