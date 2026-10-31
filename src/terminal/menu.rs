@@ -319,7 +319,7 @@ pub fn draw_menu<W: Write>(
             queue!(
                 writer,
                 style::Print(format!(
-                    "\x1b[38;5;240m│\x1b[7m {marker}{icon_str}{name_formatted}{pad}{badge} \x1b[0m\x1b[38;5;240m│\x1b[0m"
+                    "\x1b[38;5;240m│\x1b[0m\x1b[7m {marker}{icon_str}{name_formatted}{pad}{badge} \x1b[0m\x1b[38;5;240m│\x1b[0m"
                 ))
             )?;
         } else {
@@ -1417,8 +1417,8 @@ mod tests {
         draw_menu(&mut buf, &items, 0, layout).unwrap();
         let rendered = String::from_utf8_lossy(&buf);
 
-        // Selected item (item 0) has white inverse video (\x1b[7m) and yellow match (\x1b[1;4;33m)
-        assert!(rendered.contains("\x1b[7m"));
+        // Selected item (item 0) has white inverse video (\x1b[0m\x1b[7m) and yellow match (\x1b[1;4;33m)
+        assert!(rendered.contains("\x1b[38;5;240m│\x1b[0m\x1b[7m"));
         assert!(rendered.contains("\x1b[1;4;33m"));
 
         // Unselected item (item 1, cat) has bold cyan (\x1b[1;36m) for "ca" and dim grey (\x1b[38;5;244m) for "t"
