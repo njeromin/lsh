@@ -290,7 +290,20 @@ impl Completer for LineEditorHelper {
 
         if self.completion_type == CompletionType::Menu && items.len() > 1 {
             let base_prefix = &line[start..pos];
-            match menu::show_completion_menu(base_prefix, &items, 7, self.nerd_icons) {
+            let on_descend = |replacement: &str| -> Vec<CompletionItem> {
+                let new_line = format!("{}{}", &line[..start], replacement);
+                let new_pos = start + replacement.len();
+                self.get_candidates(&new_line, new_pos, ctx)
+                    .map(|(_, items)| items)
+                    .unwrap_or_default()
+            };
+            match menu::show_completion_menu(
+                base_prefix,
+                &items,
+                7,
+                self.nerd_icons,
+                on_descend,
+            ) {
                 menu::MenuResult::Selected(item) => Ok((
                     start,
                     vec![Pair {
