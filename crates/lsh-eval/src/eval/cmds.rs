@@ -4,12 +4,12 @@ use std::{
 };
 
 use lsh_syntax::print_error;
+use lsh_sys::signals;
 
 use crate::{
     builtins,
     eval::Evaluator,
     io::{IoCtx, IoStreamMode},
-    signals,
 };
 
 pub fn exec_cmd<R: io::Read + Send, W: io::Write + Send, WE: io::Write + Send>(
@@ -118,7 +118,7 @@ pub fn spawn_proc<R: io::Read + Send, W: io::Write + Send, WE: io::Write + Send>
                 if let Some(code) = status.code() {
                     Ok(code)
                 } else if let Some(sig) = status.signal() {
-                    if sig == libc::SIGINT {
+                    if sig == signals::SIGINT {
                         use std::io::Write as _;
                         let _ = writeln!(io::stderr());
                     }

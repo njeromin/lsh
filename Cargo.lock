@@ -240,6 +240,7 @@ dependencies = [
  "lsh-completions",
  "lsh-eval",
  "lsh-syntax",
+ "lsh-sys",
  "lsh-terminal",
  "rustyline",
 ]
@@ -254,10 +255,9 @@ version = "0.1.0"
 dependencies = [
  "dirs",
  "glob",
- "libc",
  "lsh-completions",
  "lsh-syntax",
- "signal-hook",
+ "lsh-sys",
  "which",
 ]
 
@@ -267,6 +267,14 @@ version = "0.1.0"
 dependencies = [
  "crossterm",
  "dirs",
+]
+
+[[package]]
+name = "lsh-sys"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "signal-hook",
 ]
 
 [[package]]

@@ -6,8 +6,7 @@ edition = "2024"
 [dependencies]
 lsh-syntax = { path = "../lsh-syntax" }
 lsh-completions = { path = "../lsh-completions" }
+lsh-sys = { path = "../lsh-sys" }
 dirs = "6.0.0"
 glob = "0.3"
-libc = "0.2"
-signal-hook = "0.3"
 which = "8.0.0"

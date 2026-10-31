@@ -19,14 +19,15 @@ use lsh_syntax::{
     print_error,
 };
 
+use lsh_sys::signals::{
+    SIGINT, STATUS_SIGINT, TerminalForegroundGuard, get_interrupt_flag, is_interactive_tty,
+    signal_exit_code,
+};
+
 use crate::{
     eval::value::{FunctionValue, Value},
     expand::{self, ExpandCtx},
     io::{IoCtx, IoStreamMode},
-    signals::{
-        STATUS_SIGINT, TerminalForegroundGuard, get_interrupt_flag, is_interactive_tty,
-        signal_exit_code,
-    },
 };
 
 #[derive(Debug)]
@@ -886,7 +887,7 @@ impl Evaluator {
                         if let Some(c) = status.code() {
                             c
                         } else if let Some(sig) = status.signal() {
-                            if sig == libc::SIGINT && !capture_output {
+                            if sig == SIGINT && !capture_output {
                                 use std::io::Write as _;
                                 let _ = writeln!(io::stderr());
                             }

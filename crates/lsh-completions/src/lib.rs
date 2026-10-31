@@ -1,4 +1,5 @@
 pub mod defaults;
+pub use defaults as r#default;
 pub mod registry;
 pub mod types;
 

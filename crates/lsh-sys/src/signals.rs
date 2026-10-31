@@ -7,6 +7,11 @@ static INTERRUPT_FLAG: OnceLock<Arc<AtomicBool>> = OnceLock::new();
 static IS_INTERACTIVE: AtomicBool = AtomicBool::new(false);
 
 #[cfg(unix)]
+pub const SIGINT: i32 = libc::SIGINT;
+#[cfg(not(unix))]
+pub const SIGINT: i32 = 2;
+
+#[cfg(unix)]
 pub const STATUS_SIGINT: i32 = 128 + libc::SIGINT;
 #[cfg(not(unix))]
 pub const STATUS_SIGINT: i32 = 130;
