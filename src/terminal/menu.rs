@@ -2,8 +2,9 @@ use std::io::{self, Write};
 #[cfg(not(test))]
 use std::io::IsTerminal;
 
+use crossterm::event::{KeyCode, KeyModifiers};
 #[cfg(not(test))]
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{self, Event, KeyEvent, KeyEventKind};
 #[cfg(not(test))]
 use crossterm::execute;
 use crossterm::{cursor, queue, style, terminal};
@@ -194,6 +195,51 @@ pub fn erase_menu<W: Write>(
     writer.flush()
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MenuAction {
+    Next,
+    Previous,
+    PageDown,
+    PageUp,
+    First,
+    Last,
+    Accept,
+    Dismiss,
+}
+
+pub fn handle_key_event(code: KeyCode, modifiers: KeyModifiers) -> MenuAction {
+    match (code, modifiers) {
+        // Next: Down, Tab (without Shift), Ctrl-N
+        (KeyCode::Down, _) => MenuAction::Next,
+        (KeyCode::Tab, m) if !m.contains(KeyModifiers::SHIFT) => MenuAction::Next,
+        (KeyCode::Char('n'), m) if m.contains(KeyModifiers::CONTROL) => MenuAction::Next,
+
+        // Previous: Up, BackTab, Shift-Tab, Ctrl-P
+        (KeyCode::Up, _) | (KeyCode::BackTab, _) => MenuAction::Previous,
+        (KeyCode::Tab, m) if m.contains(KeyModifiers::SHIFT) => MenuAction::Previous,
+        (KeyCode::Char('p'), m) if m.contains(KeyModifiers::CONTROL) => MenuAction::Previous,
+
+        // Page scroll
+        (KeyCode::PageDown, _) => MenuAction::PageDown,
+        (KeyCode::PageUp, _) => MenuAction::PageUp,
+
+        // Top / Bottom
+        (KeyCode::Home, _) => MenuAction::First,
+        (KeyCode::End, _) => MenuAction::Last,
+
+        // Accept
+        (KeyCode::Enter | KeyCode::Right, _) => MenuAction::Accept,
+
+        // Dismiss
+        (KeyCode::Esc | KeyCode::Left, _) => MenuAction::Dismiss,
+        (KeyCode::Char('c') | KeyCode::Char('g'), m) if m.contains(KeyModifiers::CONTROL) => {
+            MenuAction::Dismiss
+        }
+
+        _ => MenuAction::Dismiss,
+    }
+}
+
 pub fn show_completion_menu(items: &[CompletionItem], max_visible: usize) -> Option<usize> {
     if items.is_empty() {
         return None;
@@ -253,14 +299,12 @@ pub fn show_completion_menu(items: &[CompletionItem], max_visible: usize) -> Opt
                     kind,
                     ..
                 })) if kind != KeyEventKind::Release => {
-                    match code {
-                        KeyCode::Down | KeyCode::Tab
-                        | KeyCode::Char('n') if modifiers.contains(KeyModifiers::CONTROL) => {
+                    match handle_key_event(code, modifiers) {
+                        MenuAction::Next => {
                             selected = (selected + 1) % items.len();
                             let _ = draw_menu(&mut cout, items, selected, layout);
                         }
-                        KeyCode::Up | KeyCode::BackTab
-                        | KeyCode::Char('p') if modifiers.contains(KeyModifiers::CONTROL) => {
+                        MenuAction::Previous => {
                             selected = if selected == 0 {
                                 items.len() - 1
                             } else {
@@ -268,34 +312,26 @@ pub fn show_completion_menu(items: &[CompletionItem], max_visible: usize) -> Opt
                             };
                             let _ = draw_menu(&mut cout, items, selected, layout);
                         }
-                        KeyCode::PageDown => {
+                        MenuAction::PageDown => {
                             selected = (selected + height).min(items.len() - 1);
                             let _ = draw_menu(&mut cout, items, selected, layout);
                         }
-                        KeyCode::PageUp => {
+                        MenuAction::PageUp => {
                             selected = selected.saturating_sub(height);
                             let _ = draw_menu(&mut cout, items, selected, layout);
                         }
-                        KeyCode::Home => {
+                        MenuAction::First => {
                             selected = 0;
                             let _ = draw_menu(&mut cout, items, selected, layout);
                         }
-                        KeyCode::End => {
+                        MenuAction::Last => {
                             selected = items.len() - 1;
                             let _ = draw_menu(&mut cout, items, selected, layout);
                         }
-                        KeyCode::Enter | KeyCode::Right => {
+                        MenuAction::Accept => {
                             break Some(selected);
                         }
-                        KeyCode::Esc | KeyCode::Left => {
-                            break None;
-                        }
-                        KeyCode::Char('c') | KeyCode::Char('g')
-                            if modifiers.contains(KeyModifiers::CONTROL) =>
-                        {
-                            break None;
-                        }
-                        _ => {
+                        MenuAction::Dismiss => {
                             break None;
                         }
                     }
@@ -403,5 +439,88 @@ mod tests {
         let mut erase_buf = Vec::new();
         erase_menu(&mut erase_buf, 4, 10, 5).unwrap();
         assert!(!erase_buf.is_empty());
+    }
+
+    #[test]
+    fn handles_navigation_key_events_correctly() {
+        // Next: Down, Tab (no shift), Ctrl-N
+        assert_eq!(
+            handle_key_event(KeyCode::Down, KeyModifiers::NONE),
+            MenuAction::Next
+        );
+        assert_eq!(
+            handle_key_event(KeyCode::Tab, KeyModifiers::NONE),
+            MenuAction::Next
+        );
+        assert_eq!(
+            handle_key_event(KeyCode::Char('n'), KeyModifiers::CONTROL),
+            MenuAction::Next
+        );
+
+        // Previous: Up, BackTab, Shift-Tab, Ctrl-P
+        assert_eq!(
+            handle_key_event(KeyCode::Up, KeyModifiers::NONE),
+            MenuAction::Previous
+        );
+        assert_eq!(
+            handle_key_event(KeyCode::BackTab, KeyModifiers::NONE),
+            MenuAction::Previous
+        );
+        assert_eq!(
+            handle_key_event(KeyCode::Tab, KeyModifiers::SHIFT),
+            MenuAction::Previous
+        );
+        assert_eq!(
+            handle_key_event(KeyCode::Char('p'), KeyModifiers::CONTROL),
+            MenuAction::Previous
+        );
+
+        // Page navigation
+        assert_eq!(
+            handle_key_event(KeyCode::PageDown, KeyModifiers::NONE),
+            MenuAction::PageDown
+        );
+        assert_eq!(
+            handle_key_event(KeyCode::PageUp, KeyModifiers::NONE),
+            MenuAction::PageUp
+        );
+
+        // First / Last
+        assert_eq!(
+            handle_key_event(KeyCode::Home, KeyModifiers::NONE),
+            MenuAction::First
+        );
+        assert_eq!(
+            handle_key_event(KeyCode::End, KeyModifiers::NONE),
+            MenuAction::Last
+        );
+
+        // Accept
+        assert_eq!(
+            handle_key_event(KeyCode::Enter, KeyModifiers::NONE),
+            MenuAction::Accept
+        );
+        assert_eq!(
+            handle_key_event(KeyCode::Right, KeyModifiers::NONE),
+            MenuAction::Accept
+        );
+
+        // Dismiss
+        assert_eq!(
+            handle_key_event(KeyCode::Esc, KeyModifiers::NONE),
+            MenuAction::Dismiss
+        );
+        assert_eq!(
+            handle_key_event(KeyCode::Left, KeyModifiers::NONE),
+            MenuAction::Dismiss
+        );
+        assert_eq!(
+            handle_key_event(KeyCode::Char('c'), KeyModifiers::CONTROL),
+            MenuAction::Dismiss
+        );
+        assert_eq!(
+            handle_key_event(KeyCode::Char('g'), KeyModifiers::CONTROL),
+            MenuAction::Dismiss
+        );
     }
 }
