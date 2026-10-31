@@ -6,9 +6,7 @@ use std::{
 
 use crossterm::{cursor, queue};
 use rustyline::{
-    CompletionType, Config, Editor,
-    config::Configurer,
-    error::ReadlineError,
+    CompletionType, Config, Editor, config::Configurer, error::ReadlineError,
     history::DefaultHistory,
 };
 
@@ -79,7 +77,9 @@ fn interactive_session(
         .completion_type(CompletionType::List)
         .build();
     let mut editor = Editor::<LineEditorHelper, DefaultHistory>::with_config(config)?;
-    editor.set_helper(Some(LineEditorHelper::new()));
+    let mut helper = LineEditorHelper::new();
+    helper.set_completion_registry(std::sync::Arc::clone(&eval.completion_registry));
+    editor.set_helper(Some(helper));
     let _ = editor.load_history(&config_dir.join("history.txt"));
     let mut last_applied_options: Option<Options> = None;
 

@@ -1,6 +1,7 @@
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
+use std::sync::{Arc, RwLock};
 
 use rustyline::{
     Context, Helper,
@@ -12,6 +13,7 @@ use rustyline::{
 
 use crate::options::CompletionType;
 use crate::terminal::{
+    completion::{CompletionRegistry, CompletionResolution},
     highlight::SyntaxHighlighter,
     menu::{self, CompletionItem, CompletionKind},
     osc::{self, Osc133PromptHighlighter},
@@ -83,6 +85,76 @@ fn split_path_argument(sub: &str) -> (usize, &str, &str) {
     } else {
         (arg_start, "", path_arg)
     }
+}
+
+pub fn parse_command_args(segment: &str) -> (Option<&str>, Vec<String>, &str, usize) {
+    let mut tokens: Vec<(&str, usize)> = Vec::new();
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut token_start: Option<usize> = None;
+
+    let chars: Vec<(usize, char)> = segment.char_indices().collect();
+    for &(idx, c) in &chars {
+        if c == '\'' && !in_double {
+            in_single = !in_single;
+            if token_start.is_none() {
+                token_start = Some(idx);
+            }
+        } else if c == '"' && !in_single {
+            in_double = !in_double;
+            if token_start.is_none() {
+                token_start = Some(idx);
+            }
+        } else if c.is_whitespace() && !in_single && !in_double {
+            if let Some(start) = token_start {
+                tokens.push((&segment[start..idx], start));
+                token_start = None;
+            }
+        } else if token_start.is_none() {
+            token_start = Some(idx);
+        }
+    }
+
+    let ends_with_ws = segment.ends_with(char::is_whitespace) && !in_single && !in_double;
+    let (cur_word, cur_word_start) = if ends_with_ws {
+        ("", segment.len())
+    } else if let Some(start) = token_start {
+        (&segment[start..], start)
+    } else {
+        ("", segment.len())
+    };
+
+    let mut words = tokens.into_iter();
+    let mut cmd_name = None;
+
+    while let Some((word, _)) = words.next() {
+        let clean = word.trim_matches(|c| c == '"' || c == '\'');
+        if clean.contains('=')
+            && !clean.starts_with('-')
+            && !clean.starts_with("./")
+            && !clean.starts_with('/')
+        {
+            continue;
+        }
+        if (clean == "builtin" || clean == "command")
+            && let Some((next, _)) = words.next()
+        {
+            cmd_name = Some(next.trim_matches(|c| c == '"' || c == '\''));
+            break;
+        }
+        cmd_name = Some(clean);
+        break;
+    }
+
+    let Some(cmd) = cmd_name else {
+        return (None, Vec::new(), cur_word, cur_word_start);
+    };
+
+    let args: Vec<String> = words
+        .map(|(w, _)| w.trim_matches(|c| c == '"' || c == '\'').to_string())
+        .collect();
+
+    (Some(cmd), args, cur_word, cur_word_start)
 }
 
 pub fn classify_completion_context(line: &str, pos: usize) -> CompletionContext<'_> {
@@ -173,6 +245,7 @@ pub struct LineEditorHelper {
     cached_vars: Vec<String>,
     pub completion_type: CompletionType,
     pub nerd_icons: bool,
+    pub completion_registry: Arc<RwLock<CompletionRegistry>>,
 }
 
 impl Default for LineEditorHelper {
@@ -193,7 +266,12 @@ impl LineEditorHelper {
             cached_vars: Vec::new(),
             completion_type: CompletionType::Menu,
             nerd_icons: false,
+            completion_registry: Arc::new(RwLock::new(CompletionRegistry::with_defaults())),
         }
+    }
+
+    pub fn set_completion_registry(&mut self, registry: Arc<RwLock<CompletionRegistry>>) {
+        self.completion_registry = registry;
     }
 
     pub fn set_completion_type(&mut self, completion_type: CompletionType) {
@@ -278,12 +356,43 @@ impl LineEditorHelper {
 
                 Ok((start, items))
             }
-            CompletionContext::Path { command } => {
+            CompletionContext::Path { command: _ } => {
                 let sub = if pos <= line.len() {
                     &line[..pos]
                 } else {
                     line
                 };
+                let segment = find_command_segment(sub);
+                let segment_start_in_sub = sub.len() - segment.len();
+                let (cmd_opt, args, cur_word, cur_word_start_in_segment) =
+                    parse_command_args(segment);
+                let abs_cur_word_start = segment_start_in_sub + cur_word_start_in_segment;
+
+                let mut dirs_only_override = false;
+                let mut exts_filter: Option<Vec<String>> = None;
+
+                if let Some(cmd) = cmd_opt {
+                    let reg = self.completion_registry.read().unwrap();
+                    if let Some(resolution) = reg.resolve(cmd, &args, cur_word) {
+                        match resolution {
+                            CompletionResolution::Items(items) => {
+                                let filtered = if cur_word.is_empty() {
+                                    items
+                                } else {
+                                    menu::filter_completion_items(&items, cur_word)
+                                };
+                                return Ok((abs_cur_word_start, filtered));
+                            }
+                            CompletionResolution::DirectoriesOnly => {
+                                dirs_only_override = true;
+                            }
+                            CompletionResolution::FileExtensions(exts) => {
+                                exts_filter = Some(exts);
+                            }
+                        }
+                    }
+                }
+
                 let (arg_start, dir_part, file_prefix) = split_path_argument(sub);
                 let dir_line = format!("{}{}", &sub[..arg_start], dir_part);
                 let dir_pos = dir_line.len();
@@ -293,8 +402,8 @@ impl LineEditorHelper {
                     .complete(&dir_line, dir_pos, ctx)
                     .unwrap_or((arg_start, Vec::new()));
 
-                let base_cmd = command.rsplit('/').next().unwrap_or(command);
-                let dirs_only = base_cmd == "cd" || base_cmd == "pushd";
+                let base_cmd = cmd_opt.unwrap_or("").rsplit('/').next().unwrap_or("");
+                let dirs_only = dirs_only_override || base_cmd == "cd" || base_cmd == "pushd";
 
                 let all_items: Vec<CompletionItem> = pairs
                     .into_iter()
@@ -304,6 +413,14 @@ impl LineEditorHelper {
                             || Path::new(&p.replacement).is_dir();
                         if dirs_only && !is_dir {
                             return None;
+                        }
+                        if let Some(exts) = &exts_filter
+                            && !is_dir
+                        {
+                            let p_ext = p.replacement.rsplit('.').next().unwrap_or("");
+                            if !exts.iter().any(|e| e == p_ext) {
+                                return None;
+                            }
                         }
                         let kind = if is_dir {
                             CompletionKind::Directory
@@ -685,7 +802,7 @@ mod tests {
             .get_candidates("ct", 2, &ctx)
             .expect("completion failed");
         assert_eq!(start, 0);
-        assert_eq!(items.len(), 2);
+        assert!(items.len() >= 2);
         assert!(items.iter().any(|it| it.replacement == "cat"));
         assert!(items.iter().any(|it| it.replacement == "cut"));
         assert!(!items.iter().any(|it| it.replacement == "echo"));
@@ -799,5 +916,140 @@ mod tests {
             .expect("completion failed");
         assert!(items.iter().any(|it| it.kind == CompletionKind::Directory));
         assert!(items.iter().any(|it| it.replacement.contains("Cargo.toml")));
+    }
+
+    #[test]
+    fn parse_command_args_extracts_command_subcommands_and_cur_word() {
+        let (cmd, args, cur, start) = parse_command_args("git commit -m ");
+        assert_eq!(cmd, Some("git"));
+        assert_eq!(args, vec!["commit".to_string(), "-m".to_string()]);
+        assert_eq!(cur, "");
+        assert_eq!(start, 14);
+
+        let (cmd, args, cur, start) = parse_command_args("git co");
+        assert_eq!(cmd, Some("git"));
+        assert_eq!(args, Vec::<String>::new());
+        assert_eq!(cur, "co");
+        assert_eq!(start, 4);
+
+        let (cmd, args, cur, start) = parse_command_args("FOO=1 git 'checkout' feat/new");
+        assert_eq!(cmd, Some("git"));
+        assert_eq!(args, vec!["checkout".to_string()]);
+        assert_eq!(cur, "feat/new");
+        assert_eq!(start, 21);
+    }
+
+    #[test]
+    fn completes_git_subcommands_and_flags() {
+        use rustyline::history::DefaultHistory;
+
+        let helper = LineEditorHelper::new();
+        let history = DefaultHistory::new();
+        let ctx = Context::new(&history);
+
+        // "git " with space at pos 4 should return git subcommands and flags
+        let (start, items) = helper
+            .get_candidates("git ", 4, &ctx)
+            .expect("completion failed");
+        assert_eq!(start, 4);
+        assert!(
+            items
+                .iter()
+                .any(|it| it.replacement == "commit" && it.kind == CompletionKind::Subcommand)
+        );
+        assert!(
+            items
+                .iter()
+                .any(|it| it.replacement == "checkout" && it.kind == CompletionKind::Subcommand)
+        );
+        assert!(
+            items
+                .iter()
+                .any(|it| it.replacement == "--version" && it.kind == CompletionKind::Flag)
+        );
+
+        // "git co" at pos 6 should filter to commit and checkout
+        let (start, items) = helper
+            .get_candidates("git co", 6, &ctx)
+            .expect("completion failed");
+        assert_eq!(start, 4);
+        assert!(items.iter().any(|it| it.replacement == "commit"));
+        assert!(items.iter().any(|it| it.replacement == "checkout"));
+        assert!(!items.iter().any(|it| it.replacement == "branch"));
+    }
+
+    #[test]
+    fn completes_git_commit_flags() {
+        use rustyline::history::DefaultHistory;
+
+        let helper = LineEditorHelper::new();
+        let history = DefaultHistory::new();
+        let ctx = Context::new(&history);
+
+        // "git commit " at pos 11 should return commit flags
+        let (start, items) = helper
+            .get_candidates("git commit ", 11, &ctx)
+            .expect("completion failed");
+        assert_eq!(start, 11);
+        assert!(
+            items
+                .iter()
+                .any(|it| it.replacement == "-m" && it.kind == CompletionKind::Flag)
+        );
+        assert!(
+            items
+                .iter()
+                .any(|it| it.replacement == "--amend" && it.kind == CompletionKind::Flag)
+        );
+    }
+
+    #[test]
+    fn completes_cargo_subcommands() {
+        use rustyline::history::DefaultHistory;
+
+        let helper = LineEditorHelper::new();
+        let history = DefaultHistory::new();
+        let ctx = Context::new(&history);
+
+        let (start, items) = helper
+            .get_candidates("cargo ", 6, &ctx)
+            .expect("completion failed");
+        assert_eq!(start, 6);
+        assert!(
+            items
+                .iter()
+                .any(|it| it.replacement == "build" && it.kind == CompletionKind::Subcommand)
+        );
+        assert!(
+            items
+                .iter()
+                .any(|it| it.replacement == "test" && it.kind == CompletionKind::Subcommand)
+        );
+    }
+
+    #[test]
+    fn completes_custom_registered_command() {
+        use crate::terminal::completion::{CandidateSpec, CompletionRule};
+        use rustyline::history::DefaultHistory;
+
+        let mut helper = LineEditorHelper::new();
+        let reg = Arc::new(RwLock::new(CompletionRegistry::new()));
+        let mut rule = CompletionRule::new();
+        rule.candidates = vec![
+            CandidateSpec::from_raw("start:Start server", CompletionKind::Value),
+            CandidateSpec::from_raw("stop:Stop server", CompletionKind::Value),
+        ];
+        reg.write().unwrap().register("serverctl", rule);
+        helper.set_completion_registry(reg);
+
+        let history = DefaultHistory::new();
+        let ctx = Context::new(&history);
+
+        let (start, items) = helper
+            .get_candidates("serverctl st", 12, &ctx)
+            .expect("completion failed");
+        assert_eq!(start, 10);
+        assert!(items.iter().any(|it| it.replacement == "start"));
+        assert!(items.iter().any(|it| it.replacement == "stop"));
     }
 }

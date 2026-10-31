@@ -5,6 +5,7 @@ use crossterm::{
     style::{self, PrintStyledContent, Stylize},
 };
 
+pub mod completion;
 pub mod editor;
 pub mod highlight;
 pub mod menu;
@@ -33,4 +34,3 @@ mod tests {
         assert!(s.ends_with('\n'));
     }
 }
-

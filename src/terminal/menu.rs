@@ -1,10 +1,10 @@
-use std::io::{self, Write};
 #[cfg(not(test))]
 use std::io::IsTerminal;
+use std::io::{self, Write};
 
-use crossterm::event::{KeyCode, KeyModifiers};
 #[cfg(not(test))]
 use crossterm::event::{self, Event, KeyEvent, KeyEventKind};
+use crossterm::event::{KeyCode, KeyModifiers};
 #[cfg(not(test))]
 use crossterm::execute;
 use crossterm::{cursor, queue, style, terminal};
@@ -18,6 +18,9 @@ pub enum CompletionKind {
     Variable,
     File,
     Directory,
+    Subcommand,
+    Flag,
+    Value,
 }
 
 impl CompletionKind {
@@ -30,6 +33,9 @@ impl CompletionKind {
             CompletionKind::Variable => "[var]",
             CompletionKind::File => "[file]",
             CompletionKind::Directory => "[dir]",
+            CompletionKind::Subcommand => "[subcmd]",
+            CompletionKind::Flag => "[flag]",
+            CompletionKind::Value => "[val]",
         }
     }
 
@@ -42,6 +48,9 @@ impl CompletionKind {
             CompletionKind::Variable => "\x1b[33m",    // Yellow
             CompletionKind::File => "\x1b[37m",        // White
             CompletionKind::Directory => "\x1b[1;34m", // Bold Blue
+            CompletionKind::Subcommand => "\x1b[36m",  // Cyan
+            CompletionKind::Flag => "\x1b[33m",        // Yellow
+            CompletionKind::Value => "\x1b[32m",       // Green
         }
     }
 }
@@ -50,6 +59,7 @@ impl CompletionKind {
 pub struct CompletionItem {
     pub replacement: String,
     pub display: String,
+    pub description: Option<String>,
     pub kind: CompletionKind,
     pub match_indices: Vec<usize>,
 }
@@ -63,9 +73,15 @@ impl CompletionItem {
         Self {
             replacement: replacement.into(),
             display: display.into(),
+            description: None,
             kind,
             match_indices: Vec::new(),
         }
+    }
+
+    pub fn with_description(mut self, desc: impl Into<String>) -> Self {
+        self.description = Some(desc.into());
+        self
     }
 
     pub fn nerd_icon(&self) -> (&'static str, &'static str) {
@@ -76,6 +92,9 @@ impl CompletionItem {
             CompletionKind::Alias => ("\u{f0c1}", "\x1b[36m"),       //  Cyan
             CompletionKind::Function => ("\u{f0295}", "\x1b[34m"),   // 󰊕 Blue
             CompletionKind::Variable => ("\u{eb5d}", "\x1b[33m"),    //  Yellow
+            CompletionKind::Subcommand => ("\u{f126}", "\x1b[36m"),  //  Cyan
+            CompletionKind::Flag => ("\u{f024}", "\x1b[33m"),        //  Yellow
+            CompletionKind::Value => ("\u{f02b}", "\x1b[32m"),       //  Green
             CompletionKind::File => Self::file_nerd_icon(&self.display),
         }
     }
@@ -106,18 +125,18 @@ impl CompletionItem {
                 "toml" | "yaml" | "yml" | "json" | "ini" | "conf" => ("\u{e615}", "\x1b[33m"), //  Config yellow
                 "md" | "markdown" => ("\u{f48a}", "\x1b[36m"), //  Markdown cyan
                 "sh" | "bash" | "zsh" | "lsh" => ("\u{f489}", "\x1b[32m"), //  Terminal green
-                "lock" => ("\u{f023}", "\x1b[38;5;245m"), //  Lock gray
-                "py" => ("\u{e606}", "\x1b[34m"), //  Python blue
+                "lock" => ("\u{f023}", "\x1b[38;5;245m"),      //  Lock gray
+                "py" => ("\u{e606}", "\x1b[34m"),              //  Python blue
                 "js" | "mjs" | "cjs" => ("\u{e60c}", "\x1b[33m"), //  JS yellow
-                "ts" => ("\u{e628}", "\x1b[34m"), //  TS blue
+                "ts" => ("\u{e628}", "\x1b[34m"),              //  TS blue
                 "html" | "css" | "scss" => ("\u{e60e}", "\x1b[35m"), //  Web purple
                 "c" | "h" | "cpp" | "hpp" | "cc" => ("\u{e61d}", "\x1b[34m"), //  C/C++ blue
-                "go" => ("\u{e627}", "\x1b[36m"), //  Go cyan
+                "go" => ("\u{e627}", "\x1b[36m"),              //  Go cyan
                 "png" | "jpg" | "jpeg" | "gif" | "svg" | "webp" | "ico" => ("\u{f1c5}", "\x1b[35m"), //  Image purple
                 "mp3" | "wav" | "ogg" | "mp4" | "mkv" | "avi" => ("\u{f1c7}", "\x1b[35m"), //  Media purple
                 "zip" | "tar" | "gz" | "xz" | "7z" | "bz2" => ("\u{f1c6}", "\x1b[31m"), //  Archive red
                 "txt" | "log" | "csv" => ("\u{f15c}", "\x1b[37m"), //  Text white
-                _ => ("\u{f15b}", "\x1b[37m"), //  File white
+                _ => ("\u{f15b}", "\x1b[37m"),                     //  File white
             }
         } else {
             ("\u{f15b}", "\x1b[37m") //  File white
@@ -151,7 +170,14 @@ pub fn calculate_menu_dimensions(
     let icon_pad = if nerd_icons { 2 } else { 0 };
     let max_item_len = items
         .iter()
-        .map(|it| it.display.chars().count() + icon_pad + it.kind.badge().chars().count() + 6)
+        .map(|it| {
+            let desc_len = it
+                .description
+                .as_ref()
+                .map(|d| d.chars().count() + 2)
+                .unwrap_or(0);
+            it.display.chars().count() + icon_pad + it.kind.badge().chars().count() + desc_len + 7
+        })
         .max()
         .unwrap_or(20);
 
@@ -259,7 +285,27 @@ pub fn draw_menu<W: Write>(
         };
         let visible_name_len = visible_chars.len() + if should_truncate { 1 } else { 0 };
 
-        let used_len = 1 + 2 + icon_len + visible_name_len + badge.chars().count() + 1;
+        let min_required = 1 + 2 + icon_len + visible_name_len + 1 + badge.chars().count() + 1;
+        let remaining_for_desc = inner_space.saturating_sub(min_required);
+
+        let (desc_str, desc_len) = if let Some(desc) = &item.description {
+            if remaining_for_desc >= 6 {
+                let avail = remaining_for_desc - 2;
+                let desc_chars: Vec<char> = desc.chars().collect();
+                if desc_chars.len() > avail {
+                    let s: String = desc_chars[..avail.saturating_sub(1)].iter().collect();
+                    (format!("  {s}…"), avail + 2)
+                } else {
+                    (format!("  {desc}"), desc_chars.len() + 2)
+                }
+            } else {
+                (String::new(), 0)
+            }
+        } else {
+            (String::new(), 0)
+        };
+
+        let used_len = 1 + 2 + icon_len + visible_name_len + desc_len + badge.chars().count() + 1;
         let pad_len = inner_space.saturating_sub(used_len);
         let pad = " ".repeat(pad_len);
 
@@ -313,13 +359,16 @@ pub fn draw_menu<W: Write>(
             }
         }
 
-        queue!(writer, cursor::MoveTo(layout.menu_col, item_start_row + r as u16))?;
+        queue!(
+            writer,
+            cursor::MoveTo(layout.menu_col, item_start_row + r as u16)
+        )?;
 
         if is_selected {
             queue!(
                 writer,
                 style::Print(format!(
-                    "\x1b[38;5;240m│\x1b[0m\x1b[7m {marker}{icon_str}{name_formatted}{pad}{badge} \x1b[0m\x1b[38;5;240m│\x1b[0m"
+                    "\x1b[38;5;240m│\x1b[0m\x1b[7m {marker}{icon_str}{name_formatted}{desc_str}{pad}{badge} \x1b[0m\x1b[38;5;240m│\x1b[0m"
                 ))
             )?;
         } else {
@@ -329,10 +378,15 @@ pub fn draw_menu<W: Write>(
             } else {
                 format!("{icon_color}{icon_str}\x1b[0m")
             };
+            let desc_colored = if desc_str.is_empty() {
+                String::new()
+            } else {
+                format!("\x1b[38;5;244m{desc_str}\x1b[0m")
+            };
             queue!(
                 writer,
                 style::Print(format!(
-                    "\x1b[38;5;240m│\x1b[0m {marker}{icon_colored}{name_formatted}{pad}{badge_colored} \x1b[38;5;240m│\x1b[0m"
+                    "\x1b[38;5;240m│\x1b[0m {marker}{icon_colored}{name_formatted}{desc_colored}{pad}{badge_colored} \x1b[38;5;240m│\x1b[0m"
                 ))
             )?;
         }
@@ -373,11 +427,7 @@ pub fn erase_menu<W: Write>(
             terminal::Clear(terminal::ClearType::CurrentLine),
         )?;
     }
-    queue!(
-        writer,
-        cursor::MoveTo(cursor_col, cursor_row),
-        cursor::Show,
-    )?;
+    queue!(writer, cursor::MoveTo(cursor_col, cursor_row), cursor::Show,)?;
     writer.flush()
 }
 
@@ -687,131 +737,81 @@ where
                     modifiers,
                     kind,
                     ..
-                })) if kind != KeyEventKind::Release => {
-                    match handle_key_event(code, modifiers) {
-                        MenuAction::Next => {
-                            if !active_items.is_empty() {
-                                selected = (selected + 1) % active_items.len();
-                                let (l, _) = make_layout(&active_items, cur_col, filter_suffix.chars().count());
-                                let _ = draw_menu(&mut cout, &active_items, selected, l);
-                            }
+                })) if kind != KeyEventKind::Release => match handle_key_event(code, modifiers) {
+                    MenuAction::Next => {
+                        if !active_items.is_empty() {
+                            selected = (selected + 1) % active_items.len();
+                            let (l, _) =
+                                make_layout(&active_items, cur_col, filter_suffix.chars().count());
+                            let _ = draw_menu(&mut cout, &active_items, selected, l);
                         }
-                        MenuAction::Previous => {
-                            if !active_items.is_empty() {
-                                selected = if selected == 0 {
-                                    active_items.len() - 1
-                                } else {
-                                    selected - 1
-                                };
-                                let (l, _) = make_layout(&active_items, cur_col, filter_suffix.chars().count());
-                                let _ = draw_menu(&mut cout, &active_items, selected, l);
-                            }
-                        }
-                        MenuAction::PageDown => {
-                            if !active_items.is_empty() {
-                                let (l, _) = make_layout(&active_items, cur_col, filter_suffix.chars().count());
-                                selected = (selected + l.height).min(active_items.len() - 1);
-                                let (l, _) = make_layout(&active_items, cur_col, filter_suffix.chars().count());
-                                let _ = draw_menu(&mut cout, &active_items, selected, l);
-                            }
-                        }
-                        MenuAction::PageUp => {
-                            if !active_items.is_empty() {
-                                let (l, _) = make_layout(&active_items, cur_col, filter_suffix.chars().count());
-                                selected = selected.saturating_sub(l.height);
-                                let (l, _) = make_layout(&active_items, cur_col, filter_suffix.chars().count());
-                                let _ = draw_menu(&mut cout, &active_items, selected, l);
-                            }
-                        }
-                        MenuAction::First => {
-                            if !active_items.is_empty() {
-                                selected = 0;
-                                let (l, _) = make_layout(&active_items, cur_col, filter_suffix.chars().count());
-                                let _ = draw_menu(&mut cout, &active_items, selected, l);
-                            }
-                        }
-                        MenuAction::Last => {
-                            if !active_items.is_empty() {
-                                selected = active_items.len() - 1;
-                                let (l, _) = make_layout(&active_items, cur_col, filter_suffix.chars().count());
-                                let _ = draw_menu(&mut cout, &active_items, selected, l);
-                            }
-                        }
-                        MenuAction::Accept => {
-                            break if !active_items.is_empty() {
-                                MenuResult::Selected(active_items[selected].clone())
+                    }
+                    MenuAction::Previous => {
+                        if !active_items.is_empty() {
+                            selected = if selected == 0 {
+                                active_items.len() - 1
                             } else {
-                                MenuResult::Typed(format!("{current_prefix}{filter_suffix}"))
+                                selected - 1
                             };
+                            let (l, _) =
+                                make_layout(&active_items, cur_col, filter_suffix.chars().count());
+                            let _ = draw_menu(&mut cout, &active_items, selected, l);
                         }
-                        MenuAction::Tab | MenuAction::Slash
-                            if !active_items.is_empty() && active_items[selected].is_dir() =>
-                        {
-                            let item = &active_items[selected];
-                            let next_items = on_descend(&item.replacement);
-                            if !next_items.is_empty() {
-                                descent_stack.push(DescentLevel {
-                                    prefix: current_prefix.clone(),
-                                    items: root_items.clone(),
-                                    initial_query: initial_query.clone(),
-                                });
-
-                                let _ = erase_menu(
-                                    &mut cout,
-                                    max_needed_rows,
-                                    cursor_row,
-                                    cur_col + filter_suffix.chars().count() as u16,
-                                );
-
-                                let old_len = current_prefix.chars().count() + filter_suffix.chars().count();
-                                let new_prefix = item.replacement.clone();
-                                let new_len = new_prefix.chars().count();
-                                let pad = if old_len > new_len {
-                                    " ".repeat(old_len - new_len)
-                                } else {
-                                    String::new()
-                                };
-                                let _ = queue!(
-                                    cout,
-                                    cursor::MoveTo(start_col, cursor_row),
-                                    style::Print(format!("{new_prefix}{pad}")),
-                                    cursor::MoveTo(start_col + new_len as u16, cursor_row),
-                                );
-                                let _ = cout.flush();
-
-                                current_prefix = new_prefix;
-                                cur_col = start_col + new_len as u16;
-                                filter_suffix.clear();
-                                initial_query.clear();
-                                root_items = next_items.clone();
-                                active_items = next_items;
-                                selected = 0;
-
-                                let (l, needed) = make_layout(&active_items, cur_col, 0);
-                                max_needed_rows = max_needed_rows.max(needed);
-                                let _ = draw_menu(&mut cout, &active_items, selected, l);
-                            } else {
-                                break MenuResult::Selected(item.clone());
-                            }
+                    }
+                    MenuAction::PageDown => {
+                        if !active_items.is_empty() {
+                            let (l, _) =
+                                make_layout(&active_items, cur_col, filter_suffix.chars().count());
+                            selected = (selected + l.height).min(active_items.len() - 1);
+                            let (l, _) =
+                                make_layout(&active_items, cur_col, filter_suffix.chars().count());
+                            let _ = draw_menu(&mut cout, &active_items, selected, l);
                         }
-                        MenuAction::Tab => {
-                            break if !active_items.is_empty() {
-                                MenuResult::Selected(active_items[selected].clone())
-                            } else {
-                                MenuResult::Typed(format!("{current_prefix}{filter_suffix}"))
-                            };
+                    }
+                    MenuAction::PageUp => {
+                        if !active_items.is_empty() {
+                            let (l, _) =
+                                make_layout(&active_items, cur_col, filter_suffix.chars().count());
+                            selected = selected.saturating_sub(l.height);
+                            let (l, _) =
+                                make_layout(&active_items, cur_col, filter_suffix.chars().count());
+                            let _ = draw_menu(&mut cout, &active_items, selected, l);
                         }
-                        MenuAction::Slash => {
-                            filter_suffix.push('/');
-                            let query = format!("{initial_query}{filter_suffix}");
-                            let new_items = filter_completion_items(&root_items, &query);
-
-                            if new_items.is_empty() {
-                                break MenuResult::Typed(format!("{current_prefix}{filter_suffix}"));
-                            }
-
-                            let char_col = cur_col + (filter_suffix.chars().count() - 1) as u16;
-                            let _ = queue!(cout, cursor::MoveTo(char_col, cursor_row), style::Print('/'));
+                    }
+                    MenuAction::First => {
+                        if !active_items.is_empty() {
+                            selected = 0;
+                            let (l, _) =
+                                make_layout(&active_items, cur_col, filter_suffix.chars().count());
+                            let _ = draw_menu(&mut cout, &active_items, selected, l);
+                        }
+                    }
+                    MenuAction::Last => {
+                        if !active_items.is_empty() {
+                            selected = active_items.len() - 1;
+                            let (l, _) =
+                                make_layout(&active_items, cur_col, filter_suffix.chars().count());
+                            let _ = draw_menu(&mut cout, &active_items, selected, l);
+                        }
+                    }
+                    MenuAction::Accept => {
+                        break if !active_items.is_empty() {
+                            MenuResult::Selected(active_items[selected].clone())
+                        } else {
+                            MenuResult::Typed(format!("{current_prefix}{filter_suffix}"))
+                        };
+                    }
+                    MenuAction::Tab | MenuAction::Slash
+                        if !active_items.is_empty() && active_items[selected].is_dir() =>
+                    {
+                        let item = &active_items[selected];
+                        let next_items = on_descend(&item.replacement);
+                        if !next_items.is_empty() {
+                            descent_stack.push(DescentLevel {
+                                prefix: current_prefix.clone(),
+                                items: root_items.clone(),
+                                initial_query: initial_query.clone(),
+                            });
 
                             let _ = erase_menu(
                                 &mut cout,
@@ -820,27 +820,120 @@ where
                                 cur_col + filter_suffix.chars().count() as u16,
                             );
 
-                            active_items = new_items;
-                            selected = selected.min(active_items.len() - 1);
+                            let old_len =
+                                current_prefix.chars().count() + filter_suffix.chars().count();
+                            let new_prefix = item.replacement.clone();
+                            let new_len = new_prefix.chars().count();
+                            let pad = if old_len > new_len {
+                                " ".repeat(old_len - new_len)
+                            } else {
+                                String::new()
+                            };
+                            let _ = queue!(
+                                cout,
+                                cursor::MoveTo(start_col, cursor_row),
+                                style::Print(format!("{new_prefix}{pad}")),
+                                cursor::MoveTo(start_col + new_len as u16, cursor_row),
+                            );
+                            let _ = cout.flush();
 
-                            let (l, needed) = make_layout(&active_items, cur_col, filter_suffix.chars().count());
+                            current_prefix = new_prefix;
+                            cur_col = start_col + new_len as u16;
+                            filter_suffix.clear();
+                            initial_query.clear();
+                            root_items = next_items.clone();
+                            active_items = next_items;
+                            selected = 0;
+
+                            let (l, needed) = make_layout(&active_items, cur_col, 0);
                             max_needed_rows = max_needed_rows.max(needed);
                             let _ = draw_menu(&mut cout, &active_items, selected, l);
+                        } else {
+                            break MenuResult::Selected(item.clone());
                         }
-                        MenuAction::Dismiss => {
-                            break MenuResult::Cancelled;
+                    }
+                    MenuAction::Tab => {
+                        break if !active_items.is_empty() {
+                            MenuResult::Selected(active_items[selected].clone())
+                        } else {
+                            MenuResult::Typed(format!("{current_prefix}{filter_suffix}"))
+                        };
+                    }
+                    MenuAction::Slash => {
+                        filter_suffix.push('/');
+                        let query = format!("{initial_query}{filter_suffix}");
+                        let new_items = filter_completion_items(&root_items, &query);
+
+                        if new_items.is_empty() {
+                            break MenuResult::Typed(format!("{current_prefix}{filter_suffix}"));
                         }
-                        MenuAction::Char(c) => {
-                            filter_suffix.push(c);
+
+                        let char_col = cur_col + (filter_suffix.chars().count() - 1) as u16;
+                        let _ = queue!(
+                            cout,
+                            cursor::MoveTo(char_col, cursor_row),
+                            style::Print('/')
+                        );
+
+                        let _ = erase_menu(
+                            &mut cout,
+                            max_needed_rows,
+                            cursor_row,
+                            cur_col + filter_suffix.chars().count() as u16,
+                        );
+
+                        active_items = new_items;
+                        selected = selected.min(active_items.len() - 1);
+
+                        let (l, needed) =
+                            make_layout(&active_items, cur_col, filter_suffix.chars().count());
+                        max_needed_rows = max_needed_rows.max(needed);
+                        let _ = draw_menu(&mut cout, &active_items, selected, l);
+                    }
+                    MenuAction::Dismiss => {
+                        break MenuResult::Cancelled;
+                    }
+                    MenuAction::Char(c) => {
+                        filter_suffix.push(c);
+                        let query = format!("{initial_query}{filter_suffix}");
+                        let new_items = filter_completion_items(&root_items, &query);
+
+                        if new_items.is_empty() {
+                            break MenuResult::Typed(format!("{current_prefix}{filter_suffix}"));
+                        }
+
+                        let char_col = cur_col + (filter_suffix.chars().count() - 1) as u16;
+                        let _ = queue!(cout, cursor::MoveTo(char_col, cursor_row), style::Print(c));
+
+                        let _ = erase_menu(
+                            &mut cout,
+                            max_needed_rows,
+                            cursor_row,
+                            cur_col + filter_suffix.chars().count() as u16,
+                        );
+
+                        active_items = new_items;
+                        selected = selected.min(active_items.len() - 1);
+
+                        let (l, needed) =
+                            make_layout(&active_items, cur_col, filter_suffix.chars().count());
+                        max_needed_rows = max_needed_rows.max(needed);
+                        let _ = draw_menu(&mut cout, &active_items, selected, l);
+                    }
+                    MenuAction::Backspace => {
+                        if !filter_suffix.is_empty() {
+                            let char_col = cur_col + filter_suffix.chars().count() as u16 - 1;
+                            let _ = queue!(
+                                cout,
+                                cursor::MoveTo(char_col, cursor_row),
+                                style::Print(' '),
+                                cursor::MoveTo(char_col, cursor_row),
+                            );
+
+                            filter_suffix.pop();
                             let query = format!("{initial_query}{filter_suffix}");
-                            let new_items = filter_completion_items(&root_items, &query);
-
-                            if new_items.is_empty() {
-                                break MenuResult::Typed(format!("{current_prefix}{filter_suffix}"));
-                            }
-
-                            let char_col = cur_col + (filter_suffix.chars().count() - 1) as u16;
-                            let _ = queue!(cout, cursor::MoveTo(char_col, cursor_row), style::Print(c));
+                            active_items = filter_completion_items(&root_items, &query);
+                            selected = selected.min(active_items.len().saturating_sub(1));
 
                             let _ = erase_menu(
                                 &mut cout,
@@ -849,86 +942,51 @@ where
                                 cur_col + filter_suffix.chars().count() as u16,
                             );
 
-                            active_items = new_items;
-                            selected = selected.min(active_items.len() - 1);
-
-                            let (l, needed) = make_layout(&active_items, cur_col, filter_suffix.chars().count());
+                            let (l, needed) =
+                                make_layout(&active_items, cur_col, filter_suffix.chars().count());
                             max_needed_rows = max_needed_rows.max(needed);
                             let _ = draw_menu(&mut cout, &active_items, selected, l);
-                        }
-                        MenuAction::Backspace => {
-                            if !filter_suffix.is_empty() {
-                                let char_col =
-                                    cur_col + filter_suffix.chars().count() as u16 - 1;
-                                let _ = queue!(
-                                    cout,
-                                    cursor::MoveTo(char_col, cursor_row),
-                                    style::Print(' '),
-                                    cursor::MoveTo(char_col, cursor_row),
-                                );
+                        } else if let Some(parent) = descent_stack.pop() {
+                            let _ = erase_menu(&mut cout, max_needed_rows, cursor_row, cur_col);
 
-                                filter_suffix.pop();
-                                let query = format!("{initial_query}{filter_suffix}");
-                                active_items = filter_completion_items(&root_items, &query);
-                                selected = selected.min(active_items.len().saturating_sub(1));
-
-                                let _ = erase_menu(
-                                    &mut cout,
-                                    max_needed_rows,
-                                    cursor_row,
-                                    cur_col + filter_suffix.chars().count() as u16,
-                                );
-
-                                let (l, needed) = make_layout(&active_items, cur_col, filter_suffix.chars().count());
-                                max_needed_rows = max_needed_rows.max(needed);
-                                let _ = draw_menu(&mut cout, &active_items, selected, l);
-                            } else if let Some(parent) = descent_stack.pop() {
-                                let _ = erase_menu(
-                                    &mut cout,
-                                    max_needed_rows,
-                                    cursor_row,
-                                    cur_col,
-                                );
-
-                                let old_len = current_prefix.chars().count();
-                                let new_prefix = parent.prefix;
-                                let new_len = new_prefix.chars().count();
-                                let pad = if old_len > new_len {
-                                    " ".repeat(old_len - new_len)
-                                } else {
-                                    String::new()
-                                };
-                                let _ = queue!(
-                                    cout,
-                                    cursor::MoveTo(start_col, cursor_row),
-                                    style::Print(format!("{new_prefix}{pad}")),
-                                    cursor::MoveTo(start_col + new_len as u16, cursor_row),
-                                );
-                                let _ = cout.flush();
-
-                                current_prefix = new_prefix;
-                                cur_col = start_col + new_len as u16;
-                                filter_suffix.clear();
-                                initial_query = parent.initial_query;
-                                root_items = parent.items.clone();
-                                active_items = parent.items;
-                                selected = 0;
-
-                                let (l, needed) = make_layout(&active_items, cur_col, 0);
-                                max_needed_rows = max_needed_rows.max(needed);
-                                let _ = draw_menu(&mut cout, &active_items, selected, l);
+                            let old_len = current_prefix.chars().count();
+                            let new_prefix = parent.prefix;
+                            let new_len = new_prefix.chars().count();
+                            let pad = if old_len > new_len {
+                                " ".repeat(old_len - new_len)
                             } else {
-                                let mut new_prefix = current_prefix.clone();
-                                if !new_prefix.is_empty() {
-                                    new_prefix.pop();
-                                    break MenuResult::Typed(new_prefix);
-                                } else {
-                                    break MenuResult::Cancelled;
-                                }
+                                String::new()
+                            };
+                            let _ = queue!(
+                                cout,
+                                cursor::MoveTo(start_col, cursor_row),
+                                style::Print(format!("{new_prefix}{pad}")),
+                                cursor::MoveTo(start_col + new_len as u16, cursor_row),
+                            );
+                            let _ = cout.flush();
+
+                            current_prefix = new_prefix;
+                            cur_col = start_col + new_len as u16;
+                            filter_suffix.clear();
+                            initial_query = parent.initial_query;
+                            root_items = parent.items.clone();
+                            active_items = parent.items;
+                            selected = 0;
+
+                            let (l, needed) = make_layout(&active_items, cur_col, 0);
+                            max_needed_rows = max_needed_rows.max(needed);
+                            let _ = draw_menu(&mut cout, &active_items, selected, l);
+                        } else {
+                            let mut new_prefix = current_prefix.clone();
+                            if !new_prefix.is_empty() {
+                                new_prefix.pop();
+                                break MenuResult::Typed(new_prefix);
+                            } else {
+                                break MenuResult::Cancelled;
                             }
                         }
                     }
-                }
+                },
                 Err(_) => break MenuResult::Cancelled,
                 _ => {}
             }
@@ -1008,6 +1066,40 @@ mod tests {
         assert_eq!(CompletionKind::Variable.badge(), "[var]");
         assert_eq!(CompletionKind::Alias.badge(), "[alias]");
         assert_eq!(CompletionKind::Function.badge(), "[fn]");
+        assert_eq!(CompletionKind::Subcommand.badge(), "[subcmd]");
+        assert_eq!(CompletionKind::Flag.badge(), "[flag]");
+        assert_eq!(CompletionKind::Value.badge(), "[val]");
+    }
+
+    #[test]
+    fn box_borders_and_rows_align_with_descriptions() {
+        let items = vec![
+            CompletionItem::new("commit", "commit", CompletionKind::Subcommand)
+                .with_description("Record changes to repository"),
+            CompletionItem::new("-m", "-m", CompletionKind::Flag)
+                .with_description("Commit message"),
+            CompletionItem::new("main", "main", CompletionKind::Value)
+                .with_description("Main branch"),
+        ];
+
+        let (width, height) = calculate_menu_dimensions(&items, 100, 7, true);
+        let layout = MenuLayout {
+            width,
+            height,
+            menu_col: 0,
+            cursor_row: 10,
+            cursor_col: 0,
+            nerd_icons: true,
+        };
+
+        let mut buf = Vec::new();
+        draw_menu(&mut buf, &items, 0, layout).unwrap();
+        let rendered = String::from_utf8_lossy(&buf);
+
+        let lines: Vec<&str> = rendered.split("\x1b[0m\x1b[").collect();
+        assert!(!lines.is_empty());
+        assert!(rendered.contains("Record changes to repository"));
+        assert!(rendered.contains("Commit message"));
     }
 
     #[test]

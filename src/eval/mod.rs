@@ -8,7 +8,7 @@ use std::{
     fs::File,
     io,
     sync::{
-        Arc,
+        Arc, RwLock,
         atomic::{AtomicBool, Ordering},
     },
 };
@@ -18,7 +18,10 @@ use crate::{
     expand::{self, ExpandCtx},
     options::Options,
     parser::ast::{BinaryOp, CommandExpr, Expr, Program, Statement},
-    terminal::signals::{STATUS_SIGINT, signal_exit_code},
+    terminal::{
+        completion::CompletionRegistry,
+        signals::{STATUS_SIGINT, signal_exit_code},
+    },
 };
 
 #[derive(Debug)]
@@ -53,6 +56,7 @@ pub struct Evaluator {
     aliases: HashMap<String, String>,
     pub last_status: i32,
     pub interrupted: Arc<AtomicBool>,
+    pub completion_registry: Arc<RwLock<CompletionRegistry>>,
 }
 
 impl Evaluator {
@@ -62,11 +66,20 @@ impl Evaluator {
             aliases: HashMap::new(),
             last_status: 0,
             interrupted: crate::terminal::signals::get_interrupt_flag(),
+            completion_registry: Arc::new(RwLock::new(CompletionRegistry::with_defaults())),
         }
     }
 
     pub fn with_interrupt_flag(mut self, flag: Arc<AtomicBool>) -> Evaluator {
         self.interrupted = flag;
+        self
+    }
+
+    pub fn with_completion_registry(
+        mut self,
+        registry: Arc<RwLock<CompletionRegistry>>,
+    ) -> Evaluator {
+        self.completion_registry = registry;
         self
     }
 
