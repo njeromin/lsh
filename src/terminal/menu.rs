@@ -53,6 +53,58 @@ pub struct CompletionItem {
     pub kind: CompletionKind,
 }
 
+impl CompletionItem {
+    pub fn nerd_icon(&self) -> (&'static str, &'static str) {
+        match self.kind {
+            CompletionKind::Directory => ("\u{f115}", "\x1b[1;34m"), //  Bold Blue
+            CompletionKind::Binary => ("\u{f489}", "\x1b[32m"),      //  Green
+            CompletionKind::Builtin => ("\u{f0ad}", "\x1b[35m"),     //  Magenta
+            CompletionKind::Alias => ("\u{f0c1}", "\x1b[36m"),       //  Cyan
+            CompletionKind::Function => ("\u{f0295}", "\x1b[34m"),   // 󰊕 Blue
+            CompletionKind::Variable => ("\u{eb5d}", "\x1b[33m"),    //  Yellow
+            CompletionKind::File => Self::file_nerd_icon(&self.display),
+        }
+    }
+
+    fn file_nerd_icon(filename: &str) -> (&'static str, &'static str) {
+        let name_lower = filename.to_lowercase();
+        // Exact names first
+        if name_lower == "cargo.toml" || name_lower == "cargo.lock" {
+            return ("\u{e7a8}", "\x1b[38;5;208m"); //  Rust orange
+        }
+        if name_lower.starts_with(".git") {
+            return ("\u{e702}", "\x1b[31m"); //  Git red
+        }
+        if name_lower == "license" || name_lower.starts_with("license.") {
+            return ("\u{e60a}", "\x1b[33m"); //  Yellow
+        }
+
+        // By extension
+        if let Some(ext) = name_lower.rsplit('.').next() {
+            match ext {
+                "rs" => ("\u{e7a8}", "\x1b[38;5;208m"), //  Rust orange
+                "toml" | "yaml" | "yml" | "json" | "ini" | "conf" => ("\u{e615}", "\x1b[33m"), //  Config yellow
+                "md" | "markdown" => ("\u{f48a}", "\x1b[36m"), //  Markdown cyan
+                "sh" | "bash" | "zsh" | "lsh" => ("\u{f489}", "\x1b[32m"), //  Terminal green
+                "lock" => ("\u{f023}", "\x1b[38;5;245m"), //  Lock gray
+                "py" => ("\u{e606}", "\x1b[34m"), //  Python blue
+                "js" | "mjs" | "cjs" => ("\u{e60c}", "\x1b[33m"), //  JS yellow
+                "ts" => ("\u{e628}", "\x1b[34m"), //  TS blue
+                "html" | "css" | "scss" => ("\u{e60e}", "\x1b[35m"), //  Web purple
+                "c" | "h" | "cpp" | "hpp" | "cc" => ("\u{e61d}", "\x1b[34m"), //  C/C++ blue
+                "go" => ("\u{e627}", "\x1b[36m"), //  Go cyan
+                "png" | "jpg" | "jpeg" | "gif" | "svg" | "webp" | "ico" => ("\u{f1c5}", "\x1b[35m"), //  Image purple
+                "mp3" | "wav" | "ogg" | "mp4" | "mkv" | "avi" => ("\u{f1c7}", "\x1b[35m"), //  Media purple
+                "zip" | "tar" | "gz" | "xz" | "7z" | "bz2" => ("\u{f1c6}", "\x1b[31m"), //  Archive red
+                "txt" | "log" | "csv" => ("\u{f15c}", "\x1b[37m"), //  Text white
+                _ => ("\u{f15b}", "\x1b[37m"), //  File white
+            }
+        } else {
+            ("\u{f15b}", "\x1b[37m") //  File white
+        }
+    }
+}
+
 pub fn calculate_viewport(total: usize, selected: usize, max_visible: usize) -> (usize, usize) {
     if total <= max_visible {
         return (0, total);
@@ -74,10 +126,12 @@ pub fn calculate_menu_dimensions(
     items: &[CompletionItem],
     term_cols: u16,
     max_visible: usize,
+    nerd_icons: bool,
 ) -> (usize, usize) {
+    let icon_pad = if nerd_icons { 2 } else { 0 };
     let max_item_len = items
         .iter()
-        .map(|it| it.display.chars().count() + it.kind.badge().len() + 6)
+        .map(|it| it.display.chars().count() + icon_pad + it.kind.badge().chars().count() + 6)
         .max()
         .unwrap_or(20);
 
@@ -95,6 +149,7 @@ pub struct MenuLayout {
     pub menu_col: u16,
     pub cursor_row: u16,
     pub cursor_col: u16,
+    pub nerd_icons: bool,
 }
 
 pub fn draw_menu<W: Write>(
@@ -133,9 +188,21 @@ pub fn draw_menu<W: Write>(
         let name = &item.display;
         let badge = item.kind.badge();
 
-        // Visible inner layout: " " (1) + marker (2) + name + pad + badge + " " (1)
-        // Overhead without name: 1 + 2 + 1 (min space before badge) + badge_len + 1 = 5 + badge_len
-        let overhead = 5 + badge.chars().count();
+        let (icon_glyph, icon_color) = if layout.nerd_icons {
+            item.nerd_icon()
+        } else {
+            ("", "")
+        };
+        let icon_str = if icon_glyph.is_empty() {
+            String::new()
+        } else {
+            format!("{icon_glyph} ")
+        };
+        let icon_len = icon_str.chars().count();
+
+        // Visible inner layout: " " (1) + marker (2) + icon (icon_len) + name + pad + badge + " " (1)
+        // Overhead without name: 1 + 2 + icon_len + 1 (min space before badge) + badge_len + 1 = 5 + icon_len + badge_len
+        let overhead = 5 + icon_len + badge.chars().count();
         let max_name_len = inner_space.saturating_sub(overhead);
 
         let name_str: String = if name.chars().count() > max_name_len && max_name_len > 1 {
@@ -146,7 +213,7 @@ pub fn draw_menu<W: Write>(
             name.to_string()
         };
 
-        let used_len = 1 + 2 + name_str.chars().count() + badge.chars().count() + 1;
+        let used_len = 1 + 2 + icon_len + name_str.chars().count() + badge.chars().count() + 1;
         let pad_len = inner_space.saturating_sub(used_len);
         let pad = " ".repeat(pad_len);
 
@@ -156,15 +223,20 @@ pub fn draw_menu<W: Write>(
             queue!(
                 writer,
                 style::Print(format!(
-                    "\x1b[38;5;240m│\x1b[7m {marker}{name_str}{pad}{badge} \x1b[0m\x1b[38;5;240m│\x1b[0m"
+                    "\x1b[38;5;240m│\x1b[7m {marker}{icon_str}{name_str}{pad}{badge} \x1b[0m\x1b[38;5;240m│\x1b[0m"
                 ))
             )?;
         } else {
             let badge_colored = format!("{}{badge}\x1b[0m", item.kind.color());
+            let icon_colored = if icon_str.is_empty() {
+                String::new()
+            } else {
+                format!("{icon_color}{icon_str}\x1b[0m")
+            };
             queue!(
                 writer,
                 style::Print(format!(
-                    "\x1b[38;5;240m│\x1b[0m {marker}{name_str}{pad}{badge_colored} \x1b[38;5;240m│\x1b[0m"
+                    "\x1b[38;5;240m│\x1b[0m {marker}{icon_colored}{name_str}{pad}{badge_colored} \x1b[38;5;240m│\x1b[0m"
                 ))
             )?;
         }
@@ -301,6 +373,7 @@ pub fn show_completion_menu(
     base_prefix: &str,
     items: &[CompletionItem],
     max_visible: usize,
+    nerd_icons: bool,
 ) -> MenuResult {
     if items.is_empty() {
         return MenuResult::Cancelled;
@@ -310,8 +383,7 @@ pub fn show_completion_menu(
     }
     #[cfg(test)]
     {
-        let _ = max_visible;
-        let _ = base_prefix;
+        let _ = (max_visible, base_prefix, nerd_icons);
         MenuResult::Selected(items[0].clone())
     }
     #[cfg(not(test))]
@@ -329,10 +401,9 @@ pub fn show_completion_menu(
         let mut active_items = items.to_vec();
         let mut selected = 0;
 
-        let (width, height) = calculate_menu_dimensions(&active_items, term_cols, max_visible);
-        let menu_col = cursor_col.min(term_cols.saturating_sub(width as u16 + 2));
-
-        let needed_rows = height as u16 + 2;
+        let (initial_w, initial_h) =
+            calculate_menu_dimensions(&active_items, term_cols, max_visible, nerd_icons);
+        let needed_rows = initial_h as u16 + 2;
         if cursor_row + needed_rows >= term_rows {
             let overflow = (cursor_row + needed_rows + 1).saturating_sub(term_rows);
             if overflow > 0 {
@@ -344,17 +415,35 @@ pub fn show_completion_menu(
             }
         }
 
+        let make_layout = |active: &[CompletionItem], filter_len: usize| {
+            let (w, h) = calculate_menu_dimensions(active, term_cols, max_visible, nerd_icons);
+            let m_col = cursor_col.min(term_cols.saturating_sub(w as u16 + 2));
+            let cur_col = cursor_col + filter_len as u16;
+            (
+                MenuLayout {
+                    width: w,
+                    height: h,
+                    menu_col: m_col,
+                    cursor_row,
+                    cursor_col: cur_col,
+                    nerd_icons,
+                },
+                h as u16 + 2,
+            )
+        };
+
         let mut max_needed_rows = needed_rows;
         let _ = execute!(cout, cursor::Hide);
 
+        let initial_m_col = cursor_col.min(term_cols.saturating_sub(initial_w as u16 + 2));
         let layout = MenuLayout {
-            width,
-            height,
-            menu_col,
+            width: initial_w,
+            height: initial_h,
+            menu_col: initial_m_col,
             cursor_row,
             cursor_col,
+            nerd_icons,
         };
-
         let _ = draw_menu(&mut cout, &active_items, selected, layout);
 
         let result = loop {
@@ -372,18 +461,7 @@ pub fn show_completion_menu(
                                     break MenuResult::Selected(active_items[0].clone());
                                 }
                                 selected = (selected + 1) % active_items.len();
-                                let (w, h) =
-                                    calculate_menu_dimensions(&active_items, term_cols, max_visible);
-                                let m_col = cursor_col.min(term_cols.saturating_sub(w as u16 + 2));
-                                let cur_col =
-                                    cursor_col + filter_suffix.chars().count() as u16;
-                                let l = MenuLayout {
-                                    width: w,
-                                    height: h,
-                                    menu_col: m_col,
-                                    cursor_row,
-                                    cursor_col: cur_col,
-                                };
+                                let (l, _) = make_layout(&active_items, filter_suffix.chars().count());
                                 let _ = draw_menu(&mut cout, &active_items, selected, l);
                             }
                         }
@@ -394,94 +472,37 @@ pub fn show_completion_menu(
                                 } else {
                                     selected - 1
                                 };
-                                let (w, h) =
-                                    calculate_menu_dimensions(&active_items, term_cols, max_visible);
-                                let m_col = cursor_col.min(term_cols.saturating_sub(w as u16 + 2));
-                                let cur_col =
-                                    cursor_col + filter_suffix.chars().count() as u16;
-                                let l = MenuLayout {
-                                    width: w,
-                                    height: h,
-                                    menu_col: m_col,
-                                    cursor_row,
-                                    cursor_col: cur_col,
-                                };
+                                let (l, _) = make_layout(&active_items, filter_suffix.chars().count());
                                 let _ = draw_menu(&mut cout, &active_items, selected, l);
                             }
                         }
                         MenuAction::PageDown => {
                             if !active_items.is_empty() {
-                                let (_, h) =
-                                    calculate_menu_dimensions(&active_items, term_cols, max_visible);
-                                selected = (selected + h).min(active_items.len() - 1);
-                                let (w, h) =
-                                    calculate_menu_dimensions(&active_items, term_cols, max_visible);
-                                let m_col = cursor_col.min(term_cols.saturating_sub(w as u16 + 2));
-                                let cur_col =
-                                    cursor_col + filter_suffix.chars().count() as u16;
-                                let l = MenuLayout {
-                                    width: w,
-                                    height: h,
-                                    menu_col: m_col,
-                                    cursor_row,
-                                    cursor_col: cur_col,
-                                };
+                                let (l, _) = make_layout(&active_items, filter_suffix.chars().count());
+                                selected = (selected + l.height).min(active_items.len() - 1);
+                                let (l, _) = make_layout(&active_items, filter_suffix.chars().count());
                                 let _ = draw_menu(&mut cout, &active_items, selected, l);
                             }
                         }
                         MenuAction::PageUp => {
                             if !active_items.is_empty() {
-                                let (_, h) =
-                                    calculate_menu_dimensions(&active_items, term_cols, max_visible);
-                                selected = selected.saturating_sub(h);
-                                let (w, h) =
-                                    calculate_menu_dimensions(&active_items, term_cols, max_visible);
-                                let m_col = cursor_col.min(term_cols.saturating_sub(w as u16 + 2));
-                                let cur_col =
-                                    cursor_col + filter_suffix.chars().count() as u16;
-                                let l = MenuLayout {
-                                    width: w,
-                                    height: h,
-                                    menu_col: m_col,
-                                    cursor_row,
-                                    cursor_col: cur_col,
-                                };
+                                let (l, _) = make_layout(&active_items, filter_suffix.chars().count());
+                                selected = selected.saturating_sub(l.height);
+                                let (l, _) = make_layout(&active_items, filter_suffix.chars().count());
                                 let _ = draw_menu(&mut cout, &active_items, selected, l);
                             }
                         }
                         MenuAction::First => {
                             if !active_items.is_empty() {
                                 selected = 0;
-                                let (w, h) =
-                                    calculate_menu_dimensions(&active_items, term_cols, max_visible);
-                                let m_col = cursor_col.min(term_cols.saturating_sub(w as u16 + 2));
-                                let cur_col =
-                                    cursor_col + filter_suffix.chars().count() as u16;
-                                let l = MenuLayout {
-                                    width: w,
-                                    height: h,
-                                    menu_col: m_col,
-                                    cursor_row,
-                                    cursor_col: cur_col,
-                                };
+                                let (l, _) = make_layout(&active_items, filter_suffix.chars().count());
                                 let _ = draw_menu(&mut cout, &active_items, selected, l);
                             }
                         }
                         MenuAction::Last => {
                             if !active_items.is_empty() {
                                 selected = active_items.len() - 1;
-                                let (w, h) =
-                                    calculate_menu_dimensions(&active_items, term_cols, max_visible);
-                                let m_col = cursor_col.min(term_cols.saturating_sub(w as u16 + 2));
-                                let cur_col =
-                                    cursor_col + filter_suffix.chars().count() as u16;
-                                let l = MenuLayout {
-                                    width: w,
-                                    height: h,
-                                    menu_col: m_col,
-                                    cursor_row,
-                                    cursor_col: cur_col,
-                                };
+                                let (l, _) = make_layout(&active_items, filter_suffix.chars().count());
                                 let _ = draw_menu(&mut cout, &active_items, selected, l);
                             }
                         }
@@ -517,21 +538,8 @@ pub fn show_completion_menu(
                             active_items = new_items;
                             selected = selected.min(active_items.len() - 1);
 
-                            let (w, h) =
-                                calculate_menu_dimensions(&active_items, term_cols, max_visible);
-                            let m_col = cursor_col.min(term_cols.saturating_sub(w as u16 + 2));
-                            let needed = h as u16 + 2;
+                            let (l, needed) = make_layout(&active_items, filter_suffix.chars().count());
                             max_needed_rows = max_needed_rows.max(needed);
-                            let cur_col =
-                                cursor_col + filter_suffix.chars().count() as u16;
-
-                            let l = MenuLayout {
-                                width: w,
-                                height: h,
-                                menu_col: m_col,
-                                cursor_row,
-                                cursor_col: cur_col,
-                            };
                             let _ = draw_menu(&mut cout, &active_items, selected, l);
                         }
                         MenuAction::Backspace => {
@@ -565,21 +573,8 @@ pub fn show_completion_menu(
                                     cursor_col + filter_suffix.chars().count() as u16,
                                 );
 
-                                let (w, h) =
-                                    calculate_menu_dimensions(&active_items, term_cols, max_visible);
-                                let m_col = cursor_col.min(term_cols.saturating_sub(w as u16 + 2));
-                                let needed = h as u16 + 2;
+                                let (l, needed) = make_layout(&active_items, filter_suffix.chars().count());
                                 max_needed_rows = max_needed_rows.max(needed);
-                                let cur_col =
-                                    cursor_col + filter_suffix.chars().count() as u16;
-
-                                let l = MenuLayout {
-                                    width: w,
-                                    height: h,
-                                    menu_col: m_col,
-                                    cursor_row,
-                                    cursor_col: cur_col,
-                                };
                                 let _ = draw_menu(&mut cout, &active_items, selected, l);
                             }
                         }
@@ -644,10 +639,14 @@ mod tests {
             },
         ];
 
-        let (width, height) = calculate_menu_dimensions(&items, 80, 7);
+        let (width, height) = calculate_menu_dimensions(&items, 80, 7, false);
         assert_eq!(height, 2);
         assert!(width >= 26);
         assert!(width <= 76);
+
+        // With nerd icons, width accommodates the 2-char icon prefix
+        let (width_icons, _) = calculate_menu_dimensions(&items, 80, 7, true);
+        assert!(width_icons >= width);
     }
 
     #[test]
@@ -659,6 +658,51 @@ mod tests {
         assert_eq!(CompletionKind::Variable.badge(), "[var]");
         assert_eq!(CompletionKind::Alias.badge(), "[alias]");
         assert_eq!(CompletionKind::Function.badge(), "[fn]");
+    }
+
+    #[test]
+    fn item_nerd_icons_match_kind_and_extensions() {
+        let dir = CompletionItem {
+            replacement: "src".to_string(),
+            display: "src".to_string(),
+            kind: CompletionKind::Directory,
+        };
+        assert_eq!(dir.nerd_icon().0, "\u{f115}"); // 
+
+        let bin = CompletionItem {
+            replacement: "git".to_string(),
+            display: "git".to_string(),
+            kind: CompletionKind::Binary,
+        };
+        assert_eq!(bin.nerd_icon().0, "\u{f489}"); // 
+
+        let rust_file = CompletionItem {
+            replacement: "main.rs".to_string(),
+            display: "main.rs".to_string(),
+            kind: CompletionKind::File,
+        };
+        assert_eq!(rust_file.nerd_icon().0, "\u{e7a8}"); // 
+
+        let toml_file = CompletionItem {
+            replacement: "Cargo.toml".to_string(),
+            display: "Cargo.toml".to_string(),
+            kind: CompletionKind::File,
+        };
+        assert_eq!(toml_file.nerd_icon().0, "\u{e7a8}"); // 
+
+        let md_file = CompletionItem {
+            replacement: "README.md".to_string(),
+            display: "README.md".to_string(),
+            kind: CompletionKind::File,
+        };
+        assert_eq!(md_file.nerd_icon().0, "\u{f48a}"); // 
+
+        let plain_file = CompletionItem {
+            replacement: "data.bin".to_string(),
+            display: "data.bin".to_string(),
+            kind: CompletionKind::File,
+        };
+        assert_eq!(plain_file.nerd_icon().0, "\u{f15b}"); // 
     }
 
     #[test]
@@ -683,6 +727,7 @@ mod tests {
             menu_col: 0,
             cursor_row: 10,
             cursor_col: 5,
+            nerd_icons: false,
         };
         draw_menu(&mut buf, &items, 0, layout).unwrap();
         let rendered = String::from_utf8_lossy(&buf);
@@ -722,6 +767,7 @@ mod tests {
             menu_col: 0,
             cursor_row: 10,
             cursor_col: 5,
+            nerd_icons: false,
         };
         draw_menu(&mut buf, &items, 0, layout).unwrap();
         let rendered = String::from_utf8_lossy(&buf);
@@ -733,6 +779,45 @@ mod tests {
         // Inner item content must be exactly width - 2 (28 chars)
         assert!(rendered.contains(" ▶ cargo              [bin] "));
         assert!(rendered.contains("   cd             "));
+        assert!(rendered.contains("[builtin]\x1b[0m "));
+    }
+
+    #[test]
+    fn box_borders_and_rows_align_with_nerd_icons() {
+        let items = vec![
+            CompletionItem {
+                replacement: "cargo".to_string(),
+                display: "cargo".to_string(),
+                kind: CompletionKind::Binary,
+            },
+            CompletionItem {
+                replacement: "cd".to_string(),
+                display: "cd".to_string(),
+                kind: CompletionKind::Builtin,
+            },
+        ];
+
+        let width = 30;
+        let mut buf = Vec::new();
+        let layout = MenuLayout {
+            width,
+            height: 2,
+            menu_col: 0,
+            cursor_row: 10,
+            cursor_col: 5,
+            nerd_icons: true,
+        };
+        draw_menu(&mut buf, &items, 0, layout).unwrap();
+        let rendered = String::from_utf8_lossy(&buf);
+
+        // Top and bottom borders must have exactly width (30 chars)
+        assert!(rendered.contains("┌────────────────────────────┐"));
+        assert!(rendered.contains("└────────────────────────────┘"));
+
+        // Selected row contains the binary icon \u{f489} () followed by a space
+        assert!(rendered.contains(" ▶ \u{f489} cargo"));
+        // Unselected row contains the builtin icon \u{f0ad} ()
+        assert!(rendered.contains("\u{f0ad} \x1b[0mcd"));
         assert!(rendered.contains("[builtin]\x1b[0m "));
     }
 

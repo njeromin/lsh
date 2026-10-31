@@ -9,6 +9,9 @@ if $(which eza).code == 0 {
     alias set ll "ls -l"
 }
 
+# Autocomplete dropdown nerd icons (requires a Nerd Font):
+$options.nerd_icons = true
+
 $prompt.before = () => {
     let git_info = ""
 

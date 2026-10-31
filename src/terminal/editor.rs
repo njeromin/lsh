@@ -139,6 +139,7 @@ pub struct LineEditorHelper {
     cached_aliases: Vec<String>,
     cached_vars: Vec<String>,
     pub completion_type: CompletionType,
+    pub nerd_icons: bool,
 }
 
 impl Default for LineEditorHelper {
@@ -158,11 +159,16 @@ impl LineEditorHelper {
             cached_aliases: Vec::new(),
             cached_vars: Vec::new(),
             completion_type: CompletionType::Menu,
+            nerd_icons: false,
         }
     }
 
     pub fn set_completion_type(&mut self, completion_type: CompletionType) {
         self.completion_type = completion_type;
+    }
+
+    pub fn set_nerd_icons(&mut self, nerd_icons: bool) {
+        self.nerd_icons = nerd_icons;
     }
 
     pub fn set_aliases(&mut self, aliases: Vec<String>) {
@@ -284,7 +290,7 @@ impl Completer for LineEditorHelper {
 
         if self.completion_type == CompletionType::Menu && items.len() > 1 {
             let base_prefix = &line[start..pos];
-            match menu::show_completion_menu(base_prefix, &items, 7) {
+            match menu::show_completion_menu(base_prefix, &items, 7, self.nerd_icons) {
                 menu::MenuResult::Selected(item) => Ok((
                     start,
                     vec![Pair {

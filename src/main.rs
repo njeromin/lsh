@@ -98,6 +98,7 @@ fn interactive_session(
                 editor.set_completion_type(opts.completion_type.into());
                 if let Some(helper) = editor.helper_mut() {
                     helper.set_completion_type(opts.completion_type);
+                    helper.set_nerd_icons(opts.nerd_icons);
                 }
                 last_applied_options = Some(opts);
             }
