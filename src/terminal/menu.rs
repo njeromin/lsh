@@ -631,6 +631,11 @@ where
         let start_col = cursor_col.saturating_sub(base_prefix.chars().count() as u16);
         let mut current_prefix = base_prefix.to_string();
         let mut filter_suffix = String::new();
+        let mut initial_query = base_prefix
+            .rsplit('/')
+            .next()
+            .unwrap_or(base_prefix)
+            .to_string();
         let mut root_items = items.to_vec();
         let mut active_items = items.to_vec();
         let mut selected = 0;
@@ -639,6 +644,7 @@ where
         struct DescentLevel {
             prefix: String,
             items: Vec<CompletionItem>,
+            initial_query: String,
         }
         let mut descent_stack: Vec<DescentLevel> = Vec::new();
 
@@ -747,6 +753,7 @@ where
                                 descent_stack.push(DescentLevel {
                                     prefix: current_prefix.clone(),
                                     items: root_items.clone(),
+                                    initial_query: initial_query.clone(),
                                 });
 
                                 let _ = erase_menu(
@@ -775,6 +782,7 @@ where
                                 current_prefix = new_prefix;
                                 cur_col = start_col + new_len as u16;
                                 filter_suffix.clear();
+                                initial_query.clear();
                                 root_items = next_items.clone();
                                 active_items = next_items;
                                 selected = 0;
@@ -795,7 +803,8 @@ where
                         }
                         MenuAction::Slash => {
                             filter_suffix.push('/');
-                            let new_items = filter_completion_items(&root_items, &filter_suffix);
+                            let query = format!("{initial_query}{filter_suffix}");
+                            let new_items = filter_completion_items(&root_items, &query);
 
                             if new_items.is_empty() {
                                 break MenuResult::Typed(format!("{current_prefix}{filter_suffix}"));
@@ -823,7 +832,8 @@ where
                         }
                         MenuAction::Char(c) => {
                             filter_suffix.push(c);
-                            let new_items = filter_completion_items(&root_items, &filter_suffix);
+                            let query = format!("{initial_query}{filter_suffix}");
+                            let new_items = filter_completion_items(&root_items, &query);
 
                             if new_items.is_empty() {
                                 break MenuResult::Typed(format!("{current_prefix}{filter_suffix}"));
@@ -858,7 +868,8 @@ where
                                 );
 
                                 filter_suffix.pop();
-                                active_items = filter_completion_items(&root_items, &filter_suffix);
+                                let query = format!("{initial_query}{filter_suffix}");
+                                active_items = filter_completion_items(&root_items, &query);
                                 selected = selected.min(active_items.len().saturating_sub(1));
 
                                 let _ = erase_menu(
@@ -898,6 +909,7 @@ where
                                 current_prefix = new_prefix;
                                 cur_col = start_col + new_len as u16;
                                 filter_suffix.clear();
+                                initial_query = parent.initial_query;
                                 root_items = parent.items.clone();
                                 active_items = parent.items;
                                 selected = 0;

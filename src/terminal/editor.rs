@@ -53,6 +53,22 @@ pub fn find_command_segment(sub: &str) -> &str {
     &sub[last_sep..]
 }
 
+fn split_path_argument(sub: &str) -> (usize, &str, &str) {
+    let arg_start = sub
+        .rfind(|c: char| c.is_whitespace() || matches!(c, '=' | '"' | '\''))
+        .map(|idx| idx + 1)
+        .unwrap_or(0);
+    let path_arg = &sub[arg_start..];
+
+    if let Some(slash_idx) = path_arg.rfind('/') {
+        let dir_part = &path_arg[..=slash_idx];
+        let file_prefix = &path_arg[slash_idx + 1..];
+        (arg_start, dir_part, file_prefix)
+    } else {
+        (arg_start, "", path_arg)
+    }
+}
+
 pub fn classify_completion_context(line: &str, pos: usize) -> CompletionContext<'_> {
     let sub = if pos <= line.len() {
         &line[..pos]
@@ -194,27 +210,23 @@ impl LineEditorHelper {
                 let mut map = BTreeMap::new();
 
                 for binary in &self.cached_binaries {
-                    if binary.starts_with(prefix) {
-                        map.insert(binary.clone(), CompletionKind::Binary);
-                    }
+                    map.insert(binary.clone(), CompletionKind::Binary);
                 }
 
                 for alias in &self.cached_aliases {
-                    if alias.starts_with(prefix) {
-                        map.insert(alias.clone(), CompletionKind::Alias);
-                    }
+                    map.insert(alias.clone(), CompletionKind::Alias);
                 }
 
                 for &builtin in crate::builtins::BUILTIN_NAMES {
-                    if builtin.starts_with(prefix) {
-                        map.insert(builtin.to_string(), CompletionKind::Builtin);
-                    }
+                    map.insert(builtin.to_string(), CompletionKind::Builtin);
                 }
 
-                let items = map
+                let all_items: Vec<CompletionItem> = map
                     .into_iter()
                     .map(|(name, kind)| CompletionItem::new(name.clone(), name, kind))
                     .collect();
+
+                let items = menu::filter_completion_items(&all_items, prefix);
 
                 Ok((start, items))
             }
@@ -222,27 +234,49 @@ impl LineEditorHelper {
                 let mut candidates = BTreeSet::new();
 
                 for var in &self.cached_vars {
-                    if var.starts_with(prefix) {
-                        candidates.insert(format!("${var}"));
-                    }
+                    candidates.insert(var.clone());
                 }
 
                 for (key, _) in std::env::vars() {
-                    if key.starts_with(prefix) {
-                        candidates.insert(format!("${key}"));
-                    }
+                    candidates.insert(key);
                 }
 
-                let items = candidates
+                let all_items: Vec<CompletionItem> = candidates
                     .into_iter()
-                    .map(|c| CompletionItem::new(c.clone(), c, CompletionKind::Variable))
+                    .map(|name| {
+                        CompletionItem::new(
+                            format!("${name}"),
+                            format!("${name}"),
+                            CompletionKind::Variable,
+                        )
+                    })
                     .collect();
+
+                let query = if prefix.starts_with('$') {
+                    prefix.to_string()
+                } else {
+                    format!("${prefix}")
+                };
+                let items = menu::filter_completion_items(&all_items, &query);
 
                 Ok((start, items))
             }
             CompletionContext::Path => {
-                let (start, pairs) = self.file_completer.complete(line, pos, ctx)?;
-                let items = pairs
+                let sub = if pos <= line.len() {
+                    &line[..pos]
+                } else {
+                    line
+                };
+                let (arg_start, dir_part, file_prefix) = split_path_argument(sub);
+                let dir_line = format!("{}{}", &sub[..arg_start], dir_part);
+                let dir_pos = dir_line.len();
+
+                let (start, pairs) = self
+                    .file_completer
+                    .complete(&dir_line, dir_pos, ctx)
+                    .unwrap_or((arg_start, Vec::new()));
+
+                let all_items: Vec<CompletionItem> = pairs
                     .into_iter()
                     .map(|p| {
                         let is_dir = p.replacement.ends_with('/')
@@ -256,6 +290,13 @@ impl LineEditorHelper {
                         CompletionItem::new(p.replacement, p.display, kind)
                     })
                     .collect();
+
+                let items = if file_prefix.is_empty() {
+                    all_items
+                } else {
+                    menu::filter_completion_items(&all_items, file_prefix)
+                };
+
                 Ok((start, items))
             }
         }
@@ -603,5 +644,71 @@ mod tests {
 
         let hint = helper.hint("uniq", 4, &ctx);
         assert_eq!(hint, Some("ue_command".to_string()));
+    }
+
+    #[test]
+    fn completes_commands_with_direct_fuzzy_matching() {
+        use rustyline::history::DefaultHistory;
+
+        let mut helper = LineEditorHelper::new();
+        helper.cached_binaries = vec!["cut".to_string(), "cat".to_string(), "echo".to_string()];
+
+        let history = DefaultHistory::new();
+        let ctx = Context::new(&history);
+
+        let (start, items) = helper.get_candidates("ct", 2, &ctx).expect("completion failed");
+        assert_eq!(start, 0);
+        assert_eq!(items.len(), 2);
+        assert!(items.iter().any(|it| it.replacement == "cat"));
+        assert!(items.iter().any(|it| it.replacement == "cut"));
+        assert!(!items.iter().any(|it| it.replacement == "echo"));
+
+        let cat_item = items.iter().find(|it| it.replacement == "cat").unwrap();
+        assert_eq!(cat_item.match_indices, vec![0, 2]);
+    }
+
+    #[test]
+    fn completes_single_fuzzy_match_directly() {
+        use rustyline::history::DefaultHistory;
+
+        let mut helper = LineEditorHelper::new();
+        helper.cached_binaries = vec!["docker-compose".to_string(), "cargo".to_string()];
+
+        let history = DefaultHistory::new();
+        let ctx = Context::new(&history);
+
+        let (start, candidates) = helper.complete("dco", 3, &ctx).expect("completion failed");
+        assert_eq!(start, 0);
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].replacement, "docker-compose");
+    }
+
+    #[test]
+    fn completes_variables_with_direct_fuzzy_matching() {
+        use rustyline::history::DefaultHistory;
+
+        let mut helper = LineEditorHelper::new();
+        helper.set_vars(vec!["CONFIG_PATH".to_string(), "OTHER_VAR".to_string()]);
+
+        let history = DefaultHistory::new();
+        let ctx = Context::new(&history);
+
+        let (start, items) = helper.get_candidates("echo $cp", 8, &ctx).expect("completion failed");
+        assert_eq!(start, 5);
+        assert!(items.iter().any(|it| it.replacement == "$CONFIG_PATH"));
+        assert!(!items.iter().any(|it| it.replacement == "$OTHER_VAR"));
+    }
+
+    #[test]
+    fn completes_paths_with_direct_fuzzy_matching() {
+        use rustyline::history::DefaultHistory;
+
+        let helper = LineEditorHelper::new();
+        let history = DefaultHistory::new();
+        let ctx = Context::new(&history);
+
+        let (start, items) = helper.get_candidates("cat ct", 6, &ctx).expect("completion failed");
+        assert_eq!(start, 4);
+        assert!(items.iter().any(|it| it.replacement.contains("Cargo.toml")));
     }
 }
