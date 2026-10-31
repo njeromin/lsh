@@ -51,9 +51,23 @@ pub struct CompletionItem {
     pub replacement: String,
     pub display: String,
     pub kind: CompletionKind,
+    pub match_indices: Vec<usize>,
 }
 
 impl CompletionItem {
+    pub fn new(
+        replacement: impl Into<String>,
+        display: impl Into<String>,
+        kind: CompletionKind,
+    ) -> Self {
+        Self {
+            replacement: replacement.into(),
+            display: display.into(),
+            kind,
+            match_indices: Vec::new(),
+        }
+    }
+
     pub fn nerd_icon(&self) -> (&'static str, &'static str) {
         match self.kind {
             CompletionKind::Directory => ("\u{f115}", "\x1b[1;34m"), //  Bold Blue
@@ -236,17 +250,38 @@ pub fn draw_menu<W: Write>(
         let overhead = 5 + icon_len + badge.chars().count();
         let max_name_len = inner_space.saturating_sub(overhead);
 
-        let name_str: String = if name.chars().count() > max_name_len && max_name_len > 1 {
-            let mut s: String = name.chars().take(max_name_len - 1).collect();
-            s.push('…');
-            s
+        let name_chars: Vec<char> = name.chars().collect();
+        let should_truncate = name_chars.len() > max_name_len && max_name_len > 1;
+        let visible_chars: &[char] = if should_truncate {
+            &name_chars[..max_name_len - 1]
         } else {
-            name.to_string()
+            &name_chars[..]
         };
+        let visible_name_len = visible_chars.len() + if should_truncate { 1 } else { 0 };
 
-        let used_len = 1 + 2 + icon_len + name_str.chars().count() + badge.chars().count() + 1;
+        let used_len = 1 + 2 + icon_len + visible_name_len + badge.chars().count() + 1;
         let pad_len = inner_space.saturating_sub(used_len);
         let pad = " ".repeat(pad_len);
+
+        let mut name_formatted = String::new();
+        for (i, &c) in visible_chars.iter().enumerate() {
+            if item.match_indices.contains(&i) {
+                if is_selected {
+                    name_formatted.push_str("\x1b[1;4;33m");
+                    name_formatted.push(c);
+                    name_formatted.push_str("\x1b[0m\x1b[7m");
+                } else {
+                    name_formatted.push_str("\x1b[1;36m");
+                    name_formatted.push(c);
+                    name_formatted.push_str("\x1b[0m");
+                }
+            } else {
+                name_formatted.push(c);
+            }
+        }
+        if should_truncate {
+            name_formatted.push('…');
+        }
 
         queue!(writer, cursor::MoveTo(layout.menu_col, item_start_row + r as u16))?;
 
@@ -254,7 +289,7 @@ pub fn draw_menu<W: Write>(
             queue!(
                 writer,
                 style::Print(format!(
-                    "\x1b[38;5;240m│\x1b[7m {marker}{icon_str}{name_str}{pad}{badge} \x1b[0m\x1b[38;5;240m│\x1b[0m"
+                    "\x1b[38;5;240m│\x1b[7m {marker}{icon_str}{name_formatted}{pad}{badge} \x1b[0m\x1b[38;5;240m│\x1b[0m"
                 ))
             )?;
         } else {
@@ -267,7 +302,7 @@ pub fn draw_menu<W: Write>(
             queue!(
                 writer,
                 style::Print(format!(
-                    "\x1b[38;5;240m│\x1b[0m {marker}{icon_colored}{name_str}{pad}{badge_colored} \x1b[38;5;240m│\x1b[0m"
+                    "\x1b[38;5;240m│\x1b[0m {marker}{icon_colored}{name_formatted}{pad}{badge_colored} \x1b[38;5;240m│\x1b[0m"
                 ))
             )?;
         }
@@ -342,21 +377,140 @@ pub enum MenuAction {
     Slash,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FuzzyMatch {
+    pub score: i64,
+    pub indices: Vec<usize>,
+}
+
+fn is_word_boundary(cand: &[char], idx: usize) -> bool {
+    if idx == 0 {
+        return true;
+    }
+    let prev = cand[idx - 1];
+    prev == '_'
+        || prev == '-'
+        || prev == '.'
+        || prev == '/'
+        || prev == '\\'
+        || prev == ' '
+        || prev == ':'
+        || (!prev.is_uppercase() && cand[idx].is_uppercase())
+}
+
+pub fn fuzzy_match(candidate: &str, query: &str) -> Option<FuzzyMatch> {
+    if query.is_empty() {
+        return Some(FuzzyMatch {
+            score: 0,
+            indices: Vec::new(),
+        });
+    }
+
+    let cand_chars: Vec<char> = candidate.chars().collect();
+    let query_chars: Vec<char> = query.chars().collect();
+
+    if query_chars.len() > cand_chars.len() {
+        return None;
+    }
+
+    let mut indices: Vec<usize> = Vec::with_capacity(query_chars.len());
+    let mut search_from = 0;
+
+    for &qc in &query_chars {
+        let mut best_pos = None;
+
+        for pos in search_from..cand_chars.len() {
+            if cand_chars[pos].to_lowercase().eq(qc.to_lowercase()) {
+                // Consecutive match to previous index takes highest priority
+                if indices.last().is_some_and(|&prev| pos == prev + 1) {
+                    best_pos = Some(pos);
+                    break;
+                }
+                // Word boundary match takes priority over non-boundary match
+                let is_boundary = is_word_boundary(&cand_chars, pos);
+                if is_boundary {
+                    best_pos = Some(pos);
+                    break;
+                } else if best_pos.is_none() {
+                    best_pos = Some(pos);
+                }
+            }
+        }
+
+        match best_pos {
+            Some(pos) => {
+                indices.push(pos);
+                search_from = pos + 1;
+            }
+            None => return None,
+        }
+    }
+
+    let mut score: i64 = 0;
+    let mut prev_idx: Option<usize> = None;
+
+    for (q_idx, &c_idx) in indices.iter().enumerate() {
+        score += 10;
+
+        if c_idx == 0 {
+            score += 35;
+        } else if is_word_boundary(&cand_chars, c_idx) {
+            score += 25;
+        }
+
+        if let Some(prev) = prev_idx {
+            if c_idx == prev + 1 {
+                score += 15;
+            } else {
+                let gap = c_idx - prev - 1;
+                score -= (gap as i64).min(10);
+            }
+        }
+
+        if cand_chars[c_idx] == query_chars[q_idx] {
+            score += 5;
+        }
+
+        prev_idx = Some(c_idx);
+    }
+
+    score -= (cand_chars.len() as i64).min(20);
+
+    Some(FuzzyMatch { score, indices })
+}
+
 pub fn filter_completion_items(items: &[CompletionItem], query: &str) -> Vec<CompletionItem> {
     if query.is_empty() {
-        return items.to_vec();
+        return items
+            .iter()
+            .map(|it| {
+                let mut c = it.clone();
+                c.match_indices.clear();
+                c
+            })
+            .collect();
     }
-    let query_lower = query.to_lowercase();
-    items
+
+    let mut scored: Vec<(CompletionItem, i64)> = items
         .iter()
-        .filter(|it| {
-            it.replacement.starts_with(query)
-                || it.display.starts_with(query)
-                || it.replacement.to_lowercase().starts_with(&query_lower)
-                || it.display.to_lowercase().starts_with(&query_lower)
+        .filter_map(|it| {
+            if let Some(m) = fuzzy_match(&it.display, query) {
+                let mut item = it.clone();
+                item.match_indices = m.indices;
+                Some((item, m.score))
+            } else if let Some(m) = fuzzy_match(&it.replacement, query) {
+                let mut item = it.clone();
+                item.match_indices = Vec::new();
+                Some((item, m.score))
+            } else {
+                None
+            }
         })
-        .cloned()
-        .collect()
+        .collect();
+
+    scored.sort_by_key(|b| std::cmp::Reverse(b.1));
+
+    scored.into_iter().map(|(item, _)| item).collect()
 }
 
 pub fn handle_key_event(code: KeyCode, modifiers: KeyModifiers) -> MenuAction {
@@ -789,16 +943,8 @@ mod tests {
     #[test]
     fn menu_dimensions_scale_to_content_and_terminal() {
         let items = vec![
-            CompletionItem {
-                replacement: "cargo".to_string(),
-                display: "cargo".to_string(),
-                kind: CompletionKind::Binary,
-            },
-            CompletionItem {
-                replacement: "cat".to_string(),
-                display: "cat".to_string(),
-                kind: CompletionKind::Binary,
-            },
+            CompletionItem::new("cargo", "cargo", CompletionKind::Binary),
+            CompletionItem::new("cat", "cat", CompletionKind::Binary),
         ];
 
         let (width, height) = calculate_menu_dimensions(&items, 80, 7, false);
@@ -824,46 +970,22 @@ mod tests {
 
     #[test]
     fn item_nerd_icons_match_kind_and_extensions() {
-        let dir = CompletionItem {
-            replacement: "src".to_string(),
-            display: "src".to_string(),
-            kind: CompletionKind::Directory,
-        };
+        let dir = CompletionItem::new("src", "src", CompletionKind::Directory);
         assert_eq!(dir.nerd_icon().0, "\u{f115}"); // 
 
-        let bin = CompletionItem {
-            replacement: "git".to_string(),
-            display: "git".to_string(),
-            kind: CompletionKind::Binary,
-        };
+        let bin = CompletionItem::new("git", "git", CompletionKind::Binary);
         assert_eq!(bin.nerd_icon().0, "\u{f489}"); // 
 
-        let rust_file = CompletionItem {
-            replacement: "main.rs".to_string(),
-            display: "main.rs".to_string(),
-            kind: CompletionKind::File,
-        };
+        let rust_file = CompletionItem::new("main.rs", "main.rs", CompletionKind::File);
         assert_eq!(rust_file.nerd_icon().0, "\u{e7a8}"); // 
 
-        let toml_file = CompletionItem {
-            replacement: "Cargo.toml".to_string(),
-            display: "Cargo.toml".to_string(),
-            kind: CompletionKind::File,
-        };
+        let toml_file = CompletionItem::new("Cargo.toml", "Cargo.toml", CompletionKind::File);
         assert_eq!(toml_file.nerd_icon().0, "\u{e7a8}"); // 
 
-        let md_file = CompletionItem {
-            replacement: "README.md".to_string(),
-            display: "README.md".to_string(),
-            kind: CompletionKind::File,
-        };
+        let md_file = CompletionItem::new("README.md", "README.md", CompletionKind::File);
         assert_eq!(md_file.nerd_icon().0, "\u{f48a}"); // 
 
-        let plain_file = CompletionItem {
-            replacement: "data.bin".to_string(),
-            display: "data.bin".to_string(),
-            kind: CompletionKind::File,
-        };
+        let plain_file = CompletionItem::new("data.bin", "data.bin", CompletionKind::File);
         assert_eq!(plain_file.nerd_icon().0, "\u{f15b}"); // 
     }
 
@@ -908,16 +1030,8 @@ mod tests {
     #[test]
     fn draw_menu_renders_strictly_below_cursor_row() {
         let items = vec![
-            CompletionItem {
-                replacement: "cargo".to_string(),
-                display: "cargo".to_string(),
-                kind: CompletionKind::Binary,
-            },
-            CompletionItem {
-                replacement: "cd".to_string(),
-                display: "cd".to_string(),
-                kind: CompletionKind::Builtin,
-            },
+            CompletionItem::new("cargo", "cargo", CompletionKind::Binary),
+            CompletionItem::new("cd", "cd", CompletionKind::Builtin),
         ];
 
         let cursor_row = 10;
@@ -963,16 +1077,8 @@ mod tests {
     #[test]
     fn draw_and_erase_menu_output_proper_ansi_sequences() {
         let items = vec![
-            CompletionItem {
-                replacement: "cargo".to_string(),
-                display: "cargo".to_string(),
-                kind: CompletionKind::Binary,
-            },
-            CompletionItem {
-                replacement: "cd".to_string(),
-                display: "cd".to_string(),
-                kind: CompletionKind::Builtin,
-            },
+            CompletionItem::new("cargo", "cargo", CompletionKind::Binary),
+            CompletionItem::new("cd", "cd", CompletionKind::Builtin),
         ];
 
         let mut buf = Vec::new();
@@ -1002,16 +1108,8 @@ mod tests {
     #[test]
     fn box_borders_and_rows_align_to_exact_width() {
         let items = vec![
-            CompletionItem {
-                replacement: "cargo".to_string(),
-                display: "cargo".to_string(),
-                kind: CompletionKind::Binary,
-            },
-            CompletionItem {
-                replacement: "cd".to_string(),
-                display: "cd".to_string(),
-                kind: CompletionKind::Builtin,
-            },
+            CompletionItem::new("cargo", "cargo", CompletionKind::Binary),
+            CompletionItem::new("cd", "cd", CompletionKind::Builtin),
         ];
 
         let width = 30;
@@ -1040,16 +1138,8 @@ mod tests {
     #[test]
     fn box_borders_and_rows_align_with_nerd_icons() {
         let items = vec![
-            CompletionItem {
-                replacement: "cargo".to_string(),
-                display: "cargo".to_string(),
-                kind: CompletionKind::Binary,
-            },
-            CompletionItem {
-                replacement: "cd".to_string(),
-                display: "cd".to_string(),
-                kind: CompletionKind::Builtin,
-            },
+            CompletionItem::new("cargo", "cargo", CompletionKind::Binary),
+            CompletionItem::new("cd", "cd", CompletionKind::Builtin),
         ];
 
         let width = 30;
@@ -1078,32 +1168,16 @@ mod tests {
 
     #[test]
     fn completion_item_is_dir_identifies_directories() {
-        let dir_item = CompletionItem {
-            replacement: "src".to_string(),
-            display: "src".to_string(),
-            kind: CompletionKind::Directory,
-        };
+        let dir_item = CompletionItem::new("src", "src", CompletionKind::Directory);
         assert!(dir_item.is_dir());
 
-        let slash_item = CompletionItem {
-            replacement: "scripts/".to_string(),
-            display: "scripts/".to_string(),
-            kind: CompletionKind::File,
-        };
+        let slash_item = CompletionItem::new("scripts/", "scripts/", CompletionKind::File);
         assert!(slash_item.is_dir());
 
-        let file_item = CompletionItem {
-            replacement: "main.rs".to_string(),
-            display: "main.rs".to_string(),
-            kind: CompletionKind::File,
-        };
+        let file_item = CompletionItem::new("main.rs", "main.rs", CompletionKind::File);
         assert!(!file_item.is_dir());
 
-        let bin_item = CompletionItem {
-            replacement: "cargo".to_string(),
-            display: "cargo".to_string(),
-            kind: CompletionKind::Binary,
-        };
+        let bin_item = CompletionItem::new("cargo", "cargo", CompletionKind::Binary);
         assert!(!bin_item.is_dir());
     }
 
@@ -1215,31 +1289,19 @@ mod tests {
     #[test]
     fn filter_completion_items_narrows_candidates_dynamically() {
         let items = vec![
-            CompletionItem {
-                replacement: "cargo".to_string(),
-                display: "cargo".to_string(),
-                kind: CompletionKind::Binary,
-            },
-            CompletionItem {
-                replacement: "cat".to_string(),
-                display: "cat".to_string(),
-                kind: CompletionKind::Binary,
-            },
-            CompletionItem {
-                replacement: "cd".to_string(),
-                display: "cd".to_string(),
-                kind: CompletionKind::Builtin,
-            },
+            CompletionItem::new("cargo", "cargo", CompletionKind::Binary),
+            CompletionItem::new("cat", "cat", CompletionKind::Binary),
+            CompletionItem::new("cd", "cd", CompletionKind::Builtin),
         ];
 
         // Empty query keeps all items
         assert_eq!(filter_completion_items(&items, "").len(), 3);
 
-        // "ca" keeps cargo and cat
+        // "ca" keeps cargo and cat (cat scores higher due to shorter length)
         let ca_matches = filter_completion_items(&items, "ca");
         assert_eq!(ca_matches.len(), 2);
-        assert_eq!(ca_matches[0].replacement, "cargo");
-        assert_eq!(ca_matches[1].replacement, "cat");
+        assert_eq!(ca_matches[0].replacement, "cat");
+        assert_eq!(ca_matches[1].replacement, "cargo");
 
         // "car" keeps cargo
         let car_matches = filter_completion_items(&items, "car");
@@ -1253,5 +1315,54 @@ mod tests {
         let upper_matches = filter_completion_items(&items, "CD");
         assert_eq!(upper_matches.len(), 1);
         assert_eq!(upper_matches[0].replacement, "cd");
+    }
+
+    #[test]
+    fn fuzzy_match_detects_subsequences_and_word_boundaries() {
+        // "ct" matches Cargo.toml ('C' at 0, 't' at 6)
+        let ct_cargo = fuzzy_match("Cargo.toml", "ct").unwrap();
+        assert_eq!(ct_cargo.indices, vec![0, 6]);
+
+        // "ct" matches cat ('c' at 0, 't' at 2)
+        let ct_cat = fuzzy_match("cat", "ct").unwrap();
+        assert_eq!(ct_cat.indices, vec![0, 2]);
+
+        // "dco" matches docker-compose ('d' at 0, 'c' at 7, 'o' at 8)
+        let dco = fuzzy_match("docker-compose", "dco").unwrap();
+        assert_eq!(dco.indices, vec![0, 7, 8]);
+
+        // "mrs" matches menu.rs ('m' at 0, 'r' at 5, 's' at 6)
+        let mrs = fuzzy_match("menu.rs", "mrs").unwrap();
+        assert_eq!(mrs.indices, vec![0, 5, 6]);
+
+        // Non-matching query
+        assert!(fuzzy_match("cargo", "xyz").is_none());
+    }
+
+    #[test]
+    fn fuzzy_match_ranks_exact_prefix_higher_than_subsequence() {
+        let prefix_match = fuzzy_match("cargo", "car").unwrap();
+        let subseq_match = fuzzy_match("clear", "car").unwrap();
+        assert!(prefix_match.score > subseq_match.score);
+    }
+
+    #[test]
+    fn filter_completion_items_supports_fuzzy_subsequences() {
+        let items = vec![
+            CompletionItem::new("Cargo.toml", "Cargo.toml", CompletionKind::File),
+            CompletionItem::new("cat", "cat", CompletionKind::Binary),
+            CompletionItem::new("docker-compose", "docker-compose", CompletionKind::Binary),
+        ];
+
+        // "ct" matches both Cargo.toml and cat
+        let ct_matches = filter_completion_items(&items, "ct");
+        assert_eq!(ct_matches.len(), 2);
+        assert!(ct_matches[0].match_indices.len() == 2);
+
+        // "dco" matches docker-compose
+        let dco_matches = filter_completion_items(&items, "dco");
+        assert_eq!(dco_matches.len(), 1);
+        assert_eq!(dco_matches[0].display, "docker-compose");
+        assert_eq!(dco_matches[0].match_indices, vec![0, 7, 8]);
     }
 }

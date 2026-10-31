@@ -213,11 +213,7 @@ impl LineEditorHelper {
 
                 let items = map
                     .into_iter()
-                    .map(|(name, kind)| CompletionItem {
-                        replacement: name.clone(),
-                        display: name,
-                        kind,
-                    })
+                    .map(|(name, kind)| CompletionItem::new(name.clone(), name, kind))
                     .collect();
 
                 Ok((start, items))
@@ -239,11 +235,7 @@ impl LineEditorHelper {
 
                 let items = candidates
                     .into_iter()
-                    .map(|c| CompletionItem {
-                        replacement: c.clone(),
-                        display: c,
-                        kind: CompletionKind::Variable,
-                    })
+                    .map(|c| CompletionItem::new(c.clone(), c, CompletionKind::Variable))
                     .collect();
 
                 Ok((start, items))
@@ -261,11 +253,7 @@ impl LineEditorHelper {
                         } else {
                             CompletionKind::File
                         };
-                        CompletionItem {
-                            replacement: p.replacement,
-                            display: p.display,
-                            kind,
-                        }
+                        CompletionItem::new(p.replacement, p.display, kind)
                     })
                     .collect();
                 Ok((start, items))
