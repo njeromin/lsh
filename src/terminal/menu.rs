@@ -264,23 +264,53 @@ pub fn draw_menu<W: Write>(
         let pad = " ".repeat(pad_len);
 
         let mut name_formatted = String::new();
-        for (i, &c) in visible_chars.iter().enumerate() {
-            if item.match_indices.contains(&i) {
-                if is_selected {
+        if is_selected {
+            for (i, &c) in visible_chars.iter().enumerate() {
+                if item.match_indices.contains(&i) {
                     name_formatted.push_str("\x1b[1;4;33m");
                     name_formatted.push(c);
                     name_formatted.push_str("\x1b[0m\x1b[7m");
                 } else {
+                    name_formatted.push(c);
+                }
+            }
+            if should_truncate {
+                name_formatted.push('…');
+            }
+        } else if item.match_indices.is_empty() {
+            for &c in visible_chars {
+                name_formatted.push(c);
+            }
+            if should_truncate {
+                name_formatted.push('…');
+            }
+        } else {
+            let dim_grey = "\x1b[38;5;244m";
+            let mut in_dim = false;
+
+            for (i, &c) in visible_chars.iter().enumerate() {
+                if item.match_indices.contains(&i) {
+                    if in_dim {
+                        name_formatted.push_str("\x1b[0m");
+                        in_dim = false;
+                    }
                     name_formatted.push_str("\x1b[1;36m");
                     name_formatted.push(c);
                     name_formatted.push_str("\x1b[0m");
+                } else {
+                    if !in_dim {
+                        name_formatted.push_str(dim_grey);
+                        in_dim = true;
+                    }
+                    name_formatted.push(c);
                 }
-            } else {
-                name_formatted.push(c);
             }
-        }
-        if should_truncate {
-            name_formatted.push('…');
+            if in_dim {
+                name_formatted.push_str("\x1b[0m");
+            }
+            if should_truncate {
+                name_formatted.push_str("\x1b[38;5;244m…\x1b[0m");
+            }
         }
 
         queue!(writer, cursor::MoveTo(layout.menu_col, item_start_row + r as u16))?;
@@ -1364,5 +1394,34 @@ mod tests {
         assert_eq!(dco_matches.len(), 1);
         assert_eq!(dco_matches[0].display, "docker-compose");
         assert_eq!(dco_matches[0].match_indices, vec![0, 7, 8]);
+    }
+
+    #[test]
+    fn draw_menu_dims_non_matching_characters_in_grey_on_unselected_items() {
+        let mut item1 = CompletionItem::new("cargo", "cargo", CompletionKind::Binary);
+        item1.match_indices = vec![0, 1]; // "ca"
+        let mut item2 = CompletionItem::new("cat", "cat", CompletionKind::Binary);
+        item2.match_indices = vec![0, 1]; // "ca"
+
+        let items = vec![item1, item2];
+        let layout = MenuLayout {
+            width: 30,
+            height: 2,
+            menu_col: 0,
+            cursor_row: 10,
+            cursor_col: 5,
+            nerd_icons: false,
+        };
+
+        let mut buf = Vec::new();
+        draw_menu(&mut buf, &items, 0, layout).unwrap();
+        let rendered = String::from_utf8_lossy(&buf);
+
+        // Selected item (item 0) has white inverse video (\x1b[7m) and yellow match (\x1b[1;4;33m)
+        assert!(rendered.contains("\x1b[7m"));
+        assert!(rendered.contains("\x1b[1;4;33m"));
+
+        // Unselected item (item 1, cat) has bold cyan (\x1b[1;36m) for "ca" and dim grey (\x1b[38;5;244m) for "t"
+        assert!(rendered.contains("\x1b[1;36mc\x1b[0m\x1b[1;36ma\x1b[0m\x1b[38;5;244mt\x1b[0m"));
     }
 }
