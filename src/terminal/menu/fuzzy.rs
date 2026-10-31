@@ -99,6 +99,12 @@ pub fn fuzzy_match(candidate: &str, query: &str) -> Option<FuzzyMatch> {
 
     score -= (cand_chars.len() as i64).min(20);
 
+    if candidate.eq_ignore_ascii_case(query) {
+        score += 100;
+    } else if candidate.to_lowercase().starts_with(&query.to_lowercase()) {
+        score += 50;
+    }
+
     Some(FuzzyMatch { score, indices })
 }
 
@@ -168,6 +174,18 @@ mod tests {
         let prefix_match = fuzzy_match("cargo", "car").unwrap();
         let subseq_match = fuzzy_match("clear", "car").unwrap();
         assert!(prefix_match.score > subseq_match.score);
+    }
+
+    #[test]
+    fn fuzzy_match_ranks_exact_match_higher_than_prefix_and_subsequence() {
+        let exact_match = fuzzy_match("git", "git").unwrap();
+        let prefix_match = fuzzy_match("git-lfs", "git").unwrap();
+        let subseq_match = fuzzy_match("gids-tool", "git").unwrap();
+        let split_match = fuzzy_match("gi-inspect-typelib", "git").unwrap();
+
+        assert!(exact_match.score > prefix_match.score);
+        assert!(prefix_match.score > subseq_match.score);
+        assert!(subseq_match.score >= split_match.score);
     }
 
     #[test]
