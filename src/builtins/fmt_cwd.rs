@@ -63,7 +63,10 @@ pub fn fmt_cwd<R: io::Read, W: io::Write, WE: io::Write>(
     if let Err(e) = write!(&mut io.out, "{formatted}")
         && e.kind() != io::ErrorKind::BrokenPipe
     {
-        terminal::print_error(&mut io.err, format!("Failed to write formatted cwd: {e}").as_str());
+        terminal::print_error(
+            &mut io.err,
+            format!("Failed to write formatted cwd: {e}").as_str(),
+        );
         return 1;
     }
     0

@@ -30,7 +30,10 @@ impl SyntaxHighlighter {
             return Cow::Borrowed(line);
         };
 
-        if tokens.iter().all(|token| matches!(token.kind, TokenKind::EOF)) {
+        if tokens
+            .iter()
+            .all(|token| matches!(token.kind, TokenKind::EOF))
+        {
             return Cow::Borrowed(line);
         }
 
@@ -224,7 +227,9 @@ mod tests {
         let input = "echo $(cat $(get-path))";
         let output = highlighter.highlight(input, 0);
 
-        let occurrences = output.matches(&format!("{COMMAND_SUB_STYLE})\x1b[0m")).count();
+        let occurrences = output
+            .matches(&format!("{COMMAND_SUB_STYLE})\x1b[0m"))
+            .count();
         assert_eq!(occurrences, 2);
     }
 }
