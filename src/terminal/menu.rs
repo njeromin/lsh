@@ -111,17 +111,20 @@ pub fn draw_menu<W: Write>(
     } else {
         String::new()
     };
-    let border_fill = layout.width.saturating_sub(border_title.len() + 2);
+    let border_fill = layout
+        .width
+        .saturating_sub(border_title.chars().count() + 2);
     queue!(
         writer,
         cursor::MoveTo(layout.menu_col, layout.cursor_row + 1),
         style::Print(format!(
-            "\x1b[38;5;240m┌{border_title}{}\x1b[38;5;240m┐\x1b[0m",
+            "\x1b[38;5;240m┌{border_title}{}┐\x1b[0m",
             "─".repeat(border_fill)
         )),
     )?;
 
     // Item rows
+    let inner_space = layout.width.saturating_sub(2);
     for (r, item) in items[start_idx..end_idx].iter().enumerate() {
         let item_idx = start_idx + r;
         let is_selected = item_idx == selected;
@@ -129,8 +132,21 @@ pub fn draw_menu<W: Write>(
 
         let name = &item.display;
         let badge = item.kind.badge();
-        let inner_space = layout.width.saturating_sub(2);
-        let used_len = 2 + name.chars().count() + badge.len();
+
+        // Visible inner layout: " " (1) + marker (2) + name + pad + badge + " " (1)
+        // Overhead without name: 1 + 2 + 1 (min space before badge) + badge_len + 1 = 5 + badge_len
+        let overhead = 5 + badge.chars().count();
+        let max_name_len = inner_space.saturating_sub(overhead);
+
+        let name_str: String = if name.chars().count() > max_name_len && max_name_len > 1 {
+            let mut s: String = name.chars().take(max_name_len - 1).collect();
+            s.push('…');
+            s
+        } else {
+            name.to_string()
+        };
+
+        let used_len = 1 + 2 + name_str.chars().count() + badge.chars().count() + 1;
         let pad_len = inner_space.saturating_sub(used_len);
         let pad = " ".repeat(pad_len);
 
@@ -140,7 +156,7 @@ pub fn draw_menu<W: Write>(
             queue!(
                 writer,
                 style::Print(format!(
-                    "\x1b[38;5;240m│\x1b[7m {marker}{name}{pad}{badge} \x1b[0m\x1b[38;5;240m│\x1b[0m"
+                    "\x1b[38;5;240m│\x1b[7m {marker}{name_str}{pad}{badge} \x1b[0m\x1b[38;5;240m│\x1b[0m"
                 ))
             )?;
         } else {
@@ -148,7 +164,7 @@ pub fn draw_menu<W: Write>(
             queue!(
                 writer,
                 style::Print(format!(
-                    "\x1b[38;5;240m│\x1b[0m {marker}{name}{pad}{badge_colored} \x1b[38;5;240m│\x1b[0m"
+                    "\x1b[38;5;240m│\x1b[0m {marker}{name_str}{pad}{badge_colored} \x1b[38;5;240m│\x1b[0m"
                 ))
             )?;
         }
@@ -160,7 +176,9 @@ pub fn draw_menu<W: Write>(
     } else {
         String::new()
     };
-    let footer_fill = layout.width.saturating_sub(footer_title.len() + 2);
+    let footer_fill = layout
+        .width
+        .saturating_sub(footer_title.chars().count() + 2);
     queue!(
         writer,
         cursor::MoveTo(layout.menu_col, layout.cursor_row + 2 + layout.height as u16),
@@ -439,6 +457,43 @@ mod tests {
         let mut erase_buf = Vec::new();
         erase_menu(&mut erase_buf, 4, 10, 5).unwrap();
         assert!(!erase_buf.is_empty());
+    }
+
+    #[test]
+    fn box_borders_and_rows_align_to_exact_width() {
+        let items = vec![
+            CompletionItem {
+                replacement: "cargo".to_string(),
+                display: "cargo".to_string(),
+                kind: CompletionKind::Binary,
+            },
+            CompletionItem {
+                replacement: "cd".to_string(),
+                display: "cd".to_string(),
+                kind: CompletionKind::Builtin,
+            },
+        ];
+
+        let width = 30;
+        let mut buf = Vec::new();
+        let layout = MenuLayout {
+            width,
+            height: 2,
+            menu_col: 0,
+            cursor_row: 10,
+            cursor_col: 5,
+        };
+        draw_menu(&mut buf, &items, 0, layout).unwrap();
+        let rendered = String::from_utf8_lossy(&buf);
+
+        // Top and bottom borders must have exactly width (30 chars)
+        assert!(rendered.contains("┌────────────────────────────┐"));
+        assert!(rendered.contains("└────────────────────────────┘"));
+
+        // Inner item content must be exactly width - 2 (28 chars)
+        assert!(rendered.contains(" ▶ cargo              [bin] "));
+        assert!(rendered.contains("   cd             "));
+        assert!(rendered.contains("[builtin]\x1b[0m "));
     }
 
     #[test]
