@@ -60,13 +60,9 @@ pub fn fuzzy_match(candidate: &str, query: &str) -> Option<FuzzyMatch> {
             }
         }
 
-        match best_pos {
-            Some(pos) => {
-                indices.push(pos);
-                search_from = pos + 1;
-            }
-            None => return None,
-        }
+        let pos = best_pos?;
+        indices.push(pos);
+        search_from = pos + 1;
     }
 
     let mut score: i64 = 0;
