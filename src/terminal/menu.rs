@@ -213,6 +213,16 @@ pub fn erase_menu<W: Write>(
     writer.flush()
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MenuResult {
+    /// Accepted a candidate from the dropdown list
+    Selected(CompletionItem),
+    /// Typed past all matches or committed typed text
+    Typed(String),
+    /// Cancelled without accepting (e.g. Esc or Ctrl-C)
+    Cancelled,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MenuAction {
     Next,
@@ -223,6 +233,25 @@ pub enum MenuAction {
     Last,
     Accept,
     Dismiss,
+    Char(char),
+    Backspace,
+}
+
+pub fn filter_completion_items(items: &[CompletionItem], query: &str) -> Vec<CompletionItem> {
+    if query.is_empty() {
+        return items.to_vec();
+    }
+    let query_lower = query.to_lowercase();
+    items
+        .iter()
+        .filter(|it| {
+            it.replacement.starts_with(query)
+                || it.display.starts_with(query)
+                || it.replacement.to_lowercase().starts_with(&query_lower)
+                || it.display.to_lowercase().starts_with(&query_lower)
+        })
+        .cloned()
+        .collect()
 }
 
 pub fn handle_key_event(code: KeyCode, modifiers: KeyModifiers) -> MenuAction {
@@ -254,26 +283,41 @@ pub fn handle_key_event(code: KeyCode, modifiers: KeyModifiers) -> MenuAction {
             MenuAction::Dismiss
         }
 
+        // Backspace: delete character from filter
+        (KeyCode::Backspace, _) => MenuAction::Backspace,
+
+        // Typing: regular characters (letters, numbers, symbols) without Ctrl or Alt
+        (KeyCode::Char(c), m)
+            if !m.contains(KeyModifiers::CONTROL) && !m.contains(KeyModifiers::ALT) =>
+        {
+            MenuAction::Char(c)
+        }
+
         _ => MenuAction::Dismiss,
     }
 }
 
-pub fn show_completion_menu(items: &[CompletionItem], max_visible: usize) -> Option<usize> {
+pub fn show_completion_menu(
+    base_prefix: &str,
+    items: &[CompletionItem],
+    max_visible: usize,
+) -> MenuResult {
     if items.is_empty() {
-        return None;
+        return MenuResult::Cancelled;
     }
     if items.len() == 1 {
-        return Some(0);
+        return MenuResult::Selected(items[0].clone());
     }
     #[cfg(test)]
     {
         let _ = max_visible;
-        Some(0)
+        let _ = base_prefix;
+        MenuResult::Selected(items[0].clone())
     }
     #[cfg(not(test))]
     {
         if !io::stdout().is_terminal() || !io::stdin().is_terminal() {
-            return Some(0);
+            return MenuResult::Selected(items[0].clone());
         }
 
         let mut cout = io::stdout();
@@ -281,7 +325,11 @@ pub fn show_completion_menu(items: &[CompletionItem], max_visible: usize) -> Opt
         let (cursor_col, mut cursor_row) = cursor::position().unwrap_or((0, 0));
         let (term_cols, term_rows) = terminal::size().unwrap_or((80, 24));
 
-        let (width, height) = calculate_menu_dimensions(items, term_cols, max_visible);
+        let mut filter_suffix = String::new();
+        let mut active_items = items.to_vec();
+        let mut selected = 0;
+
+        let (width, height) = calculate_menu_dimensions(&active_items, term_cols, max_visible);
         let menu_col = cursor_col.min(term_cols.saturating_sub(width as u16 + 2));
 
         let needed_rows = height as u16 + 2;
@@ -296,6 +344,9 @@ pub fn show_completion_menu(items: &[CompletionItem], max_visible: usize) -> Opt
             }
         }
 
+        let mut max_needed_rows = needed_rows;
+        let _ = execute!(cout, cursor::Hide);
+
         let layout = MenuLayout {
             width,
             height,
@@ -304,10 +355,7 @@ pub fn show_completion_menu(items: &[CompletionItem], max_visible: usize) -> Opt
             cursor_col,
         };
 
-        let mut selected = 0;
-        let _ = execute!(cout, cursor::Hide);
-
-        let _ = draw_menu(&mut cout, items, selected, layout);
+        let _ = draw_menu(&mut cout, &active_items, selected, layout);
 
         let result = loop {
             match event::read() {
@@ -319,47 +367,239 @@ pub fn show_completion_menu(items: &[CompletionItem], max_visible: usize) -> Opt
                 })) if kind != KeyEventKind::Release => {
                     match handle_key_event(code, modifiers) {
                         MenuAction::Next => {
-                            selected = (selected + 1) % items.len();
-                            let _ = draw_menu(&mut cout, items, selected, layout);
+                            if !active_items.is_empty() {
+                                if active_items.len() == 1 {
+                                    break MenuResult::Selected(active_items[0].clone());
+                                }
+                                selected = (selected + 1) % active_items.len();
+                                let (w, h) =
+                                    calculate_menu_dimensions(&active_items, term_cols, max_visible);
+                                let m_col = cursor_col.min(term_cols.saturating_sub(w as u16 + 2));
+                                let cur_col =
+                                    cursor_col + filter_suffix.chars().count() as u16;
+                                let l = MenuLayout {
+                                    width: w,
+                                    height: h,
+                                    menu_col: m_col,
+                                    cursor_row,
+                                    cursor_col: cur_col,
+                                };
+                                let _ = draw_menu(&mut cout, &active_items, selected, l);
+                            }
                         }
                         MenuAction::Previous => {
-                            selected = if selected == 0 {
-                                items.len() - 1
-                            } else {
-                                selected - 1
-                            };
-                            let _ = draw_menu(&mut cout, items, selected, layout);
+                            if !active_items.is_empty() {
+                                selected = if selected == 0 {
+                                    active_items.len() - 1
+                                } else {
+                                    selected - 1
+                                };
+                                let (w, h) =
+                                    calculate_menu_dimensions(&active_items, term_cols, max_visible);
+                                let m_col = cursor_col.min(term_cols.saturating_sub(w as u16 + 2));
+                                let cur_col =
+                                    cursor_col + filter_suffix.chars().count() as u16;
+                                let l = MenuLayout {
+                                    width: w,
+                                    height: h,
+                                    menu_col: m_col,
+                                    cursor_row,
+                                    cursor_col: cur_col,
+                                };
+                                let _ = draw_menu(&mut cout, &active_items, selected, l);
+                            }
                         }
                         MenuAction::PageDown => {
-                            selected = (selected + height).min(items.len() - 1);
-                            let _ = draw_menu(&mut cout, items, selected, layout);
+                            if !active_items.is_empty() {
+                                let (_, h) =
+                                    calculate_menu_dimensions(&active_items, term_cols, max_visible);
+                                selected = (selected + h).min(active_items.len() - 1);
+                                let (w, h) =
+                                    calculate_menu_dimensions(&active_items, term_cols, max_visible);
+                                let m_col = cursor_col.min(term_cols.saturating_sub(w as u16 + 2));
+                                let cur_col =
+                                    cursor_col + filter_suffix.chars().count() as u16;
+                                let l = MenuLayout {
+                                    width: w,
+                                    height: h,
+                                    menu_col: m_col,
+                                    cursor_row,
+                                    cursor_col: cur_col,
+                                };
+                                let _ = draw_menu(&mut cout, &active_items, selected, l);
+                            }
                         }
                         MenuAction::PageUp => {
-                            selected = selected.saturating_sub(height);
-                            let _ = draw_menu(&mut cout, items, selected, layout);
+                            if !active_items.is_empty() {
+                                let (_, h) =
+                                    calculate_menu_dimensions(&active_items, term_cols, max_visible);
+                                selected = selected.saturating_sub(h);
+                                let (w, h) =
+                                    calculate_menu_dimensions(&active_items, term_cols, max_visible);
+                                let m_col = cursor_col.min(term_cols.saturating_sub(w as u16 + 2));
+                                let cur_col =
+                                    cursor_col + filter_suffix.chars().count() as u16;
+                                let l = MenuLayout {
+                                    width: w,
+                                    height: h,
+                                    menu_col: m_col,
+                                    cursor_row,
+                                    cursor_col: cur_col,
+                                };
+                                let _ = draw_menu(&mut cout, &active_items, selected, l);
+                            }
                         }
                         MenuAction::First => {
-                            selected = 0;
-                            let _ = draw_menu(&mut cout, items, selected, layout);
+                            if !active_items.is_empty() {
+                                selected = 0;
+                                let (w, h) =
+                                    calculate_menu_dimensions(&active_items, term_cols, max_visible);
+                                let m_col = cursor_col.min(term_cols.saturating_sub(w as u16 + 2));
+                                let cur_col =
+                                    cursor_col + filter_suffix.chars().count() as u16;
+                                let l = MenuLayout {
+                                    width: w,
+                                    height: h,
+                                    menu_col: m_col,
+                                    cursor_row,
+                                    cursor_col: cur_col,
+                                };
+                                let _ = draw_menu(&mut cout, &active_items, selected, l);
+                            }
                         }
                         MenuAction::Last => {
-                            selected = items.len() - 1;
-                            let _ = draw_menu(&mut cout, items, selected, layout);
+                            if !active_items.is_empty() {
+                                selected = active_items.len() - 1;
+                                let (w, h) =
+                                    calculate_menu_dimensions(&active_items, term_cols, max_visible);
+                                let m_col = cursor_col.min(term_cols.saturating_sub(w as u16 + 2));
+                                let cur_col =
+                                    cursor_col + filter_suffix.chars().count() as u16;
+                                let l = MenuLayout {
+                                    width: w,
+                                    height: h,
+                                    menu_col: m_col,
+                                    cursor_row,
+                                    cursor_col: cur_col,
+                                };
+                                let _ = draw_menu(&mut cout, &active_items, selected, l);
+                            }
                         }
                         MenuAction::Accept => {
-                            break Some(selected);
+                            break if !active_items.is_empty() {
+                                MenuResult::Selected(active_items[selected].clone())
+                            } else {
+                                MenuResult::Typed(format!("{base_prefix}{filter_suffix}"))
+                            };
                         }
                         MenuAction::Dismiss => {
-                            break None;
+                            break MenuResult::Cancelled;
+                        }
+                        MenuAction::Char(c) => {
+                            filter_suffix.push(c);
+                            let query = format!("{base_prefix}{filter_suffix}");
+                            let new_items = filter_completion_items(items, &query);
+
+                            if new_items.is_empty() {
+                                break MenuResult::Typed(query);
+                            }
+
+                            let char_col = cursor_col + (filter_suffix.chars().count() - 1) as u16;
+                            let _ = queue!(cout, cursor::MoveTo(char_col, cursor_row), style::Print(c));
+
+                            let _ = erase_menu(
+                                &mut cout,
+                                max_needed_rows,
+                                cursor_row,
+                                cursor_col + filter_suffix.chars().count() as u16,
+                            );
+
+                            active_items = new_items;
+                            selected = selected.min(active_items.len() - 1);
+
+                            let (w, h) =
+                                calculate_menu_dimensions(&active_items, term_cols, max_visible);
+                            let m_col = cursor_col.min(term_cols.saturating_sub(w as u16 + 2));
+                            let needed = h as u16 + 2;
+                            max_needed_rows = max_needed_rows.max(needed);
+                            let cur_col =
+                                cursor_col + filter_suffix.chars().count() as u16;
+
+                            let l = MenuLayout {
+                                width: w,
+                                height: h,
+                                menu_col: m_col,
+                                cursor_row,
+                                cursor_col: cur_col,
+                            };
+                            let _ = draw_menu(&mut cout, &active_items, selected, l);
+                        }
+                        MenuAction::Backspace => {
+                            if filter_suffix.is_empty() {
+                                let mut new_prefix = base_prefix.to_string();
+                                if !new_prefix.is_empty() {
+                                    new_prefix.pop();
+                                    break MenuResult::Typed(new_prefix);
+                                } else {
+                                    break MenuResult::Cancelled;
+                                }
+                            } else {
+                                let char_col =
+                                    cursor_col + filter_suffix.chars().count() as u16 - 1;
+                                let _ = queue!(
+                                    cout,
+                                    cursor::MoveTo(char_col, cursor_row),
+                                    style::Print(' '),
+                                    cursor::MoveTo(char_col, cursor_row),
+                                );
+
+                                filter_suffix.pop();
+                                let query = format!("{base_prefix}{filter_suffix}");
+                                active_items = filter_completion_items(items, &query);
+                                selected = selected.min(active_items.len().saturating_sub(1));
+
+                                let _ = erase_menu(
+                                    &mut cout,
+                                    max_needed_rows,
+                                    cursor_row,
+                                    cursor_col + filter_suffix.chars().count() as u16,
+                                );
+
+                                let (w, h) =
+                                    calculate_menu_dimensions(&active_items, term_cols, max_visible);
+                                let m_col = cursor_col.min(term_cols.saturating_sub(w as u16 + 2));
+                                let needed = h as u16 + 2;
+                                max_needed_rows = max_needed_rows.max(needed);
+                                let cur_col =
+                                    cursor_col + filter_suffix.chars().count() as u16;
+
+                                let l = MenuLayout {
+                                    width: w,
+                                    height: h,
+                                    menu_col: m_col,
+                                    cursor_row,
+                                    cursor_col: cur_col,
+                                };
+                                let _ = draw_menu(&mut cout, &active_items, selected, l);
+                            }
                         }
                     }
                 }
-                Err(_) => break None,
+                Err(_) => break MenuResult::Cancelled,
                 _ => {}
             }
         };
 
-        let _ = erase_menu(&mut cout, needed_rows, cursor_row, cursor_col);
+        let _ = erase_menu(&mut cout, max_needed_rows, cursor_row, cursor_col);
+        if matches!(result, MenuResult::Cancelled) && !filter_suffix.is_empty() {
+            let _ = queue!(
+                cout,
+                cursor::MoveTo(cursor_col, cursor_row),
+                style::Print(" ".repeat(filter_suffix.chars().count())),
+                cursor::MoveTo(cursor_col, cursor_row),
+            );
+            let _ = cout.flush();
+        }
         result
     }
 }
@@ -577,5 +817,62 @@ mod tests {
             handle_key_event(KeyCode::Char('g'), KeyModifiers::CONTROL),
             MenuAction::Dismiss
         );
+
+        // Typing and Backspace
+        assert_eq!(
+            handle_key_event(KeyCode::Char('a'), KeyModifiers::NONE),
+            MenuAction::Char('a')
+        );
+        assert_eq!(
+            handle_key_event(KeyCode::Char('A'), KeyModifiers::SHIFT),
+            MenuAction::Char('A')
+        );
+        assert_eq!(
+            handle_key_event(KeyCode::Backspace, KeyModifiers::NONE),
+            MenuAction::Backspace
+        );
+    }
+
+    #[test]
+    fn filter_completion_items_narrows_candidates_dynamically() {
+        let items = vec![
+            CompletionItem {
+                replacement: "cargo".to_string(),
+                display: "cargo".to_string(),
+                kind: CompletionKind::Binary,
+            },
+            CompletionItem {
+                replacement: "cat".to_string(),
+                display: "cat".to_string(),
+                kind: CompletionKind::Binary,
+            },
+            CompletionItem {
+                replacement: "cd".to_string(),
+                display: "cd".to_string(),
+                kind: CompletionKind::Builtin,
+            },
+        ];
+
+        // Empty query keeps all items
+        assert_eq!(filter_completion_items(&items, "").len(), 3);
+
+        // "ca" keeps cargo and cat
+        let ca_matches = filter_completion_items(&items, "ca");
+        assert_eq!(ca_matches.len(), 2);
+        assert_eq!(ca_matches[0].replacement, "cargo");
+        assert_eq!(ca_matches[1].replacement, "cat");
+
+        // "car" keeps cargo
+        let car_matches = filter_completion_items(&items, "car");
+        assert_eq!(car_matches.len(), 1);
+        assert_eq!(car_matches[0].replacement, "cargo");
+
+        // "card" matches nothing
+        assert_eq!(filter_completion_items(&items, "card").len(), 0);
+
+        // Case-insensitive query matches
+        let upper_matches = filter_completion_items(&items, "CD");
+        assert_eq!(upper_matches.len(), 1);
+        assert_eq!(upper_matches[0].replacement, "cd");
     }
 }

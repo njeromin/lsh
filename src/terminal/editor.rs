@@ -283,15 +283,23 @@ impl Completer for LineEditorHelper {
         }
 
         if self.completion_type == CompletionType::Menu && items.len() > 1 {
-            match menu::show_completion_menu(&items, 7) {
-                Some(idx) => Ok((
+            let base_prefix = &line[start..pos];
+            match menu::show_completion_menu(base_prefix, &items, 7) {
+                menu::MenuResult::Selected(item) => Ok((
                     start,
                     vec![Pair {
-                        display: items[idx].display.clone(),
-                        replacement: items[idx].replacement.clone(),
+                        display: item.display,
+                        replacement: item.replacement,
                     }],
                 )),
-                None => Ok((start, Vec::new())),
+                menu::MenuResult::Typed(typed) => Ok((
+                    start,
+                    vec![Pair {
+                        display: typed.clone(),
+                        replacement: typed,
+                    }],
+                )),
+                menu::MenuResult::Cancelled => Ok((start, Vec::new())),
             }
         } else {
             let pairs = items
