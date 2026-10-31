@@ -3,6 +3,7 @@
 Output assets/demo.gif
 
 Set Shell "bash"
+Set FontFamily "JetBrainsMono Nerd Font"
 Set FontSize 16
 Set Width 900
 Set Height 560
@@ -19,7 +20,7 @@ Hide
 Type "cargo build --release -q"
 Enter
 Sleep 1s
-Type "export LSH_CONFIG_DIR=./config; alias lsh=./target/release/lsh"
+Type "export LSH_CONFIG_DIR=./config; export LSH_NERD_ICONS=true; alias lsh=./target/release/lsh"
 Enter
 Type "clear"
 Enter
