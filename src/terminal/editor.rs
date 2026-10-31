@@ -21,7 +21,23 @@ use crate::terminal::{
 pub enum CompletionContext<'a> {
     Command { prefix: &'a str, start: usize },
     Variable { prefix: &'a str, start: usize },
-    Path,
+    Path { command: &'a str },
+}
+
+pub fn extract_command_name(trimmed: &str) -> &str {
+    let mut words = trimmed.split_whitespace();
+    while let Some(word) = words.next() {
+        if word.contains('=') && !word.starts_with("./") && !word.starts_with('/') {
+            continue;
+        }
+        if (word == "builtin" || word == "command")
+            && let Some(next) = words.next()
+        {
+            return next;
+        }
+        return word;
+    }
+    ""
 }
 
 pub fn find_command_segment(sub: &str) -> &str {
@@ -99,7 +115,7 @@ pub fn classify_completion_context(line: &str, pos: usize) -> CompletionContext<
     // (unless typing an explicit path such as ./script, /bin/sh, or ../foo).
     if !trimmed.contains(char::is_whitespace) {
         if trimmed.starts_with("./") || trimmed.starts_with('/') || trimmed.starts_with("../") {
-            return CompletionContext::Path;
+            return CompletionContext::Path { command: "" };
         }
 
         let segment_start_in_sub = sub.len() - segment.len();
@@ -110,7 +126,8 @@ pub fn classify_completion_context(line: &str, pos: usize) -> CompletionContext<
         };
     }
 
-    CompletionContext::Path
+    let command = extract_command_name(trimmed);
+    CompletionContext::Path { command }
 }
 
 pub fn scan_path_binaries() -> Vec<String> {
@@ -261,7 +278,7 @@ impl LineEditorHelper {
 
                 Ok((start, items))
             }
-            CompletionContext::Path => {
+            CompletionContext::Path { command } => {
                 let sub = if pos <= line.len() {
                     &line[..pos]
                 } else {
@@ -276,18 +293,24 @@ impl LineEditorHelper {
                     .complete(&dir_line, dir_pos, ctx)
                     .unwrap_or((arg_start, Vec::new()));
 
+                let base_cmd = command.rsplit('/').next().unwrap_or(command);
+                let dirs_only = base_cmd == "cd" || base_cmd == "pushd";
+
                 let all_items: Vec<CompletionItem> = pairs
                     .into_iter()
-                    .map(|p| {
+                    .filter_map(|p| {
                         let is_dir = p.replacement.ends_with('/')
                             || p.display.ends_with('/')
                             || Path::new(&p.replacement).is_dir();
+                        if dirs_only && !is_dir {
+                            return None;
+                        }
                         let kind = if is_dir {
                             CompletionKind::Directory
                         } else {
                             CompletionKind::File
                         };
-                        CompletionItem::new(p.replacement, p.display, kind)
+                        Some(CompletionItem::new(p.replacement, p.display, kind))
                     })
                     .collect();
 
@@ -326,13 +349,7 @@ impl Completer for LineEditorHelper {
                     .map(|(_, items)| items)
                     .unwrap_or_default()
             };
-            match menu::show_completion_menu(
-                base_prefix,
-                &items,
-                7,
-                self.nerd_icons,
-                on_descend,
-            ) {
+            match menu::show_completion_menu(base_prefix, &items, 7, self.nerd_icons, on_descend) {
                 menu::MenuResult::Selected(item) => Ok((
                     start,
                     vec![Pair {
@@ -366,12 +383,12 @@ impl Hinter for LineEditorHelper {
     type Hint = String;
 
     fn hint(&self, line: &str, pos: usize, ctx: &Context<'_>) -> Option<String> {
-        // 1. Try history-based ghost text first (highest relevance)
+        // Try history-based ghost text first (highest relevance)
         if let Some(hint) = self.history_hinter.hint(line, pos, ctx) {
             return Some(hint);
         }
 
-        // 2. Fallback: single / top completion candidate when typing at the end of the line
+        // Fallback: single / top completion candidate when typing at the end of the line
         if !line.is_empty()
             && pos == line.len()
             && let Ok((start, items)) = self.get_candidates(line, pos, ctx)
@@ -479,19 +496,27 @@ mod tests {
     fn classifies_path_context_after_command() {
         assert_eq!(
             classify_completion_context("ls ", 3),
-            CompletionContext::Path
+            CompletionContext::Path { command: "ls" }
         );
         assert_eq!(
             classify_completion_context("cat src/m", 9),
-            CompletionContext::Path
+            CompletionContext::Path { command: "cat" }
         );
         assert_eq!(
             classify_completion_context("./script", 8),
-            CompletionContext::Path
+            CompletionContext::Path { command: "" }
         );
         assert_eq!(
             classify_completion_context("/bin/s", 6),
-            CompletionContext::Path
+            CompletionContext::Path { command: "" }
+        );
+        assert_eq!(
+            classify_completion_context("cd /tmp", 7),
+            CompletionContext::Path { command: "cd" }
+        );
+        assert_eq!(
+            classify_completion_context("FOO=bar pushd /tmp", 18),
+            CompletionContext::Path { command: "pushd" }
         );
     }
 
@@ -656,7 +681,9 @@ mod tests {
         let history = DefaultHistory::new();
         let ctx = Context::new(&history);
 
-        let (start, items) = helper.get_candidates("ct", 2, &ctx).expect("completion failed");
+        let (start, items) = helper
+            .get_candidates("ct", 2, &ctx)
+            .expect("completion failed");
         assert_eq!(start, 0);
         assert_eq!(items.len(), 2);
         assert!(items.iter().any(|it| it.replacement == "cat"));
@@ -693,7 +720,9 @@ mod tests {
         let history = DefaultHistory::new();
         let ctx = Context::new(&history);
 
-        let (start, items) = helper.get_candidates("echo $cp", 8, &ctx).expect("completion failed");
+        let (start, items) = helper
+            .get_candidates("echo $cp", 8, &ctx)
+            .expect("completion failed");
         assert_eq!(start, 5);
         assert!(items.iter().any(|it| it.replacement == "$CONFIG_PATH"));
         assert!(!items.iter().any(|it| it.replacement == "$OTHER_VAR"));
@@ -707,8 +736,68 @@ mod tests {
         let history = DefaultHistory::new();
         let ctx = Context::new(&history);
 
-        let (start, items) = helper.get_candidates("cat ct", 6, &ctx).expect("completion failed");
+        let (start, items) = helper
+            .get_candidates("cat ct", 6, &ctx)
+            .expect("completion failed");
         assert_eq!(start, 4);
+        assert!(items.iter().any(|it| it.replacement.contains("Cargo.toml")));
+    }
+
+    #[test]
+    fn completes_directories_only_for_cd_and_pushd_commands() {
+        use rustyline::history::DefaultHistory;
+
+        let helper = LineEditorHelper::new();
+        let history = DefaultHistory::new();
+        let ctx = Context::new(&history);
+
+        // "cd " should only return directories, not regular files like Cargo.toml
+        let (start, cd_items) = helper
+            .get_candidates("cd ", 3, &ctx)
+            .expect("completion failed");
+        assert_eq!(start, 3);
+        assert!(!cd_items.is_empty());
+        assert!(
+            cd_items
+                .iter()
+                .all(|it| it.kind == CompletionKind::Directory)
+        );
+        assert!(cd_items.iter().any(|it| it.replacement.contains("src")));
+        assert!(
+            !cd_items
+                .iter()
+                .any(|it| it.replacement.contains("Cargo.toml"))
+        );
+
+        // "pushd " should also only return directories
+        let (_, pushd_items) = helper
+            .get_candidates("pushd ", 6, &ctx)
+            .expect("completion failed");
+        assert!(
+            pushd_items
+                .iter()
+                .all(|it| it.kind == CompletionKind::Directory)
+        );
+        assert!(
+            !pushd_items
+                .iter()
+                .any(|it| it.replacement.contains("Cargo.toml"))
+        );
+    }
+
+    #[test]
+    fn completes_both_files_and_directories_for_general_commands() {
+        use rustyline::history::DefaultHistory;
+
+        let helper = LineEditorHelper::new();
+        let history = DefaultHistory::new();
+        let ctx = Context::new(&history);
+
+        // "cat " or "ls " should return both files and directories
+        let (_, items) = helper
+            .get_candidates("ls ", 3, &ctx)
+            .expect("completion failed");
+        assert!(items.iter().any(|it| it.kind == CompletionKind::Directory));
         assert!(items.iter().any(|it| it.replacement.contains("Cargo.toml")));
     }
 }
