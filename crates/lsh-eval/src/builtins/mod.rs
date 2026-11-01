@@ -8,12 +8,13 @@ pub mod complete;
 pub mod exec;
 pub mod exit;
 pub mod fmt_cwd;
+pub mod plugin;
 pub mod source;
 
 // pub type BuiltinFn<R, W, WE> = fn(&mut Evaluator, &mut lsh::IoCtx<R, W, WE>, Vec<String>);
 
 pub const BUILTIN_NAMES: &[&str] = &[
-    "exit", "source", "exec", "alias", "cd", "fmt-cwd", "complete",
+    "exit", "source", "exec", "alias", "cd", "fmt-cwd", "complete", "plugin",
 ];
 
 pub enum BuiltinKind {
@@ -24,6 +25,7 @@ pub enum BuiltinKind {
     Cd,
     FmtCwd,
     Complete,
+    Plugin,
 }
 
 pub struct BuiltinSpec {
@@ -61,6 +63,10 @@ pub fn lookup(name: &str) -> Option<BuiltinSpec> {
             name: "complete",
             kind: BuiltinKind::Complete,
         }),
+        "plugin" => Some(BuiltinSpec {
+            name: "plugin",
+            kind: BuiltinKind::Plugin,
+        }),
         _ => None,
     }
 }
@@ -79,5 +85,6 @@ pub fn dispatch<R: io::Read, W: io::Write, WE: io::Write>(
         BuiltinKind::Cd => cd::cd(eval, ctx, args),
         BuiltinKind::FmtCwd => fmt_cwd::fmt_cwd(eval, ctx, args),
         BuiltinKind::Complete => complete::complete(eval, ctx, args),
+        BuiltinKind::Plugin => plugin::plugin(eval, ctx, args),
     }
 }

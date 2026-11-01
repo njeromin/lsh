@@ -79,6 +79,10 @@ pub fn cd<R: io::Read, W: io::Write, WE: io::Write>(
             String::from("PWD"),
             Value::String(logical_target.to_string_lossy().into_owned()),
         );
+        eval.trigger_chpwd(
+            &current_logical_pwd.to_string_lossy(),
+            &logical_target.to_string_lossy(),
+        );
         0
     } else {
         print_error(&mut io.err, "An argument is required.");

@@ -12,29 +12,24 @@ if $(which eza).code == 0 {
 # Autocomplete dropdown nerd icons (requires a Nerd Font):
 $options.nerd_icons = true
 
-$prompt.before = () => {
-    let git_info = ""
+# Load prompt plugins
+plugin load git-prompt
 
-    if $(git rev-parse --is-inside-work-tree).code == 0 {
-        let branch =  $(git branch --show-current | tr -d '\n').out
-        let ahead_num = $(git status --porcelain --branch | awk 'NR==1{if(match($0,/ahead [0-9]+/)){printf substr($0,RSTART+6,RLENGTH-6)}else{printf 0}}').out
-        let changes_num = $(git status --porcelain | awk 'END{printf NR}').out
+# Prompt configuration:
+# lsh uses a modular segment-based prompt system.
+# Built-in segments: "cwd"
+# Plugin segments: "git" (from git-prompt)
+# You can define segment ordering using first-class array literals:
+$prompt.order = ["cwd", "git"]
 
-        $git_info = $palette.reset + $palette.green + $branch
+# Separator placed between prompt segments:
+$prompt.separator = " "
 
-        if $ahead_num != 0 {
-            let ahead = $palette.cyan + " ↑" + $ahead_num
-            $git_info = $git_info + $ahead
-        }
+# Custom segments can also be registered directly:
+# $prompt.segments.time = () => {
+#     return $palette.dim + $(date +%H:%M).out.trim()
+# }
+# $prompt.order.push("time")
 
-        if $changes_num != 0 {
-            let changes = $palette.yellow + " ~" + $changes_num
-            $git_info = $git_info + $changes
-        }
-    }
-
-    echo $palette.bold $palette.blue
-    echo $(fmt-cwd $PWD).out $git_info
-}
-
+# The prompt character / symbol rendered on the input line:
 $prompt.text = $palette.bright_magenta + "$ " + $palette.reset

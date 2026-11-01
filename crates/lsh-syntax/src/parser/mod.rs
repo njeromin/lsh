@@ -270,11 +270,8 @@ impl Parser {
 
         let eq_end_offset = eq_offset + eq_len;
         let current_offset = self.current().offset;
-        // Values for prefix assignments must be contiguous with '='. `$VAR` is a
-        // special case where the variable token starts one byte after '$'.
-        let contiguous = current_offset == eq_end_offset
-            || (matches!(self.current().kind, TokenKind::Variable(_))
-                && current_offset == eq_end_offset + 1);
+        // Values for prefix assignments must be contiguous with '='.
+        let contiguous = current_offset == eq_end_offset;
         if !contiguous {
             self.index = start_index;
             return Ok(None);
@@ -625,9 +622,16 @@ impl Parser {
     }
 
     fn parse_target(&mut self) -> Result<Expr, Diagnostic> {
-        let expr = match self.parse_primary()? {
-            Expr::Word(name) => Expr::Variable(name),
-            other => other,
+        let expr = match &self.current().kind {
+            TokenKind::String(name) => {
+                let name = name.clone();
+                self.advance();
+                Expr::Variable(name)
+            }
+            _ => match self.parse_primary()? {
+                Expr::Word(name) => Expr::Variable(name),
+                other => other,
+            },
         };
         self.parse_target_on_current(expr)
     }
@@ -676,6 +680,14 @@ impl Parser {
     fn parse_postfix_on_current(&mut self, mut expr: Expr) -> Result<Expr, Diagnostic> {
         loop {
             if self.check_current(&TokenKind::LeftBracket) {
+                // Ensure no whitespace between expression and '[' for it to be an index.
+                let prev_token = &self.tokens[self.index - 1];
+                let current_token = self.current();
+
+                if current_token.offset != prev_token.offset + Self::token_source_len(prev_token) {
+                    break;
+                }
+
                 self.advance(); // Skip '['.
 
                 let index_expr = self.parse_expr()?;
@@ -1059,9 +1071,57 @@ impl Parser {
                         }
                     }
                 }
-                self.advance(); // Skip past '}'.
+                self.consume(&TokenKind::RightCurly, "Expected '}' after object.")?;
+                should_advance = false;
 
                 Expr::Object(expr_map)
+            }
+            TokenKind::LeftBracket => {
+                self.advance(); // Skip past '['.
+
+                let mut elements = Vec::new();
+                while !self.check_current(&TokenKind::RightBracket) {
+                    while self.check_current(&TokenKind::NewLine)
+                        || self.check_current(&TokenKind::Semicolon)
+                    {
+                        self.advance();
+                    }
+
+                    if self.check_current(&TokenKind::RightBracket) {
+                        break;
+                    }
+
+                    let elem = self.parse_expr()?;
+                    elements.push(elem);
+
+                    while self.check_current(&TokenKind::NewLine)
+                        || self.check_current(&TokenKind::Semicolon)
+                    {
+                        self.advance();
+                    }
+
+                    if !self.check_current(&TokenKind::RightBracket) {
+                        if self.check_current(&TokenKind::Comma) {
+                            self.advance();
+                        } else if self.check_current(&TokenKind::NewLine)
+                            || self.check_current(&TokenKind::Semicolon)
+                        {
+                            // Newline/semicolon separators are allowed in array literals.
+                        } else {
+                            self.consume(
+                                &TokenKind::Comma,
+                                "Expected ',' between array elements.",
+                            )?;
+                        }
+                    }
+                }
+                self.consume(
+                    &TokenKind::RightBracket,
+                    "Expected ']' after array elements.",
+                )?;
+                should_advance = false;
+
+                Expr::Array(elements)
             }
             TokenKind::ThinArrow => {
                 return self.error_here(
@@ -1113,6 +1173,10 @@ impl Parser {
             TokenKind::GreaterThan => Some(Expr::String(">".to_string())),
             TokenKind::LessThan => Some(Expr::String("<".to_string())),
             TokenKind::Ampersand => Some(Expr::String("&".to_string())),
+            TokenKind::LeftBracket => Some(Expr::String("[".to_string())),
+            TokenKind::RightBracket => Some(Expr::String("]".to_string())),
+            TokenKind::LeftCurly => Some(Expr::String("{".to_string())),
+            TokenKind::RightCurly => Some(Expr::String("}".to_string())),
             _ => None,
         }
     }
@@ -1122,33 +1186,16 @@ impl Parser {
             TokenKind::String(s) | TokenKind::QuotedString(s) => Some(s.clone()),
             TokenKind::Number(n) => Some(n.to_string()),
             TokenKind::Bool(b) => Some(b.to_string()),
+            TokenKind::LeftBracket => Some("[".to_string()),
+            TokenKind::RightBracket => Some("]".to_string()),
+            TokenKind::LeftCurly => Some("{".to_string()),
+            TokenKind::RightCurly => Some("}".to_string()),
             _ => None,
         }
     }
 
     fn token_source_len(token: &Token) -> usize {
-        match &token.kind {
-            TokenKind::Variable(name) => name.len(),
-            TokenKind::String(s) => s.len(),
-            TokenKind::QuotedString(s) => s.len() + 2,
-            TokenKind::Number(n) => n.to_string().len(),
-            TokenKind::Bool(b) => b.to_string().len(),
-            TokenKind::And
-            | TokenKind::Or
-            | TokenKind::EqualsEquals
-            | TokenKind::GtEquals
-            | TokenKind::LtEquals
-            | TokenKind::NotEquals
-            | TokenKind::PlusEquals
-            | TokenKind::MinusEquals
-            | TokenKind::StarEquals
-            | TokenKind::SlashEquals
-            | TokenKind::DollarLeftParen
-            | TokenKind::FatArrow
-            | TokenKind::ThinArrow => 2,
-            TokenKind::EOF => 0,
-            _ => 1,
-        }
+        token.len
     }
 
     fn is_valid_env_name(name: &str) -> bool {
@@ -1195,11 +1242,14 @@ impl Parser {
 
     fn parse_postfix_from_seed(&mut self, mut expr: Expr) -> Result<Expr, Diagnostic> {
         loop {
-            if self
-                .tokens
-                .get(self.index + 1)
-                .is_some_and(|tok| tok.kind.compare(&TokenKind::LeftBracket))
+            if let Some(next_tok) = self.tokens.get(self.index + 1)
+                && next_tok.kind.compare(&TokenKind::LeftBracket)
             {
+                let cur_tok = &self.tokens[self.index];
+                if next_tok.offset != cur_tok.offset + Self::token_source_len(cur_tok) {
+                    break;
+                }
+
                 self.advance(); // Move to '['.
                 self.advance(); // Skip '['.
 
@@ -2133,5 +2183,137 @@ mod tests {
         let input = "fn add(a, b) {\n    return $a + $b;\n}\n\nfn greet(name) {\n    return \"Hello, \" + $name\n}\n\necho \"add 2 3 ->\" $(add 2 3).out\necho \"add 10 5 ->\" $(add 10 5).out\necho $(greet \"lsh\").out\n";
         let body = parse_program(input);
         assert_eq!(body.len(), 5);
+    }
+
+    #[test]
+    fn parses_nested_objects_without_trailing_commas() {
+        let input = r#"let obj = {
+            outer_fn: () => {
+                return 42
+            },
+            nested: {
+                inner_fn: () => {
+                    return "hello"
+                }
+            }
+        }"#;
+        let body = parse_program(input);
+        assert_eq!(body.len(), 1);
+    }
+
+    #[test]
+    fn parses_array_literals_empty_and_populated() {
+        let input = r#"let empty = [];
+        let items = ["cwd", "git", 42, true];
+        let nested = [[1, 2], ["a", "b"]];
+        let trailing = [
+            "one",
+            "two",
+        ];"#;
+        let body = parse_program(input);
+        assert_eq!(body.len(), 4);
+
+        if let Statement::Let {
+            value: Expr::Array(elements),
+            ..
+        } = &body[1]
+        {
+            assert_eq!(elements.len(), 4);
+        } else {
+            panic!("Expected Expr::Array for items");
+        }
+
+        if let Statement::Let {
+            value: Expr::Array(elements),
+            ..
+        } = &body[3]
+        {
+            assert_eq!(elements.len(), 2);
+        } else {
+            panic!("Expected Expr::Array for trailing");
+        }
+    }
+
+    #[test]
+    fn parses_find_command_with_braces_and_escaped_semicolon() {
+        let input = "find . -exec echo {} \\;";
+        let body = parse_program(input);
+        assert_eq!(body.len(), 1);
+        if let Statement::Command(CommandExpr::Call {
+            identifier: Expr::String(cmd),
+            args,
+            ..
+        }) = &body[0]
+        {
+            assert_eq!(cmd, "find");
+            assert_eq!(args.len(), 5);
+            assert!(matches!(&args[0], Expr::String(s) if s == "."));
+            assert!(matches!(&args[1], Expr::String(s) if s == "-exec"));
+            assert!(matches!(&args[2], Expr::String(s) if s == "echo"));
+            assert!(
+                matches!(&args[3], Expr::Binary { op: BinaryOp::Add, left, right }
+                if matches!(left.as_ref(), Expr::String(s) if s == "{")
+                && matches!(right.as_ref(), Expr::String(s) if s == "}"))
+            );
+            assert!(matches!(&args[4], Expr::String(s) if s == ";"));
+        } else {
+            panic!("Expected CommandExpr::Call");
+        }
+    }
+
+    #[test]
+    fn parses_command_with_escaped_spaces() {
+        let input = "cat My\\ File.txt";
+        let body = parse_program(input);
+        assert_eq!(body.len(), 1);
+        let (identifier, args) = extract_call_parts(&body[0]);
+        assert_command_identifier(identifier, "cat");
+        assert_eq!(args.len(), 1);
+        assert!(matches!(&args[0], Expr::String(s) if s == "My File.txt"));
+    }
+
+    #[test]
+    fn parses_line_continuation_in_commands_and_expressions() {
+        let input = "echo hello \\\n world;\nlet x = 10 \\\n + 20;";
+        let body = parse_program(input);
+        assert_eq!(body.len(), 2);
+        let (identifier, args) = extract_call_parts(&body[0]);
+        assert_command_identifier(identifier, "echo");
+        assert_eq!(args.len(), 2);
+        assert!(matches!(&args[0], Expr::String(s) if s == "hello"));
+        assert!(matches!(&args[1], Expr::String(s) if s == "world"));
+
+        if let Statement::Let { value, .. } = &body[1] {
+            assert!(matches!(
+                value,
+                Expr::Binary {
+                    op: BinaryOp::Add,
+                    ..
+                }
+            ));
+        } else {
+            panic!("Expected let statement");
+        }
+    }
+
+    #[test]
+    fn parses_block_containing_command_with_braces() {
+        let input = "if true { echo {} }";
+        let body = parse_program(input);
+        assert_eq!(body.len(), 1);
+        if let Statement::If {
+            then_branch: if_body,
+            ..
+        } = &body[0]
+        {
+            assert_eq!(if_body.len(), 1);
+            if let Statement::Command(CommandExpr::Call { args, .. }) = &if_body[0] {
+                assert_eq!(args.len(), 1);
+            } else {
+                panic!("Expected command inside block");
+            }
+        } else {
+            panic!("Expected If statement");
+        }
     }
 }

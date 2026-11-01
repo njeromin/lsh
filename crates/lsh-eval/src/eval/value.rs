@@ -1,13 +1,75 @@
-use std::{collections::HashMap, fmt};
+use std::{
+    collections::HashMap,
+    fmt,
+    sync::{Arc, RwLock},
+};
 
 use lsh_syntax::ast::Statement;
 
+use crate::eval::Evaluator;
+
+pub type NativeFn = Arc<dyn Fn(&mut Evaluator, Vec<Value>, Option<Value>) -> Value + Send + Sync>;
+
 #[derive(Clone)]
+pub enum FunctionKind {
+    Ast,
+    Native { name: String, func: NativeFn },
+}
+
+#[derive(Clone)]
+pub struct FunctionValue {
+    pub params: Vec<String>,
+    pub body: Vec<Statement>,
+    pub kind: FunctionKind,
+}
+
+impl fmt::Debug for FunctionValue {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.kind {
+            FunctionKind::Ast => f
+                .debug_struct("FunctionValue::Ast")
+                .field("params", &self.params)
+                .field("body_len", &self.body.len())
+                .finish(),
+            FunctionKind::Native { name, .. } => f
+                .debug_struct("FunctionValue::Native")
+                .field("name", name)
+                .finish(),
+        }
+    }
+}
+
+impl FunctionValue {
+    pub fn ast(params: Vec<String>, body: Vec<Statement>) -> Self {
+        Self {
+            params,
+            body,
+            kind: FunctionKind::Ast,
+        }
+    }
+
+    pub fn native<F>(name: impl Into<String>, func: F) -> Self
+    where
+        F: Fn(&mut Evaluator, Vec<Value>, Option<Value>) -> Value + Send + Sync + 'static,
+    {
+        Self {
+            params: vec![],
+            body: vec![],
+            kind: FunctionKind::Native {
+                name: name.into(),
+                func: Arc::new(func),
+            },
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ValueType {
     String,
     Number,
     Bool,
     Object,
+    Array,
     Function,
     Null,
 }
@@ -19,6 +81,7 @@ impl fmt::Display for ValueType {
             Self::Number => write!(f, "number"),
             Self::Bool => write!(f, "bool"),
             Self::Object => write!(f, "object"),
+            Self::Array => write!(f, "array"),
             Self::Function => write!(f, "function"),
             Self::Null => write!(f, "null"),
         }
@@ -26,18 +89,13 @@ impl fmt::Display for ValueType {
 }
 
 #[derive(Debug, Clone)]
-pub struct FunctionValue {
-    pub params: Vec<String>,
-    pub body: Vec<Statement>,
-}
-
-#[derive(Debug, Clone)]
 pub enum Value {
     String(String),
     Number(f64),
     Bool(bool),
-    Object(HashMap<String, Value>),
-    Function(FunctionValue),
+    Object(Arc<RwLock<HashMap<String, Value>>>),
+    Array(Arc<RwLock<Vec<Value>>>),
+    Function(Arc<FunctionValue>),
     Null,
 }
 
@@ -51,30 +109,105 @@ impl fmt::Display for Value {
                 // TODO: Proper recursive object printing.
                 writeln!(f, "{{")?;
 
-                for (key, value) in map {
-                    writeln!(f, "  {}: {:?}", key, value.to_string())?;
+                if let Ok(guard) = map.read() {
+                    for (key, value) in guard.iter() {
+                        writeln!(f, "  {}: {:?}", key, value.to_string())?;
+                    }
                 }
 
                 writeln!(f, "}}")
             }
-            Self::Function(func) => write!(
-                f,
-                "function({}): {}",
-                func.params.join(", "),
-                func.body.len()
-            ),
+            Self::Array(arr) => {
+                write!(f, "[")?;
+                if let Ok(guard) = arr.read() {
+                    for (i, item) in guard.iter().enumerate() {
+                        if i > 0 {
+                            write!(f, ", ")?;
+                        }
+                        match item {
+                            Self::String(s) => write!(f, "\"{s}\"")?,
+                            _ => write!(f, "{item}")?,
+                        }
+                    }
+                }
+                write!(f, "]")
+            }
+            Self::Function(func) => match &func.kind {
+                FunctionKind::Ast => write!(
+                    f,
+                    "function({}): {}",
+                    func.params.join(", "),
+                    func.body.len()
+                ),
+                FunctionKind::Native { name, .. } => write!(f, "function [native {name}]"),
+            },
             Self::Null => write!(f, ""),
         }
     }
 }
 
 impl Value {
+    pub fn object(map: HashMap<String, Value>) -> Self {
+        Self::Object(Arc::new(RwLock::new(map)))
+    }
+
+    pub fn array(vec: Vec<Value>) -> Self {
+        Self::Array(Arc::new(RwLock::new(vec)))
+    }
+
+    pub fn function(func: FunctionValue) -> Self {
+        Self::Function(Arc::new(func))
+    }
+
+    pub fn as_object(&self) -> Option<&Arc<RwLock<HashMap<String, Value>>>> {
+        match self {
+            Self::Object(map) => Some(map),
+            _ => None,
+        }
+    }
+
+    pub fn as_array(&self) -> Option<&Arc<RwLock<Vec<Value>>>> {
+        match self {
+            Self::Array(arr) => Some(arr),
+            _ => None,
+        }
+    }
+
+    pub fn as_function(&self) -> Option<&Arc<FunctionValue>> {
+        match self {
+            Self::Function(func) => Some(func),
+            _ => None,
+        }
+    }
+
+    pub fn get_property(&self, key: &str) -> Option<Value> {
+        match self {
+            Self::Object(map) => map.read().ok().and_then(|m| m.get(key).cloned()),
+            _ => None,
+        }
+    }
+
+    pub fn set_property(&self, key: impl Into<String>, value: Value) -> bool {
+        match self {
+            Self::Object(map) => {
+                if let Ok(mut m) = map.write() {
+                    m.insert(key.into(), value);
+                    true
+                } else {
+                    false
+                }
+            }
+            _ => false,
+        }
+    }
+
     pub fn get_type(&self) -> ValueType {
         match self {
             Self::String(_) => ValueType::String,
             Self::Number(_) => ValueType::Number,
             Self::Bool(_) => ValueType::Bool,
             Self::Object(_) => ValueType::Object,
+            Self::Array(_) => ValueType::Array,
             Self::Function(_) => ValueType::Function,
             Self::Null => ValueType::Null,
         }
@@ -85,7 +218,8 @@ impl Value {
             Self::Bool(b) => *b,
             Self::Number(n) => *n != 0.0,
             Self::String(s) => !s.is_empty(),
-            Self::Object(map) => !map.is_empty(),
+            Self::Object(map) => map.read().map(|m| !m.is_empty()).unwrap_or(true),
+            Self::Array(arr) => arr.read().map(|a| !a.is_empty()).unwrap_or(true),
             Self::Function(_) => true,
             Self::Null => false,
         }
@@ -99,16 +233,21 @@ impl Value {
                 Self::Number(n) => Self::Number(*n),
                 Self::Bool(b) => Self::Number(if *b { 1.0 } else { 0.0 }),
                 Self::Object(_) => Self::Null,
+                Self::Array(_) => Self::Null,
                 Self::Function(_) => Self::Null,
                 Self::Null => Self::Null,
             },
             ValueType::Bool => Self::Bool(self.is_truthy()),
             ValueType::Object => match self {
-                Self::Object(map) => Self::Object(map.clone()),
-                _ => Self::Object(HashMap::new()),
+                Self::Object(map) => Self::Object(Arc::clone(map)),
+                _ => Self::object(HashMap::new()),
+            },
+            ValueType::Array => match self {
+                Self::Array(arr) => Self::Array(Arc::clone(arr)),
+                _ => Self::array(vec![self.clone()]),
             },
             ValueType::Function => match self {
-                Self::Function(func) => Self::Function(func.clone()),
+                Self::Function(func) => Self::Function(Arc::clone(func)),
                 _ => Self::Null,
             },
             ValueType::Null => Self::Null,
@@ -133,13 +272,46 @@ impl Value {
             }
             (Self::String(s1), Self::String(s2)) => s1 == s2,
 
-            // Deep object equality
+            // Object equality: reference identity or deep structural equality
             (Self::Object(m1), Self::Object(m2)) => {
-                m1.len() == m2.len()
-                    && m1
-                        .iter()
-                        .all(|(k, v1)| m2.get(k).is_some_and(|v2| v1.check_equality(v2)))
+                if Arc::ptr_eq(m1, m2) {
+                    true
+                } else {
+                    let map1 = match m1.read() {
+                        Ok(g) => g,
+                        Err(p) => p.into_inner(),
+                    };
+                    let map2 = match m2.read() {
+                        Ok(g) => g,
+                        Err(p) => p.into_inner(),
+                    };
+                    map1.len() == map2.len()
+                        && map1
+                            .iter()
+                            .all(|(k, v1)| map2.get(k).is_some_and(|v2| v1.check_equality(v2)))
+                }
             }
+
+            // Array equality: reference identity or deep structural equality
+            (Self::Array(a1), Self::Array(a2)) => {
+                if Arc::ptr_eq(a1, a2) {
+                    true
+                } else {
+                    let v1 = match a1.read() {
+                        Ok(g) => g,
+                        Err(p) => p.into_inner(),
+                    };
+                    let v2 = match a2.read() {
+                        Ok(g) => g,
+                        Err(p) => p.into_inner(),
+                    };
+                    v1.len() == v2.len()
+                        && v1.iter().zip(v2.iter()).all(|(x, y)| x.check_equality(y))
+                }
+            }
+
+            // Function equality: reference identity
+            (Self::Function(f1), Self::Function(f2)) => Arc::ptr_eq(f1, f2),
 
             // Cross-type: Number and String
             (Self::Number(n), Self::String(s)) | (Self::String(s), Self::Number(n)) => {
@@ -163,6 +335,42 @@ impl Value {
 
             _ => false,
         }
+    }
+}
+
+impl From<HashMap<String, Value>> for Value {
+    fn from(map: HashMap<String, Value>) -> Self {
+        Self::object(map)
+    }
+}
+
+impl From<Vec<Value>> for Value {
+    fn from(vec: Vec<Value>) -> Self {
+        Self::array(vec)
+    }
+}
+
+impl From<Arc<RwLock<HashMap<String, Value>>>> for Value {
+    fn from(arc: Arc<RwLock<HashMap<String, Value>>>) -> Self {
+        Self::Object(arc)
+    }
+}
+
+impl From<Arc<RwLock<Vec<Value>>>> for Value {
+    fn from(arc: Arc<RwLock<Vec<Value>>>) -> Self {
+        Self::Array(arc)
+    }
+}
+
+impl From<FunctionValue> for Value {
+    fn from(func: FunctionValue) -> Self {
+        Self::function(func)
+    }
+}
+
+impl From<Arc<FunctionValue>> for Value {
+    fn from(arc: Arc<FunctionValue>) -> Self {
+        Self::Function(arc)
     }
 }
 
@@ -247,16 +455,44 @@ mod tests {
         obj2.insert("b".to_string(), Value::String("hello".to_string()));
         obj2.insert("a".to_string(), Value::Number(1.0));
 
-        assert_eq!(Value::Object(obj1.clone()), Value::Object(obj2));
+        assert_eq!(Value::object(obj1.clone()), Value::object(obj2));
 
         let mut obj3 = HashMap::new();
         obj3.insert("a".to_string(), Value::Number(1.0));
         obj3.insert("b".to_string(), Value::String("different".to_string()));
 
-        assert_ne!(Value::Object(obj1.clone()), Value::Object(obj3));
+        assert_ne!(Value::object(obj1.clone()), Value::object(obj3));
 
         let empty = HashMap::new();
-        assert_eq!(Value::Object(empty.clone()), Value::Object(empty));
-        assert_ne!(Value::Object(obj1), Value::Number(1.0));
+        assert_eq!(Value::object(empty.clone()), Value::object(empty));
+        assert_ne!(Value::object(obj1), Value::Number(1.0));
+    }
+
+    #[test]
+    fn object_reference_sharing() {
+        let obj = Value::object(HashMap::from([("x".to_string(), Value::Number(1.0))]));
+        let obj_ref = obj.clone();
+
+        assert_eq!(obj, obj_ref);
+
+        if let Value::Object(map) = &obj {
+            map.write()
+                .unwrap()
+                .insert("x".to_string(), Value::Number(2.0));
+        }
+
+        if let Value::Object(map) = &obj_ref {
+            assert_eq!(map.read().unwrap().get("x"), Some(&Value::Number(2.0)));
+        }
+    }
+
+    #[test]
+    fn function_reference_equality() {
+        let f1 = Value::function(FunctionValue::ast(vec!["a".to_string()], vec![]));
+        let f1_clone = f1.clone();
+        let f2 = Value::function(FunctionValue::ast(vec!["a".to_string()], vec![]));
+
+        assert_eq!(f1, f1_clone);
+        assert_ne!(f1, f2);
     }
 }

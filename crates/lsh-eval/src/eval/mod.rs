@@ -28,6 +28,7 @@ use crate::{
     eval::value::{FunctionValue, Value},
     expand::{self, ExpandCtx},
     io::{IoCtx, IoStreamMode},
+    plugins::PluginManager,
 };
 
 #[derive(Debug)]
@@ -35,14 +36,16 @@ pub enum EvalError {
     ScopeNotFound,
 }
 
+#[derive(Debug, PartialEq)]
 pub enum EvalFlow {
     Continue,
     Return(Value),
 }
 
-struct EvalOutcome {
-    flow: EvalFlow,
-    last_status: i32,
+#[derive(Debug, PartialEq)]
+pub struct EvalOutcome {
+    pub flow: EvalFlow,
+    pub last_status: i32,
 }
 
 struct ExternalPipelineStage {
@@ -51,6 +54,15 @@ struct ExternalPipelineStage {
     env_assignments: Vec<(String, String)>,
     stdout_redirect: Option<String>,
 }
+
+struct PromptSegmentInvocation {
+    _name: String,
+    func: Arc<FunctionValue>,
+    receiver: Option<(Expr, Value)>,
+}
+
+type NamedReceiver = (String, Value);
+type NamedFunctionWithReceiver = (Arc<FunctionValue>, Option<NamedReceiver>);
 
 #[derive(Default)]
 pub struct Scope {
@@ -63,6 +75,7 @@ pub struct Evaluator {
     pub last_status: i32,
     pub interrupted: Arc<AtomicBool>,
     pub completion_registry: Arc<RwLock<CompletionRegistry>>,
+    pub plugin_manager: PluginManager,
 }
 
 impl Evaluator {
@@ -73,6 +86,7 @@ impl Evaluator {
             last_status: 0,
             interrupted: get_interrupt_flag(),
             completion_registry: Arc::new(RwLock::new(CompletionRegistry::with_defaults())),
+            plugin_manager: PluginManager::new(),
         }
     }
 
@@ -112,19 +126,50 @@ impl Evaluator {
         );
         map.insert("nerd_icons".to_string(), Value::Bool(nerd_icons));
 
-        Value::Object(map)
+        Value::object(map)
     }
 
     pub fn with_globals(mut self) -> Evaluator {
         let scope = self.scopes.first_mut().unwrap(); // TODO: Don't use unwrap.
 
-        scope.vars.insert(
-            String::from("prompt"),
-            Value::Object(HashMap::from([(
-                String::from("text"),
-                Value::String(String::from("\x1b[35m$\x1b[0m ")),
-            )])),
+        let mut segments_map = HashMap::new();
+        segments_map.insert(
+            String::from("cwd"),
+            Value::function(FunctionValue::native("cwd", |eval, _, _| {
+                let cwd = crate::builtins::fmt_cwd::format_cwd_for_eval(eval);
+                Value::String(format!("\x1b[1;34m{cwd}\x1b[0m"))
+            })),
         );
+
+        let render_fn = Value::function(FunctionValue::native("render", |eval, args, receiver| {
+            let order_arg = args.first().and_then(|v| match v {
+                Value::String(s) if !s.trim().is_empty() => Some(s.as_str()),
+                _ => None,
+            });
+            let separator_arg = args.get(1).and_then(|v| match v {
+                Value::String(s) => Some(s.as_str()),
+                _ => None,
+            });
+            let rendered = eval.render_prompt_segments(order_arg, separator_arg, receiver.as_ref());
+            Value::String(rendered)
+        }));
+
+        let mut prompt_map = HashMap::new();
+        prompt_map.insert(
+            "text".to_string(),
+            Value::String(String::from("\x1b[35m$\x1b[0m ")),
+        );
+        prompt_map.insert(
+            "order".to_string(),
+            Value::array(vec![Value::String(String::from("cwd"))]),
+        );
+        prompt_map.insert("separator".to_string(), Value::String(String::from(" ")));
+        prompt_map.insert("segments".to_string(), Value::object(segments_map));
+        prompt_map.insert("render".to_string(), render_fn);
+
+        scope
+            .vars
+            .insert(String::from("prompt"), Value::object(prompt_map));
 
         scope
             .vars
@@ -132,7 +177,7 @@ impl Evaluator {
 
         scope.vars.insert(
             String::from("palette"),
-            Value::Object(HashMap::from([
+            Value::object(HashMap::from([
                 (
                     String::from("black"),
                     Value::String(String::from("\x1b[30m")),
@@ -305,8 +350,332 @@ impl Evaluator {
     }
 
     pub fn exec_function(&mut self, func: &FunctionValue, args: Vec<Value>) -> Value {
+        self.exec_function_with_receiver(func, args, None)
+    }
+
+    pub fn exec_function_with_receiver(
+        &mut self,
+        func: &FunctionValue,
+        args: Vec<Value>,
+        receiver: Option<(Expr, Value)>,
+    ) -> Value {
         let mut scope_indices = vec![0];
-        self.call_user_function_with_values(func, args, &mut scope_indices)
+        self.call_user_function_with_values_and_receiver(func, args, receiver, &mut scope_indices)
+    }
+
+    pub fn trigger_pre_prompt(&mut self) {
+        let hooks = self.plugin_manager.get_hooks_for("on_pre_prompt");
+        for (func, receiver) in hooks {
+            let mut scope_indices = vec![0];
+            let rec = Some((Expr::Variable("this".to_string()), receiver));
+            self.call_user_function_with_values_and_receiver(
+                &func,
+                vec![],
+                rec,
+                &mut scope_indices,
+            );
+        }
+    }
+
+    pub fn trigger_pre_exec(&mut self, cmd_line: &str) {
+        let hooks = self.plugin_manager.get_hooks_for("on_pre_exec");
+        for (func, receiver) in hooks {
+            let mut scope_indices = vec![0];
+            let rec = Some((Expr::Variable("this".to_string()), receiver));
+            self.call_user_function_with_values_and_receiver(
+                &func,
+                vec![Value::String(cmd_line.to_string())],
+                rec,
+                &mut scope_indices,
+            );
+        }
+    }
+
+    pub fn trigger_post_exec(&mut self, cmd_line: &str, exit_code: i32) {
+        let hooks = self.plugin_manager.get_hooks_for("on_post_exec");
+        for (func, receiver) in hooks {
+            let mut scope_indices = vec![0];
+            let rec = Some((Expr::Variable("this".to_string()), receiver));
+            self.call_user_function_with_values_and_receiver(
+                &func,
+                vec![
+                    Value::String(cmd_line.to_string()),
+                    Value::Number(exit_code as f64),
+                ],
+                rec,
+                &mut scope_indices,
+            );
+        }
+    }
+
+    pub fn trigger_chpwd(&mut self, old_pwd: &str, new_pwd: &str) {
+        let hooks = self.plugin_manager.get_hooks_for("on_chpwd");
+        for (func, receiver) in hooks {
+            let mut scope_indices = vec![0];
+            let rec = Some((Expr::Variable("this".to_string()), receiver));
+            self.call_user_function_with_values_and_receiver(
+                &func,
+                vec![
+                    Value::String(old_pwd.to_string()),
+                    Value::String(new_pwd.to_string()),
+                ],
+                rec,
+                &mut scope_indices,
+            );
+        }
+    }
+
+    pub fn load_plugin(&mut self, name_or_path: &str) -> Result<String, String> {
+        let path = self
+            .plugin_manager
+            .find_plugin_file(name_or_path)
+            .ok_or_else(|| format!("Plugin '{name_or_path}' not found in search paths."))?;
+
+        let outcome = crate::eval::exec::exec_file_outcome(self, path)?;
+
+        if let EvalFlow::Return(manifest_val @ Value::Object(_)) = outcome.flow {
+            let name = self.plugin_manager.register(manifest_val)?;
+            self.on_plugin_registered(&name);
+            return Ok(name);
+        }
+
+        Err(format!(
+            "Plugin '{name_or_path}' must return an object manifest (e.g. 'return {{ name: \"...\", ... }}')."
+        ))
+    }
+
+    pub fn unload_plugin(&mut self, name: &str) -> bool {
+        self.on_plugin_unregistered(name);
+        self.plugin_manager.unregister(name)
+    }
+
+    pub fn on_plugin_registered(&mut self, plugin_name: &str) {
+        let segment_names = self.plugin_manager.list_prompt_segments_for(plugin_name);
+        if segment_names.is_empty() {
+            return;
+        }
+
+        let Some(prompt_val) = self.get_var(0, "prompt").cloned() else {
+            return;
+        };
+
+        let Value::Object(ref prompt_map) = prompt_val else {
+            return;
+        };
+
+        let mut prompt_guard = prompt_map.write().unwrap_or_else(|p| p.into_inner());
+
+        let segments_obj = prompt_guard
+            .entry("segments".to_string())
+            .or_insert_with(|| Value::object(HashMap::new()))
+            .clone();
+
+        if let Value::Object(ref seg_map) = segments_obj {
+            let mut seg_guard = seg_map.write().unwrap_or_else(|p| p.into_inner());
+            for seg_name in &segment_names {
+                if let Some((func, _)) = self.plugin_manager.get_prompt_segment(seg_name) {
+                    seg_guard.insert(seg_name.clone(), Value::Function(func));
+                }
+            }
+        }
+
+        match prompt_guard.get_mut("order") {
+            Some(Value::Array(arr)) => {
+                if let Ok(mut a) = arr.write() {
+                    for seg_name in segment_names {
+                        if !a.iter().any(|v| match v {
+                            Value::String(s) => s == &seg_name,
+                            _ => false,
+                        }) {
+                            a.push(Value::String(seg_name));
+                        }
+                    }
+                }
+            }
+            Some(Value::String(order_str)) => {
+                let mut order_parts: Vec<String> = order_str
+                    .split_whitespace()
+                    .map(|s| s.to_string())
+                    .collect();
+
+                for seg_name in segment_names {
+                    if !order_parts.iter().any(|part| part == &seg_name) {
+                        order_parts.push(seg_name);
+                    }
+                }
+
+                *order_str = order_parts.join(" ");
+            }
+            _ => {
+                let items: Vec<Value> = segment_names.into_iter().map(Value::String).collect();
+                prompt_guard.insert("order".to_string(), Value::array(items));
+            }
+        }
+    }
+
+    pub fn on_plugin_unregistered(&mut self, plugin_name: &str) {
+        let segment_names = self.plugin_manager.list_prompt_segments_for(plugin_name);
+        if segment_names.is_empty() {
+            return;
+        }
+
+        let Some(prompt_val) = self.get_var(0, "prompt").cloned() else {
+            return;
+        };
+
+        let Value::Object(ref prompt_map) = prompt_val else {
+            return;
+        };
+
+        let mut prompt_guard = prompt_map.write().unwrap_or_else(|p| p.into_inner());
+
+        if let Some(Value::Object(seg_map)) = prompt_guard.get("segments") {
+            let mut seg_guard = seg_map.write().unwrap_or_else(|p| p.into_inner());
+            for seg_name in &segment_names {
+                seg_guard.remove(seg_name);
+            }
+        }
+
+        match prompt_guard.get_mut("order") {
+            Some(Value::Array(arr)) => {
+                if let Ok(mut a) = arr.write() {
+                    a.retain(|v| match v {
+                        Value::String(s) => !segment_names.contains(s),
+                        _ => true,
+                    });
+                }
+            }
+            Some(Value::String(order_str)) => {
+                let order_parts: Vec<String> = order_str
+                    .split_whitespace()
+                    .filter(|part| !segment_names.iter().any(|seg| seg == part))
+                    .map(|s| s.to_string())
+                    .collect();
+
+                *order_str = order_parts.join(" ");
+            }
+            _ => {}
+        }
+    }
+
+    pub fn render_prompt_segments(
+        &mut self,
+        order_arg: Option<&str>,
+        separator_arg: Option<&str>,
+        receiver: Option<&Value>,
+    ) -> String {
+        let prompt_val = if let Some(r @ Value::Object(_)) = receiver {
+            r.clone()
+        } else {
+            match self.get_var(0, "prompt").cloned() {
+                Some(v @ Value::Object(_)) => v,
+                _ => return String::new(),
+            }
+        };
+
+        let (order_val, separator_str) = if let Value::Object(ref prompt_map) = prompt_val {
+            let guard = match prompt_map.read() {
+                Ok(g) => g,
+                Err(p) => p.into_inner(),
+            };
+            let order = guard.get("order").cloned();
+            let sep = guard
+                .get("separator")
+                .and_then(|v| match v {
+                    Value::String(s) => Some(s.clone()),
+                    _ => None,
+                })
+                .unwrap_or_else(|| " ".to_string());
+            (order, sep)
+        } else {
+            (None, " ".to_string())
+        };
+
+        let separator = separator_arg.unwrap_or(&separator_str);
+
+        let segment_names: Vec<String> = if let Some(order_override) = order_arg {
+            order_override
+                .split_whitespace()
+                .map(|s| s.to_string())
+                .collect()
+        } else if let Some(ref order) = order_val {
+            match order {
+                Value::Array(arr) => {
+                    let guard = match arr.read() {
+                        Ok(g) => g,
+                        Err(p) => p.into_inner(),
+                    };
+                    guard.iter().map(|v| v.to_string()).collect()
+                }
+                Value::String(s) => s.split_whitespace().map(|s| s.to_string()).collect(),
+                _ => Vec::new(),
+            }
+        } else {
+            let mut names = Vec::new();
+            if let Value::Object(ref prompt_map) = prompt_val {
+                let guard = match prompt_map.read() {
+                    Ok(g) => g,
+                    Err(p) => p.into_inner(),
+                };
+                if let Some(Value::Object(seg_map)) = guard.get("segments") {
+                    let seg_guard = match seg_map.read() {
+                        Ok(g) => g,
+                        Err(p) => p.into_inner(),
+                    };
+                    names.extend(seg_guard.keys().cloned());
+                }
+            }
+            names
+        };
+
+        let mut to_run: Vec<PromptSegmentInvocation> = Vec::new();
+        for name in segment_names {
+            if let Some((func, manifest)) = self.plugin_manager.get_prompt_segment(&name) {
+                let rec = Some((Expr::Variable("this".to_string()), manifest));
+                to_run.push(PromptSegmentInvocation {
+                    _name: name,
+                    func,
+                    receiver: rec,
+                });
+            } else if let Value::Object(ref prompt_map) = prompt_val {
+                let guard = match prompt_map.read() {
+                    Ok(g) => g,
+                    Err(p) => p.into_inner(),
+                };
+                if let Some(Value::Object(seg_map)) = guard.get("segments") {
+                    let seg_guard = match seg_map.read() {
+                        Ok(g) => g,
+                        Err(p) => p.into_inner(),
+                    };
+                    if let Some(Value::Function(func)) = seg_guard.get(&name) {
+                        let rec = Some((Expr::Variable("this".to_string()), prompt_val.clone()));
+                        to_run.push(PromptSegmentInvocation {
+                            _name: name,
+                            func: Arc::clone(func),
+                            receiver: rec,
+                        });
+                    }
+                }
+            }
+        }
+
+        let mut rendered = Vec::new();
+        for invocation in to_run {
+            let val =
+                self.exec_function_with_receiver(&invocation.func, vec![], invocation.receiver);
+            let text = match val {
+                Value::String(s) => s,
+                Value::Number(n) => n.to_string(),
+                Value::Bool(b) => b.to_string(),
+                _ => String::new(),
+            };
+            let trimmed = text.trim_end_matches('\n');
+            if !trimmed.is_empty() {
+                rendered.push(trimmed.to_string());
+            }
+        }
+
+        rendered.join(separator)
     }
 
     pub fn push_var(&mut self, scope_index: usize, name: String, value: Value) {
@@ -362,9 +731,12 @@ impl Evaluator {
         vars
     }
 
-    pub fn evaluate(&mut self, prog: Program) -> i32 {
+    pub fn evaluate_program(&mut self, prog: Program) -> EvalOutcome {
         self.evaluate_statements(&prog.body, &mut vec![0])
-            .last_status
+    }
+
+    pub fn evaluate(&mut self, prog: Program) -> i32 {
+        self.evaluate_program(prog).last_status
     }
 
     fn evaluate_in_new_scope(
@@ -516,10 +888,8 @@ impl Evaluator {
                     params,
                     body,
                 } => {
-                    let func_value = Value::Function(FunctionValue {
-                        params: params.clone(),
-                        body: body.clone(),
-                    });
+                    let func_value =
+                        Value::function(FunctionValue::ast(params.clone(), body.clone()));
                     self.assign_target(target, func_value, scope_indices);
                     last_status = 0;
                 }
@@ -573,7 +943,7 @@ impl Evaluator {
         res.insert(String::from("code"), Value::Number(code as f64));
         res.insert(String::from("out"), Value::String(out));
         res.insert(String::from("err"), Value::String(err));
-        Value::Object(res)
+        Value::object(res)
     }
 
     fn resolve_stdout_redirect_path(
@@ -1033,22 +1403,33 @@ impl Evaluator {
                     self.resolve_stdout_redirect_path(stdout_redirect, scope_indices);
 
                 let result = {
-                    let identifier_val = self.evaluate_expr(identifier, true, scope_indices);
+                    let (identifier_val, receiver) =
+                        self.resolve_callable_target(identifier, scope_indices);
 
                     if let Value::Function(func) = &identifier_val {
                         let output = self
-                            .call_user_function(func, args, scope_indices)
+                            .call_user_function_with_receiver(func, args, receiver, scope_indices)
                             .to_string()
                             .into_bytes();
                         Self::maybe_redirect_output(output, stdout_redirect_path.as_deref())
                     } else {
                         let identifier_str = identifier_val.to_string();
 
-                        if let Some(Value::Function(func)) =
-                            self.resolve_named_value(&identifier_str, scope_indices)
+                        if let Some((func, rec_info)) = self
+                            .resolve_named_function_with_receiver(&identifier_str, scope_indices)
                         {
+                            let rec = rec_info.map(|(path, val)| (Self::path_to_expr(&path), val));
                             let output = self
-                                .call_user_function(&func, args, scope_indices)
+                                .call_user_function_with_receiver(&func, args, rec, scope_indices)
+                                .to_string()
+                                .into_bytes();
+                            Self::maybe_redirect_output(output, stdout_redirect_path.as_deref())
+                        } else if let Some((func, plugin_manifest)) =
+                            self.plugin_manager.get_command(&identifier_str)
+                        {
+                            let rec = Some((Expr::Variable("this".to_string()), plugin_manifest));
+                            let output = self
+                                .call_user_function_with_receiver(&func, args, rec, scope_indices)
                                 .to_string()
                                 .into_bytes();
                             Self::maybe_redirect_output(output, stdout_redirect_path.as_deref())
@@ -1186,9 +1567,18 @@ impl Evaluator {
         }
     }
 
+    fn is_assignable(expr: &Expr) -> bool {
+        matches!(expr, Expr::Variable(_) | Expr::Word(_) | Expr::Index { .. })
+    }
+
     fn assign_target(&mut self, target: &Expr, value: Value, scope_indices: &mut Vec<usize>) {
         match target {
-            Expr::Variable(var_name) => {
+            Expr::Variable(var_name) | Expr::Word(var_name) => {
+                if var_name.contains('.') {
+                    let expanded_target = Self::path_to_expr(var_name);
+                    self.assign_target(&expanded_target, value, scope_indices);
+                    return;
+                }
                 self.assign_var(var_name, value, scope_indices);
             }
             Expr::Index { object, index } => {
@@ -1196,27 +1586,285 @@ impl Evaluator {
                 let key = Self::object_index_key(key_value)
                     .unwrap_or_else(|| panic!("Invalid object index for assignment."));
 
-                let mut object_map = match self.evaluate_expr(object, true, scope_indices) {
-                    Value::Object(map) => map,
-                    Value::Null => HashMap::new(),
-                    _ => panic!("Assignment target must be an object member."),
-                };
+                if key.contains('.') {
+                    let parts: Vec<&str> = key.split('.').collect();
+                    let mut current_obj = *object.clone();
+                    for part in &parts[..parts.len() - 1] {
+                        current_obj = Expr::Index {
+                            object: Box::new(current_obj),
+                            index: Box::new(Expr::String(part.to_string())),
+                        };
+                    }
+                    let last_key = parts.last().unwrap().to_string();
+                    let expanded_target = Expr::Index {
+                        object: Box::new(current_obj),
+                        index: Box::new(Expr::String(last_key)),
+                    };
+                    self.assign_target(&expanded_target, value, scope_indices);
+                    return;
+                }
 
-                object_map.insert(key, value);
-                self.assign_target(object, Value::Object(object_map), scope_indices);
+                let target_obj = self.evaluate_expr(object, true, scope_indices);
+                match target_obj {
+                    Value::Object(map) => {
+                        let mut m = match map.write() {
+                            Ok(g) => g,
+                            Err(p) => p.into_inner(),
+                        };
+                        m.insert(key, value);
+                    }
+                    Value::Array(arr) => {
+                        let mut a = match arr.write() {
+                            Ok(g) => g,
+                            Err(p) => p.into_inner(),
+                        };
+                        if let Ok(idx) = key.parse::<isize>() {
+                            let actual_idx = if idx < 0 { a.len() as isize + idx } else { idx };
+                            if actual_idx >= 0 {
+                                let u_idx = actual_idx as usize;
+                                if u_idx < a.len() {
+                                    a[u_idx] = value;
+                                } else if u_idx == a.len() {
+                                    a.push(value);
+                                }
+                            }
+                        }
+                    }
+                    Value::Null => {
+                        let mut new_map = HashMap::new();
+                        new_map.insert(key, value);
+                        self.assign_target(object, Value::object(new_map), scope_indices);
+                    }
+                    _ => panic!("Assignment target must be an object or array member."),
+                }
             }
             _ => panic!("Invalid assignment target."),
+        }
+    }
+
+    fn path_to_expr(path: &str) -> Expr {
+        let parts: Vec<&str> = path.split('.').collect();
+        let mut expr = Expr::Variable(parts[0].to_string());
+        for part in &parts[1..] {
+            expr = Expr::Index {
+                object: Box::new(expr),
+                index: Box::new(Expr::String(part.to_string())),
+            };
+        }
+        expr
+    }
+
+    fn resolve_named_function_with_receiver(
+        &self,
+        identifier: &str,
+        scope_indices: &[usize],
+    ) -> Option<NamedFunctionWithReceiver> {
+        let parts: Vec<&str> = identifier.split('.').collect();
+        if parts.is_empty() {
+            return None;
+        }
+
+        let first = parts[0].strip_prefix('$').unwrap_or(parts[0]);
+
+        if parts.len() == 1 {
+            let val = self.scoped_var(first, scope_indices)?;
+            if let Value::Function(f) = val {
+                return Some((f, None));
+            }
+            return None;
+        }
+
+        let mut current_val = self.scoped_var(first, scope_indices)?.clone();
+        let mut receiver_name = first.to_string();
+
+        for part in &parts[1..parts.len() - 1] {
+            receiver_name.push('.');
+            receiver_name.push_str(part);
+            let next_val = match &current_val {
+                Value::Object(map) => {
+                    let m = match map.read() {
+                        Ok(g) => g,
+                        Err(p) => p.into_inner(),
+                    };
+                    m.get(*part).cloned()?
+                }
+                _ => return None,
+            };
+            current_val = next_val;
+        }
+
+        let last_part = parts.last()?;
+        let func_val = match &current_val {
+            Value::Object(map) => {
+                let m = match map.read() {
+                    Ok(g) => g,
+                    Err(p) => p.into_inner(),
+                };
+                m.get(*last_part).cloned()?
+            }
+            _ => return None,
+        };
+
+        if let Value::Function(func) = func_val {
+            Some((func, Some((receiver_name, current_val))))
+        } else {
+            None
+        }
+    }
+
+    fn resolve_callable_target(
+        &mut self,
+        target: &Expr,
+        scope_indices: &mut Vec<usize>,
+    ) -> (Value, Option<(Expr, Value)>) {
+        match target {
+            Expr::Index { object, index } => {
+                let mut receiver_expr = *object.clone();
+                let mut receiver_val = self.evaluate_expr(object, true, scope_indices);
+                let index_val = self.evaluate_expr(index, true, scope_indices);
+                let key = Self::object_index_key(index_val);
+
+                let func_val = match (&receiver_val, key) {
+                    (Value::Object(map), Some(k)) if k.contains('.') => {
+                        let parts: Vec<&str> = k.split('.').collect();
+                        let mut current_val = Value::Object(Arc::clone(map));
+                        for part in &parts[..parts.len() - 1] {
+                            receiver_expr = Expr::Index {
+                                object: Box::new(receiver_expr),
+                                index: Box::new(Expr::String(part.to_string())),
+                            };
+                            current_val = match &current_val {
+                                Value::Object(m) => {
+                                    let guard = match m.read() {
+                                        Ok(g) => g,
+                                        Err(p) => p.into_inner(),
+                                    };
+                                    guard.get(*part).cloned().unwrap_or(Value::Null)
+                                }
+                                _ => Value::Null,
+                            };
+                        }
+                        receiver_val = current_val;
+                        let last_key = parts.last().unwrap();
+                        match &receiver_val {
+                            Value::Object(m) => {
+                                let guard = match m.read() {
+                                    Ok(g) => g,
+                                    Err(p) => p.into_inner(),
+                                };
+                                guard.get(*last_key).cloned().unwrap_or(Value::Null)
+                            }
+                            _ => Value::Null,
+                        }
+                    }
+                    (Value::Object(map), Some(k)) => {
+                        let guard = match map.read() {
+                            Ok(g) => g,
+                            Err(p) => p.into_inner(),
+                        };
+                        guard.get(&k).cloned().unwrap_or(Value::Null)
+                    }
+                    (Value::Array(arr), Some(k)) => match k.as_str() {
+                        "len" | "length" => {
+                            let arr_clone = Arc::clone(arr);
+                            Value::function(FunctionValue::native("len", move |_, _, _| {
+                                let guard = match arr_clone.read() {
+                                    Ok(g) => g,
+                                    Err(p) => p.into_inner(),
+                                };
+                                Value::Number(guard.len() as f64)
+                            }))
+                        }
+                        "push" => {
+                            let arr_clone = Arc::clone(arr);
+                            Value::function(FunctionValue::native("push", move |_, args, _| {
+                                let mut guard = match arr_clone.write() {
+                                    Ok(g) => g,
+                                    Err(p) => p.into_inner(),
+                                };
+                                for arg in args {
+                                    guard.push(arg);
+                                }
+                                Value::Number(guard.len() as f64)
+                            }))
+                        }
+                        "pop" => {
+                            let arr_clone = Arc::clone(arr);
+                            Value::function(FunctionValue::native("pop", move |_, _, _| {
+                                let mut guard = match arr_clone.write() {
+                                    Ok(g) => g,
+                                    Err(p) => p.into_inner(),
+                                };
+                                guard.pop().unwrap_or(Value::Null)
+                            }))
+                        }
+                        "join" => {
+                            let arr_clone = Arc::clone(arr);
+                            Value::function(FunctionValue::native("join", move |_, args, _| {
+                                let sep = args
+                                    .first()
+                                    .and_then(|v| match v {
+                                        Value::String(s) => Some(s.as_str()),
+                                        _ => None,
+                                    })
+                                    .unwrap_or("");
+                                let guard = match arr_clone.read() {
+                                    Ok(g) => g,
+                                    Err(p) => p.into_inner(),
+                                };
+                                let s = guard
+                                    .iter()
+                                    .map(|item| item.to_string())
+                                    .collect::<Vec<_>>()
+                                    .join(sep);
+                                Value::String(s)
+                            }))
+                        }
+                        "contains" => {
+                            let arr_clone = Arc::clone(arr);
+                            Value::function(FunctionValue::native("contains", move |_, args, _| {
+                                let target = args.first().cloned().unwrap_or(Value::Null);
+                                let guard = match arr_clone.read() {
+                                    Ok(g) => g,
+                                    Err(p) => p.into_inner(),
+                                };
+                                Value::Bool(guard.iter().any(|item| item.check_equality(&target)))
+                            }))
+                        }
+                        _ => Value::Null,
+                    },
+                    _ => Value::Null,
+                };
+                (func_val, Some((receiver_expr, receiver_val)))
+            }
+            Expr::Word(identifier) | Expr::Variable(identifier) => {
+                if let Some((func, rec_info)) =
+                    self.resolve_named_function_with_receiver(identifier, scope_indices)
+                {
+                    let rec = rec_info.map(|(path, val)| (Self::path_to_expr(&path), val));
+                    (Value::Function(func), rec)
+                } else {
+                    (self.evaluate_expr(target, true, scope_indices), None)
+                }
+            }
+            _ => (self.evaluate_expr(target, true, scope_indices), None),
         }
     }
 
     fn resolve_named_value(&self, identifier: &str, scope_indices: &[usize]) -> Option<Value> {
         let mut parts = identifier.split('.');
         let first_part = parts.next()?;
-        let mut value = self.scoped_var(first_part, scope_indices)?;
+        let mut value = self.scoped_var(first_part, scope_indices)?.clone();
 
         for part in parts {
-            let next_value = match value {
-                Value::Object(map) => map.get(part).cloned(),
+            let next_value = match &value {
+                Value::Object(map) => {
+                    let guard = match map.read() {
+                        Ok(g) => g,
+                        Err(p) => p.into_inner(),
+                    };
+                    guard.get(part).cloned()
+                }
                 _ => None,
             }?;
             value = next_value;
@@ -1255,29 +1903,59 @@ impl Evaluator {
         let mut all_args = expand::expand_args(resolved_args, ExpandCtx::default());
 
         for arg in args {
-            let evaluated = self.evaluate_expr(arg, true, scope_indices).to_string();
-            let (has_tilde, has_glob) = Self::expr_has_unquoted_glob_or_tilde(arg);
+            let val = self.evaluate_expr(arg, true, scope_indices);
+            match val {
+                Value::Array(arr) => {
+                    let guard = match arr.read() {
+                        Ok(g) => g,
+                        Err(p) => p.into_inner(),
+                    };
+                    for item in guard.iter() {
+                        let evaluated = item.to_string();
+                        let (has_tilde, has_glob) = (
+                            evaluated.starts_with('~'),
+                            expand::has_glob_metachars(&evaluated),
+                        );
+                        if has_tilde || has_glob {
+                            all_args.extend(expand::expand_arg(
+                                evaluated,
+                                ExpandCtx {
+                                    tilde: has_tilde,
+                                    glob: has_glob,
+                                },
+                            ));
+                        } else {
+                            all_args.push(evaluated);
+                        }
+                    }
+                }
+                other => {
+                    let evaluated = other.to_string();
+                    let (has_tilde, has_glob) = Self::expr_has_unquoted_glob_or_tilde(arg);
 
-            if has_tilde || has_glob {
-                all_args.extend(expand::expand_arg(
-                    evaluated,
-                    ExpandCtx {
-                        tilde: has_tilde,
-                        glob: has_glob,
-                    },
-                ));
-            } else {
-                all_args.push(evaluated);
+                    if has_tilde || has_glob {
+                        all_args.extend(expand::expand_arg(
+                            evaluated,
+                            ExpandCtx {
+                                tilde: has_tilde,
+                                glob: has_glob,
+                            },
+                        ));
+                    } else {
+                        all_args.push(evaluated);
+                    }
+                }
             }
         }
 
         all_args
     }
 
-    fn call_user_function(
+    fn call_user_function_with_receiver(
         &mut self,
         func: &FunctionValue,
         args: &[Expr],
+        receiver: Option<(Expr, Value)>,
         scope_indices: &mut Vec<usize>,
     ) -> Value {
         let evaluated_args: Vec<Value> = args
@@ -1285,19 +1963,34 @@ impl Evaluator {
             .map(|arg| self.evaluate_expr(arg, true, scope_indices))
             .collect();
 
-        self.call_user_function_with_values(func, evaluated_args, scope_indices)
+        self.call_user_function_with_values_and_receiver(
+            func,
+            evaluated_args,
+            receiver,
+            scope_indices,
+        )
     }
 
-    fn call_user_function_with_values(
+    fn call_user_function_with_values_and_receiver(
         &mut self,
         func: &FunctionValue,
         evaluated_args: Vec<Value>,
+        receiver: Option<(Expr, Value)>,
         scope_indices: &mut Vec<usize>,
     ) -> Value {
+        if let crate::eval::value::FunctionKind::Native { ref func, .. } = func.kind {
+            let this_val = receiver.map(|(_, ref v)| v.clone());
+            return (func.clone())(self, evaluated_args, this_val);
+        }
+
         let scope_index = self.make_scope();
         scope_indices.push(scope_index);
 
         if let Some(scope) = self.scopes.get_mut(scope_index) {
+            if let Some((_, ref this_val)) = receiver {
+                scope.vars.insert("this".to_string(), this_val.clone());
+            }
+
             for (param_index, param_name) in func.params.iter().enumerate() {
                 let value = evaluated_args
                     .get(param_index)
@@ -1311,6 +2004,14 @@ impl Evaluator {
 
         let outcome = self.evaluate_statements(&func.body, scope_indices);
 
+        let final_this = if receiver.is_some() {
+            self.scopes
+                .get(scope_index)
+                .and_then(|s| s.vars.get("this").cloned())
+        } else {
+            None
+        };
+
         let popped_scope_index = scope_indices
             .pop()
             .expect("Failed to pop scope index after function call.");
@@ -1323,6 +2024,13 @@ impl Evaluator {
         self.scopes
             .pop()
             .expect("Failed to pop evaluator scope after function call.");
+
+        if let (Some((receiver_expr, initial_this)), Some(updated_this)) = (receiver, final_this)
+            && updated_this != initial_this
+            && Self::is_assignable(&receiver_expr)
+        {
+            self.assign_target(&receiver_expr, updated_this, scope_indices);
+        }
 
         match outcome.flow {
             EvalFlow::Continue => Value::Null,
@@ -1338,18 +2046,15 @@ impl Evaluator {
     ) -> Value {
         match expr {
             Expr::Call { target, args } => {
-                let target_val = self.evaluate_expr(target, true, scope_indices);
+                let (target_val, receiver) = self.resolve_callable_target(target, scope_indices);
 
                 if let Value::Function(func) = &target_val {
-                    return self.call_user_function(func, args, scope_indices);
-                }
-
-                // If target was a Word or Variable that resolved to a function name.
-                if let Expr::Word(identifier) | Expr::Variable(identifier) = target.as_ref()
-                    && let Some(Value::Function(func)) =
-                        self.resolve_named_value(identifier, scope_indices)
-                {
-                    return self.call_user_function(&func, args, scope_indices);
+                    return self.call_user_function_with_receiver(
+                        func,
+                        args,
+                        receiver,
+                        scope_indices,
+                    );
                 }
 
                 // For command execution, we only want to do this if we are not in a secondary expression (like an argument).
@@ -1358,6 +2063,12 @@ impl Evaluator {
                 }
 
                 let identifier = target_val.to_string();
+                if let Some((func, plugin_manifest)) = self.plugin_manager.get_command(&identifier)
+                {
+                    let rec = Some((Expr::Variable("this".to_string()), plugin_manifest));
+                    return self.call_user_function_with_receiver(&func, args, rec, scope_indices);
+                }
+
                 let (res_cmd, res_args) = self.resolve_command(identifier);
 
                 // Concatenate arguments from the input cmd with the provided arguments from the evaluator.
@@ -1371,8 +2082,16 @@ impl Evaluator {
                 Value::Null
             }
             Expr::Word(word) => {
-                if let Some(Value::Function(func)) = self.resolve_named_value(word, scope_indices) {
-                    return self.call_user_function(&func, &[], scope_indices);
+                if let Some((func, rec_info)) =
+                    self.resolve_named_function_with_receiver(word, scope_indices)
+                {
+                    let rec = rec_info.map(|(path, val)| (Self::path_to_expr(&path), val));
+                    return self.call_user_function_with_receiver(&func, &[], rec, scope_indices);
+                }
+
+                if let Some((func, plugin_manifest)) = self.plugin_manager.get_command(word) {
+                    let rec = Some((Expr::Variable("this".to_string()), plugin_manifest));
+                    return self.call_user_function_with_receiver(&func, &[], rec, scope_indices);
                 }
 
                 let (res_cmd, args) = self.resolve_command(word.to_owned());
@@ -1412,10 +2131,29 @@ impl Evaluator {
                 let left_type = left_res.get_type();
 
                 match *op {
-                    BinaryOp::Add => match (left_res, right_res.cast(left_type)) {
+                    BinaryOp::Add => match (left_res, right_res) {
                         (Value::Number(l), Value::Number(r)) => Value::Number(l + r),
                         (Value::String(l), Value::String(r)) => Value::String(l + &r),
-                        _ => Value::Null, // or error if you prefer
+                        (Value::String(l), r) => Value::String(l + &r.to_string()),
+                        (Value::Array(a1), Value::Array(a2)) => {
+                            let mut combined = Vec::new();
+                            if let Ok(g1) = a1.read() {
+                                combined.extend(g1.clone());
+                            }
+                            if let Ok(g2) = a2.read() {
+                                combined.extend(g2.clone());
+                            }
+                            Value::array(combined)
+                        }
+                        (Value::Array(a), other) => {
+                            let mut combined = Vec::new();
+                            if let Ok(g) = a.read() {
+                                combined.extend(g.clone());
+                            }
+                            combined.push(other);
+                            Value::array(combined)
+                        }
+                        _ => Value::Null,
                     },
 
                     BinaryOp::Sub => match (left_res, right_res.cast(left_type)) {
@@ -1486,9 +2224,59 @@ impl Evaluator {
                 let object_value = self.evaluate_expr(object, true, scope_indices);
                 let index_value = self.evaluate_expr(index, true, scope_indices);
 
-                match (object_value, Self::object_index_key(index_value)) {
+                match (&object_value, Self::object_index_key(index_value)) {
                     (Value::Object(map), Some(key)) => {
-                        map.get(&key).cloned().unwrap_or(Value::Null)
+                        if key.contains('.') {
+                            let mut val = Value::Object(Arc::clone(map));
+                            for part in key.split('.') {
+                                val = match &val {
+                                    Value::Object(m) => {
+                                        let guard = match m.read() {
+                                            Ok(g) => g,
+                                            Err(p) => p.into_inner(),
+                                        };
+                                        guard.get(part).cloned().unwrap_or(Value::Null)
+                                    }
+                                    _ => Value::Null,
+                                };
+                                if matches!(val, Value::Null) {
+                                    break;
+                                }
+                            }
+                            val
+                        } else {
+                            let guard = match map.read() {
+                                Ok(g) => g,
+                                Err(p) => p.into_inner(),
+                            };
+                            guard.get(&key).cloned().unwrap_or(Value::Null)
+                        }
+                    }
+                    (Value::Array(arr), Some(key)) => {
+                        if let Ok(idx) = key.parse::<isize>() {
+                            let guard = match arr.read() {
+                                Ok(g) => g,
+                                Err(p) => p.into_inner(),
+                            };
+                            let actual_idx = if idx < 0 {
+                                guard.len() as isize + idx
+                            } else {
+                                idx
+                            };
+                            if actual_idx >= 0 && (actual_idx as usize) < guard.len() {
+                                guard[actual_idx as usize].clone()
+                            } else {
+                                Value::Null
+                            }
+                        } else if key == "len" || key == "length" {
+                            let guard = match arr.read() {
+                                Ok(g) => g,
+                                Err(p) => p.into_inner(),
+                            };
+                            Value::Number(guard.len() as f64)
+                        } else {
+                            Value::Null
+                        }
                     }
                     _ => Value::Null,
                 }
@@ -1504,19 +2292,44 @@ impl Evaluator {
             Expr::CommandSub(expr) => {
                 match expr.as_ref() {
                     Expr::Call { target, args } => {
-                        let target_val = self.evaluate_expr(target, true, scope_indices);
+                        let (target_val, receiver) =
+                            self.resolve_callable_target(target, scope_indices);
 
                         if let Value::Function(func) = &target_val {
-                            let value = self.call_user_function(func, args, scope_indices);
+                            let value = self.call_user_function_with_receiver(
+                                func,
+                                args,
+                                receiver,
+                                scope_indices,
+                            );
                             return Self::make_command_result(0, value.to_string(), String::new());
                         }
 
                         let identifier = target_val.to_string();
 
-                        if let Some(Value::Function(func)) =
-                            self.resolve_named_value(&identifier, scope_indices)
+                        if let Some((func, rec_info)) =
+                            self.resolve_named_function_with_receiver(&identifier, scope_indices)
                         {
-                            let value = self.call_user_function(&func, args, scope_indices);
+                            let rec = rec_info.map(|(path, val)| (Self::path_to_expr(&path), val));
+                            let value = self.call_user_function_with_receiver(
+                                &func,
+                                args,
+                                rec,
+                                scope_indices,
+                            );
+                            return Self::make_command_result(0, value.to_string(), String::new());
+                        }
+
+                        if let Some((func, plugin_manifest)) =
+                            self.plugin_manager.get_command(&identifier)
+                        {
+                            let rec = Some((Expr::Variable("this".to_string()), plugin_manifest));
+                            let value = self.call_user_function_with_receiver(
+                                &func,
+                                args,
+                                rec,
+                                scope_indices,
+                            );
                             return Self::make_command_result(0, value.to_string(), String::new());
                         }
 
@@ -1541,10 +2354,28 @@ impl Evaluator {
                         )
                     }
                     Expr::Word(word) => {
-                        if let Some(Value::Function(func)) =
-                            self.resolve_named_value(word, scope_indices)
+                        if let Some((func, rec_info)) =
+                            self.resolve_named_function_with_receiver(word, scope_indices)
                         {
-                            let value = self.call_user_function(&func, &[], scope_indices);
+                            let rec = rec_info.map(|(path, val)| (Self::path_to_expr(&path), val));
+                            let value = self.call_user_function_with_receiver(
+                                &func,
+                                &[],
+                                rec,
+                                scope_indices,
+                            );
+                            return Self::make_command_result(0, value.to_string(), String::new());
+                        }
+
+                        if let Some((func, plugin_manifest)) = self.plugin_manager.get_command(word)
+                        {
+                            let rec = Some((Expr::Variable("this".to_string()), plugin_manifest));
+                            let value = self.call_user_function_with_receiver(
+                                &func,
+                                &[],
+                                rec,
+                                scope_indices,
+                            );
                             return Self::make_command_result(0, value.to_string(), String::new());
                         }
 
@@ -1588,17 +2419,23 @@ impl Evaluator {
                     String::from_utf8(err).unwrap_or_default(),
                 )
             }
-            Expr::AnonymousFunction { params, body } => Value::Function(FunctionValue {
-                params: params.clone(),
-                body: body.clone(),
-            }),
+            Expr::AnonymousFunction { params, body } => {
+                Value::function(FunctionValue::ast(params.clone(), body.clone()))
+            }
             Expr::Object(expr_map) => {
                 let mut obj = HashMap::new();
                 for (key, value) in expr_map {
                     let value_value = self.evaluate_expr(value, true, scope_indices);
                     obj.insert(key.to_string(), value_value);
                 }
-                Value::Object(obj)
+                Value::object(obj)
+            }
+            Expr::Array(elements) => {
+                let mut evaluated = Vec::with_capacity(elements.len());
+                for elem in elements {
+                    evaluated.push(self.evaluate_expr(elem, true, scope_indices));
+                }
+                Value::array(evaluated)
             }
         }
     }
@@ -1814,5 +2651,625 @@ mod tests {
         };
         let args = eval.build_command_args(vec![], call_args, &mut scopes);
         assert_eq!(args, vec!["nonexistent_*.xyz".to_string()]);
+    }
+
+    #[test]
+    fn method_call_binds_this_and_reads_properties() {
+        let res = eval_var(
+            r#"
+            let person = {
+                name: "Alice",
+                greet: () => {
+                    return "Hello, " + $this.name
+                }
+            }
+            let msg = $person.greet()
+            "#,
+            "msg",
+        );
+        assert_eq!(res, Some(Value::String("Hello, Alice".to_string())));
+    }
+
+    #[test]
+    fn method_call_mutates_this_and_persists_to_receiver() {
+        let res = eval_var(
+            r#"
+            let counter = {
+                count: 0,
+                inc: () => {
+                    $this.count = $this.count + 1
+                    return $this.count
+                }
+            }
+            let first = $counter.inc()
+            let second = $counter.inc()
+            let final_count = $counter.count
+            "#,
+            "final_count",
+        );
+        assert_eq!(res, Some(Value::Number(2.0)));
+    }
+
+    #[test]
+    fn command_style_method_call_binds_this_and_args() {
+        let res = eval_var(
+            r#"
+            let greeter = {
+                prefix: "Hi",
+                greet: (target) => {
+                    return $this.prefix + " " + $target
+                }
+            }
+            let msg = $(greeter.greet "Bob").out
+            "#,
+            "msg",
+        );
+        assert_eq!(res, Some(Value::String("Hi Bob".to_string())));
+    }
+
+    #[test]
+    fn nested_method_calls_on_this() {
+        let res = eval_var(
+            r#"
+            let counter = {
+                count: 0,
+                inc: () => {
+                    $this.count = $this.count + 1
+                    return $this.count
+                },
+                add_two: () => {
+                    $this.inc()
+                    $this.inc()
+                    return $this.count
+                }
+            }
+            $counter.add_two()
+            let final_count = $counter.count
+            "#,
+            "final_count",
+        );
+        assert_eq!(res, Some(Value::Number(2.0)));
+    }
+
+    #[test]
+    fn nested_object_method_call_updates_nested_property() {
+        let res = eval_var(
+            r#"
+            let user = {
+                stats: {
+                    score: 10,
+                    add: (pts) => {
+                        $this.score = $this.score + $pts
+                    }
+                }
+            }
+            $user.stats.add 15
+            let final_score = $user.stats.score
+            "#,
+            "final_score",
+        );
+        assert_eq!(res, Some(Value::Number(25.0)));
+    }
+
+    #[test]
+    fn fn_declaration_on_object_binds_this() {
+        let res = eval_var(
+            r#"
+            let obj = { x: 42 }
+            fn obj.get_x() {
+                return $this.x
+            }
+            let val = $obj.get_x()
+            "#,
+            "val",
+        );
+        assert_eq!(res, Some(Value::Number(42.0)));
+    }
+
+    #[test]
+    fn object_variables_share_reference_mutations() {
+        let res = eval_var(
+            r#"
+            let a = { count: 1 }
+            let b = $a
+            $b.count = 42
+            let res = $a.count
+            "#,
+            "res",
+        );
+        assert_eq!(res, Some(Value::Number(42.0)));
+    }
+
+    #[test]
+    fn function_mutates_passed_object_reference() {
+        let res = eval_var(
+            r#"
+            fn mutate_obj(target) {
+                $target.modified = true
+            }
+            let my_obj = { modified: false }
+            mutate_obj $my_obj
+            let res = $my_obj.modified
+            "#,
+            "res",
+        );
+        assert_eq!(res, Some(Value::Bool(true)));
+    }
+
+    #[test]
+    fn object_reference_equality_in_evaluator() {
+        let res = eval_var(
+            r#"
+            let a = { x: 1 }
+            let b = $a
+            let c = { x: 1 }
+            let same_ref = $a == $b
+            "#,
+            "same_ref",
+        );
+        assert_eq!(res, Some(Value::Bool(true)));
+
+        let res_deep = eval_var(
+            r#"
+            let a = { x: 1 }
+            let c = { x: 1 }
+            let deep_eq = $a == $c
+            "#,
+            "deep_eq",
+        );
+        assert_eq!(res_deep, Some(Value::Bool(true)));
+    }
+
+    fn write_test_plugin(
+        plugin_name: &str,
+        content: &str,
+    ) -> (std::path::PathBuf, std::path::PathBuf) {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "lsh_test_{}_{}_{}",
+            plugin_name,
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let plugin_dir = temp_dir.join(plugin_name);
+        let _ = std::fs::create_dir_all(&plugin_dir);
+        let plugin_file = plugin_dir.join("plugin.lsh");
+        std::fs::write(&plugin_file, content).unwrap();
+        (temp_dir, plugin_file)
+    }
+
+    #[test]
+    fn plugin_return_and_command_execution_with_this() {
+        let (temp_dir, _) = write_test_plugin(
+            "test-plugin",
+            r#"
+            return {
+                name: "test-plugin",
+                version: "1.0.0",
+                description: "Test plugin",
+                prefix: ">>",
+                commands: {
+                    echo_prefixed: (msg) => {
+                        return $this.prefix + " " + $msg
+                    }
+                }
+            }
+            "#,
+        );
+
+        let (mut eval, _) = eval_with_evaluator("");
+        eval.plugin_manager.search_paths.insert(0, temp_dir.clone());
+        let res = eval.load_plugin("test-plugin");
+        assert_eq!(res, Ok("test-plugin".to_string()));
+
+        let _ = eval.evaluate_statements(
+            &lsh_syntax::parser::Parser::new(
+                0,
+                lsh_syntax::lexer::lex_input(0, "let out = $(echo_prefixed \"hello\").out")
+                    .unwrap(),
+            )
+            .parse_program()
+            .unwrap()
+            .body,
+            &mut vec![0],
+        );
+
+        let out = eval.scopes.first().and_then(|s| s.vars.get("out").cloned());
+        assert_eq!(out, Some(Value::String(">> hello".to_string())));
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn plugin_lifecycle_hooks_mutate_plugin_state() {
+        let (temp_dir, _) = write_test_plugin(
+            "git-plugin",
+            r#"
+            return {
+                name: "git-plugin",
+                hooks: {
+                    on_chpwd: (old_p, new_p) => {
+                        $this.current_dir = $new_p
+                    },
+                    on_pre_prompt: () => {
+                        $this.prompt_runs = 1
+                    }
+                },
+                current_dir: "",
+                prompt_runs: 0
+            }
+            "#,
+        );
+
+        let (mut eval, _) = eval_with_evaluator("");
+        eval.plugin_manager.search_paths.insert(0, temp_dir.clone());
+        assert_eq!(eval.load_plugin("git-plugin"), Ok("git-plugin".to_string()));
+
+        eval.trigger_chpwd("/home/user", "/home/user/projects");
+        eval.trigger_pre_prompt();
+
+        let plugin = eval
+            .plugin_manager
+            .get("git-plugin")
+            .expect("plugin not found");
+        let current_dir = plugin.manifest.get_property("current_dir");
+        let prompt_runs = plugin.manifest.get_property("prompt_runs");
+
+        assert_eq!(
+            current_dir,
+            Some(Value::String("/home/user/projects".to_string()))
+        );
+        assert_eq!(prompt_runs, Some(Value::Number(1.0)));
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn plugin_unload_removes_commands_and_hooks() {
+        let (temp_dir, _) = write_test_plugin(
+            "temp-plugin",
+            r#"
+            return {
+                name: "temp-plugin",
+                commands: {
+                    temp_cmd: () => "temp"
+                }
+            }
+            "#,
+        );
+
+        let (mut eval, _) = eval_with_evaluator("");
+        eval.plugin_manager.search_paths.insert(0, temp_dir.clone());
+        assert_eq!(
+            eval.load_plugin("temp-plugin"),
+            Ok("temp-plugin".to_string())
+        );
+
+        assert!(eval.plugin_manager.get("temp-plugin").is_some());
+        assert!(eval.plugin_manager.get_command("temp_cmd").is_some());
+
+        assert!(eval.unload_plugin("temp-plugin"));
+        assert!(eval.plugin_manager.get("temp-plugin").is_none());
+        assert!(eval.plugin_manager.get_command("temp_cmd").is_none());
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn plugin_load_from_file_registers_manifest() {
+        let (temp_dir, plugin_file) = write_test_plugin(
+            "file-plugin",
+            r#"
+            return {
+                name: "file-plugin",
+                version: "2.0.0",
+                commands: {
+                    file_cmd: () => "from-file"
+                }
+            }
+            "#,
+        );
+
+        let (mut eval, _) = eval_with_evaluator("");
+        let load_res = eval.load_plugin(plugin_file.to_str().unwrap());
+        assert_eq!(load_res, Ok("file-plugin".to_string()));
+
+        let plugin = eval.plugin_manager.get("file-plugin");
+        assert!(plugin.is_some());
+        assert_eq!(plugin.unwrap().version.as_deref(), Some("2.0.0"));
+        assert!(eval.plugin_manager.get_command("file_cmd").is_some());
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn plugin_fails_to_load_if_not_returning_object() {
+        let (temp_dir, plugin_file) = write_test_plugin(
+            "invalid-plugin",
+            r#"
+            let plugin = {
+                name: "invalid-plugin"
+            }
+            "#,
+        );
+
+        let (mut eval, _) = eval_with_evaluator("");
+        let load_res = eval.load_plugin(plugin_file.to_str().unwrap());
+        assert!(load_res.is_err());
+        assert!(
+            load_res
+                .unwrap_err()
+                .contains("must return an object manifest")
+        );
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn loads_git_prompt_plugin_from_config_directory() {
+        let (mut eval, _) = eval_with_evaluator("");
+
+        let manifest_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("config")
+            .join("plugins");
+
+        eval.plugin_manager
+            .search_paths
+            .insert(0, manifest_path.clone());
+
+        let load_res = eval.load_plugin("git-prompt");
+        assert_eq!(load_res, Ok("git-prompt".to_string()));
+
+        let prompt_obj = eval.get_var(0, "prompt").expect("prompt should exist");
+        let order = prompt_obj.get_property("order");
+        assert_eq!(
+            order,
+            Some(Value::array(vec![
+                Value::String("cwd".to_string()),
+                Value::String("git".to_string()),
+            ]))
+        );
+
+        let segments = prompt_obj
+            .get_property("segments")
+            .expect("segments exists");
+        assert!(segments.get_property("cwd").is_some());
+        assert!(segments.get_property("git").is_some());
+
+        let rendered = eval.render_prompt_segments(None, None, None);
+        assert!(!rendered.is_empty());
+
+        // Test custom order and separator
+        let custom_rendered = eval.render_prompt_segments(Some("git"), None, None);
+        assert!(!custom_rendered.is_empty());
+
+        let (mut script_eval, _) = eval_with_evaluator("");
+        script_eval
+            .plugin_manager
+            .search_paths
+            .insert(0, manifest_path);
+        let _ = script_eval.load_plugin("git-prompt");
+        let render_call_res = script_eval.evaluate_statements(
+            &lsh_syntax::parser::Parser::new(
+                0,
+                lsh_syntax::lexer::lex_input(0, "let out = $prompt.render()").unwrap(),
+            )
+            .parse_program()
+            .unwrap()
+            .body,
+            &mut vec![0],
+        );
+        assert_eq!(render_call_res.flow, crate::eval::EvalFlow::Continue);
+        assert!(script_eval.get_var(0, "out").is_some());
+    }
+
+    #[test]
+    fn prompt_segments_custom_registration_and_unload() {
+        let (temp_dir, _) = write_test_plugin(
+            "test-plugin",
+            r#"
+            return {
+                name: "test-plugin",
+                prompt_segments: {
+                    alpha: () => {
+                        return "ALPHA"
+                    },
+                    empty_seg: () => {
+                        return ""
+                    }
+                }
+            }
+            "#,
+        );
+
+        let (mut eval, _) = eval_with_evaluator("");
+        eval.plugin_manager.search_paths.insert(0, temp_dir.clone());
+        assert_eq!(
+            eval.load_plugin("test-plugin"),
+            Ok("test-plugin".to_string())
+        );
+
+        let prompt_obj = eval.get_var(0, "prompt").expect("prompt exists");
+        let order = prompt_obj.get_property("order").unwrap().to_string();
+        assert!(order.contains("alpha"));
+        assert!(order.contains("empty_seg"));
+
+        // empty_seg returns "" so it must be omitted
+        let rendered = eval.render_prompt_segments(Some("alpha empty_seg"), None, None);
+        assert_eq!(rendered, "ALPHA");
+
+        // Custom separator
+        let rendered_sep = eval.render_prompt_segments(Some("cwd alpha"), Some(" -> "), None);
+        assert!(rendered_sep.contains(" -> ALPHA"));
+
+        // Unload removes segments
+        assert!(eval.unload_plugin("test-plugin"));
+        let prompt_after_unload = eval.get_var(0, "prompt").expect("prompt exists");
+        let order_after = prompt_after_unload
+            .get_property("order")
+            .unwrap()
+            .to_string();
+        assert!(!order_after.contains("alpha"));
+        assert!(!order_after.contains("empty_seg"));
+        assert_eq!(order_after, "[\"cwd\"]");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn native_array_literals_indexing_methods_and_operations() {
+        let (mut eval, _) = eval_with_evaluator("");
+
+        let script = r#"
+        let arr = ["first", 20, "third"];
+        let first = $arr[0];
+        let last = $arr[-1];
+        let len_prop = $arr.len;
+        let len_call = $arr.len();
+        
+        $arr[0] = "updated_first";
+        $arr.push("fourth");
+        let popped = $arr.pop();
+        let joined = $arr.join("-");
+        let has_twenty = $arr.contains(20);
+        let has_missing = $arr.contains("missing");
+
+        let combined = [1, 2] + [3, 4];
+        let appended = [1, 2] + 3;
+        "#;
+
+        let statements = Parser::new(0, lexer::lex_input(0, script).unwrap())
+            .parse_program()
+            .unwrap();
+        eval.evaluate_statements(&statements.body, &mut vec![0]);
+
+        assert_eq!(
+            eval.get_var(0, "first"),
+            Some(&Value::String("first".to_string()))
+        );
+        assert_eq!(
+            eval.get_var(0, "last"),
+            Some(&Value::String("third".to_string()))
+        );
+        assert_eq!(eval.get_var(0, "len_prop"), Some(&Value::Number(3.0)));
+        assert_eq!(eval.get_var(0, "len_call"), Some(&Value::Number(3.0)));
+
+        let arr_val = eval.get_var(0, "arr").expect("arr exists");
+        if let Value::Array(a) = arr_val {
+            let guard = a.read().unwrap();
+            assert_eq!(guard[0], Value::String("updated_first".to_string()));
+            assert_eq!(guard.len(), 3);
+        } else {
+            panic!("Expected Value::Array");
+        }
+
+        assert_eq!(
+            eval.get_var(0, "popped"),
+            Some(&Value::String("fourth".to_string()))
+        );
+        assert_eq!(
+            eval.get_var(0, "joined"),
+            Some(&Value::String("updated_first-20-third".to_string()))
+        );
+        assert_eq!(eval.get_var(0, "has_twenty"), Some(&Value::Bool(true)));
+        assert_eq!(eval.get_var(0, "has_missing"), Some(&Value::Bool(false)));
+
+        let combined_val = eval.get_var(0, "combined").expect("combined exists");
+        assert_eq!(
+            combined_val,
+            &Value::array(vec![
+                Value::Number(1.0),
+                Value::Number(2.0),
+                Value::Number(3.0),
+                Value::Number(4.0),
+            ])
+        );
+
+        let appended_val = eval.get_var(0, "appended").expect("appended exists");
+        assert_eq!(
+            appended_val,
+            &Value::array(vec![
+                Value::Number(1.0),
+                Value::Number(2.0),
+                Value::Number(3.0),
+            ])
+        );
+    }
+
+    #[test]
+    fn prompt_order_with_native_array_literal() {
+        let (mut eval, _) = eval_with_evaluator("");
+
+        let script = r#"
+        $prompt.order = ["cwd"];
+        let rendered = $prompt.render();
+        "#;
+
+        let statements = Parser::new(0, lexer::lex_input(0, script).unwrap())
+            .parse_program()
+            .unwrap();
+        eval.evaluate_statements(&statements.body, &mut vec![0]);
+
+        let rendered = eval.get_var(0, "rendered").expect("rendered exists");
+        assert!(!rendered.to_string().is_empty());
+    }
+
+    #[test]
+    fn command_with_array_expansion_and_indexing() {
+        let (mut eval, _) = eval_with_evaluator("");
+
+        let script = r#"
+        let words = ["one", "two", "three"];
+        let out_full = $(echo $words).out;
+        let out_idx = $(echo $words[0] $words[-1]).out;
+        "#;
+
+        let statements = Parser::new(0, lexer::lex_input(0, script).unwrap())
+            .parse_program()
+            .unwrap();
+        eval.evaluate_statements(&statements.body, &mut vec![0]);
+
+        let out_full = eval.get_var(0, "out_full").unwrap().to_string();
+        let out_idx = eval.get_var(0, "out_idx").unwrap().to_string();
+        assert_eq!(out_full.trim(), "one two three");
+        assert_eq!(out_idx.trim(), "one three");
+
+        let script_brackets = r#"
+        let out_brackets = $(echo [0-9]).out;
+        let out_compound = $(echo --flag=[val]).out;
+        "#;
+        let stmts_brackets = Parser::new(0, lexer::lex_input(0, script_brackets).unwrap())
+            .parse_program()
+            .unwrap();
+        eval.evaluate_statements(&stmts_brackets.body, &mut vec![0]);
+
+        let out_brackets = eval.get_var(0, "out_brackets").unwrap().to_string();
+        let out_compound = eval.get_var(0, "out_compound").unwrap().to_string();
+        assert_eq!(out_brackets.trim(), "[0-9]");
+        assert_eq!(out_compound.trim(), "--flag=[val]");
+    }
+
+    #[test]
+    fn command_with_escapes_and_line_continuations() {
+        let (mut eval, _) = eval_with_evaluator("");
+
+        let script = "let out_space = $(echo My\\ Documents).out;\n\
+                      let out_escapes = $(echo {} \\; \\$NOT_EXPANDED).out;\n\
+                      let out_continuation = $(echo line1 \\\n line2).out;";
+
+        let statements = Parser::new(0, lexer::lex_input(0, script).unwrap())
+            .parse_program()
+            .unwrap();
+        eval.evaluate_statements(&statements.body, &mut vec![0]);
+
+        let out_space = eval.get_var(0, "out_space").unwrap().to_string();
+        let out_escapes = eval.get_var(0, "out_escapes").unwrap().to_string();
+        let out_continuation = eval.get_var(0, "out_continuation").unwrap().to_string();
+
+        assert_eq!(out_space.trim(), "My Documents");
+        assert_eq!(out_escapes.trim(), "{} ; $NOT_EXPANDED");
+        assert_eq!(out_continuation.trim(), "line1 line2");
     }
 }

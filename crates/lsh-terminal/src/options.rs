@@ -127,7 +127,29 @@ impl From<Options> for HashMap<String, Value> {
 
 impl From<Options> for Value {
     fn from(value: Options) -> Self {
-        Value::Object(value.into())
+        let map: HashMap<String, Value> = value.into();
+        Value::from(map)
+    }
+}
+
+impl From<&Value> for Options {
+    fn from(value: &Value) -> Self {
+        match value {
+            Value::Object(map) => {
+                let map = match map.read() {
+                    Ok(g) => g,
+                    Err(p) => p.into_inner(),
+                };
+                Options::from(&*map)
+            }
+            _ => Options::default(),
+        }
+    }
+}
+
+impl From<Value> for Options {
+    fn from(value: Value) -> Self {
+        Options::from(&value)
     }
 }
 

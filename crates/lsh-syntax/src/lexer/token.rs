@@ -120,16 +120,21 @@ impl TokenKind {
 pub struct Token {
     pub kind: TokenKind,
     pub offset: usize,
+    pub len: usize,
 }
 
 impl fmt::Display for Token {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Token{{ kind: {}, offset: {} }}", self.kind, self.offset)
+        write!(
+            f,
+            "Token{{ kind: {}, offset: {}, len: {} }}",
+            self.kind, self.offset, self.len
+        )
     }
 }
 
 impl Token {
-    pub fn new(kind: TokenKind, offset: usize) -> Self {
-        Token { kind, offset }
+    pub fn new(kind: TokenKind, offset: usize, len: usize) -> Self {
+        Token { kind, offset, len }
     }
 }
