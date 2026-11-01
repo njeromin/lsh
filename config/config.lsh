@@ -12,6 +12,24 @@ if $(which eza).code == 0 {
 # Autocomplete dropdown nerd icons (requires a Nerd Font):
 $options.nerd_icons = true
 
+# Load prompt plugins
 plugin load git-prompt
 
+# Prompt configuration:
+# lsh uses a modular segment-based prompt system.
+# Built-in segments: "cwd"
+# Plugin segments: "git" (from git-prompt)
+# You can define segment ordering using first-class array literals:
+$prompt.order = ["cwd", "git"]
+
+# Separator placed between prompt segments:
+$prompt.separator = " "
+
+# Custom segments can also be registered directly:
+# $prompt.segments.time = () => {
+#     return $palette.dim + $(date +%H:%M).out.trim()
+# }
+# $prompt.order.push("time")
+
+# The prompt character / symbol rendered on the input line:
 $prompt.text = $palette.bright_magenta + "$ " + $palette.reset
