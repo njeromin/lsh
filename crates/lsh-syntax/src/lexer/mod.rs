@@ -31,7 +31,6 @@ pub fn lex_input(src_id: usize, input: &str) -> Result<Vec<Token>, Diagnostic> {
             ';' => tokens.push(Token::new(TokenKind::Semicolon, offset, 1)),
             ',' => tokens.push(Token::new(TokenKind::Comma, offset, 1)),
             '.' => tokens.push(Token::new(TokenKind::Dot, offset, 1)),
-            ':' => tokens.push(Token::new(TokenKind::Colon, offset, 1)),
             '=' => {
                 if chars.next_if(|(_, next_char)| next_char == &'=').is_some() {
                     tokens.push(Token::new(TokenKind::EqualsEquals, offset, 2));
@@ -183,9 +182,17 @@ pub fn lex_input(src_id: usize, input: &str) -> Result<Vec<Token>, Diagnostic> {
             ')' => tokens.push(Token::new(TokenKind::RightParen, offset, 1)),
             '[' => tokens.push(Token::new(TokenKind::LeftBracket, offset, 1)),
             ']' => tokens.push(Token::new(TokenKind::RightBracket, offset, 1)),
-            '"' | '\'' => {
-                let (string, len) = lex_string_literal(src_id, input, offset, char, &mut chars)?;
+            '\'' => {
+                let (string, len) = lex_single_quoted_string(src_id, input, offset, &mut chars)?;
                 tokens.push(Token::new(TokenKind::QuotedString(string), offset, len));
+            }
+            '"' => {
+                let (string, len) = lex_double_quoted_string(src_id, input, offset, &mut chars)?;
+                tokens.push(Token::new(
+                    TokenKind::DoubleQuotedString(string),
+                    offset,
+                    len,
+                ));
             }
             '\n' => {
                 // Only add newline token if not at end of file, and the next char is not a '}'.
@@ -247,25 +254,23 @@ pub fn lex_input(src_id: usize, input: &str) -> Result<Vec<Token>, Diagnostic> {
     Ok(tokens)
 }
 
-fn lex_string_literal(
+fn lex_single_quoted_string(
     src_id: usize,
     input: &str,
     start_offset: usize,
-    delim: char,
     chars: &mut CharIndexedIter,
 ) -> Result<(String, usize), Diagnostic> {
     let mut string = String::new();
     let mut closed = false;
-    let mut end_offset = start_offset + delim.len_utf8();
+    let mut end_offset = start_offset + '\''.len_utf8();
 
     while let Some((offset, str_char)) = chars.next() {
-        if str_char == delim {
+        if str_char == '\'' {
             closed = true;
-            end_offset = offset + delim.len_utf8();
+            end_offset = offset + '\''.len_utf8();
             break;
         }
 
-        // Handle string escapes.
         if str_char == '\\' {
             let Some((esc_offset, escaped)) = chars.next() else {
                 return Err(Diagnostic::new(
@@ -282,7 +287,6 @@ fn lex_string_literal(
                 'r' => '\r',
                 't' => '\t',
                 '\\' => '\\',
-                '"' => '"',
                 '\'' => '\'',
                 '0' => '\0',
                 other => other,
@@ -291,6 +295,109 @@ fn lex_string_literal(
             string.push(resolved);
             end_offset = esc_offset + escaped.len_utf8();
             continue;
+        }
+
+        string.push(str_char);
+        end_offset = offset + str_char.len_utf8();
+    }
+
+    if !closed {
+        return Err(Diagnostic::new(
+            DiagnosticKind::LexError,
+            src_id,
+            start_offset,
+            input.len(),
+            "Unterminated string literal.",
+        ));
+    }
+
+    Ok((string, end_offset - start_offset))
+}
+
+fn lex_double_quoted_string(
+    src_id: usize,
+    input: &str,
+    start_offset: usize,
+    chars: &mut CharIndexedIter,
+) -> Result<(String, usize), Diagnostic> {
+    let mut string = String::new();
+    let mut closed = false;
+    let mut end_offset = start_offset + '"'.len_utf8();
+    let mut paren_depth = 0usize;
+    let mut brace_depth = 0usize;
+
+    while let Some((offset, str_char)) = chars.next() {
+        if paren_depth == 0 && brace_depth == 0 && str_char == '"' {
+            closed = true;
+            end_offset = offset + '"'.len_utf8();
+            break;
+        }
+
+        if str_char == '\\' {
+            string.push('\\');
+            if let Some((esc_offset, escaped)) = chars.next() {
+                string.push(escaped);
+                end_offset = esc_offset + escaped.len_utf8();
+                continue;
+            } else {
+                return Err(Diagnostic::new(
+                    DiagnosticKind::LexError,
+                    src_id,
+                    offset,
+                    offset + '\\'.len_utf8(),
+                    "Unterminated escape sequence in string literal.",
+                ));
+            }
+        }
+
+        // Check for $( and ${
+        if str_char == '$' {
+            if let Some(&(_, '(')) = chars.peek() {
+                string.push('$');
+                chars.next();
+                string.push('(');
+                paren_depth += 1;
+                end_offset = offset + 2;
+                continue;
+            } else if let Some(&(_, '{')) = chars.peek() {
+                string.push('$');
+                chars.next();
+                string.push('{');
+                brace_depth += 1;
+                end_offset = offset + 2;
+                continue;
+            }
+        }
+
+        // Inside $(...) or ${...}, handle nested quotes and parens/braces
+        if paren_depth > 0 || brace_depth > 0 {
+            if str_char == '(' {
+                paren_depth += 1;
+            } else if str_char == ')' && paren_depth > 0 {
+                paren_depth -= 1;
+            } else if str_char == '{' {
+                brace_depth += 1;
+            } else if str_char == '}' && brace_depth > 0 {
+                brace_depth -= 1;
+            } else if str_char == '"' || str_char == '\'' {
+                let quote = str_char;
+                string.push(quote);
+                while let Some((q_offset, qc)) = chars.next() {
+                    string.push(qc);
+                    if qc == '\\'
+                        && let Some((esc_offset, q_esc)) = chars.next()
+                    {
+                        string.push(q_esc);
+                        end_offset = esc_offset + q_esc.len_utf8();
+                        continue;
+                    }
+                    if qc == quote {
+                        end_offset = q_offset + quote.len_utf8();
+                        break;
+                    }
+                }
+                continue;
+            }
         }
 
         string.push(str_char);
@@ -401,34 +508,9 @@ fn lex_identifier_rest(
         }
 
         if is_ident_char(peek_char) {
-            if peek_char == ':' {
-                let (colon_offset, _) = chars.next().expect("Failed to get ':' offset.");
-                match chars.peek() {
-                    Some((_, next_char))
-                        if next_char.is_whitespace() || matches!(next_char, '}' | ',' | '\n') =>
-                    {
-                        // Stop identifier if the colon is followed by whitespace, EOF, or typical object terminators.
-                        // This allows `{ key: value }` to keep `:` as a separate token.
-                        push_identifier_or_number(
-                            tokens,
-                            ident_string,
-                            start_offset,
-                            end_offset - start_offset,
-                            has_escapes,
-                        );
-                        tokens.push(Token::new(TokenKind::Colon, colon_offset, 1));
-                        return;
-                    }
-                    _ => {
-                        ident_string.push(':');
-                        end_offset = colon_offset + ':'.len_utf8();
-                    }
-                }
-            } else {
-                let (char_offset, c) = chars.next().unwrap();
-                ident_string.push(c);
-                end_offset = char_offset + c.len_utf8();
-            }
+            let (char_offset, c) = chars.next().unwrap();
+            ident_string.push(c);
+            end_offset = char_offset + c.len_utf8();
         } else {
             break;
         }
@@ -451,11 +533,6 @@ fn push_identifier_or_number(
     has_escapes: bool,
 ) {
     if !has_escapes {
-        if ident_string == ":" {
-            tokens.push(Token::new(TokenKind::Colon, offset, len));
-            return;
-        }
-
         if ident_string == "/" {
             tokens.push(Token::new(TokenKind::Slash, offset, len));
             return;
@@ -551,17 +628,12 @@ mod tests {
     }
 
     #[test]
-    fn keeps_object_key_colon_as_colon_token() {
-        let kinds = token_kinds("let x = { key: value }");
+    fn lexes_colon_as_string_token() {
+        let kinds = token_kinds("echo :");
 
-        assert!(matches!(&kinds[0], TokenKind::Let));
-        assert!(matches!(&kinds[1], TokenKind::String(s) if s == "x"));
-        assert!(matches!(&kinds[2], TokenKind::Equals));
-        assert!(matches!(&kinds[3], TokenKind::LeftCurly));
-        assert!(matches!(&kinds[4], TokenKind::String(s) if s == "key"));
-        assert!(matches!(&kinds[5], TokenKind::Colon));
-        assert!(matches!(&kinds[6], TokenKind::String(s) if s == "value"));
-        assert!(matches!(&kinds[7], TokenKind::RightCurly));
+        assert!(matches!(&kinds[0], TokenKind::String(s) if s == "echo"));
+        assert!(matches!(&kinds[1], TokenKind::String(s) if s == ":"));
+        assert!(matches!(&kinds[2], TokenKind::EOF));
     }
 
     #[test]
@@ -629,7 +701,9 @@ mod tests {
         let kinds = token_kinds("echo \"line1\\nline2\\t\\\\\"");
 
         assert!(matches!(&kinds[0], TokenKind::String(s) if s == "echo"));
-        assert!(matches!(&kinds[1], TokenKind::QuotedString(s) if s == "line1\nline2\t\\"));
+        assert!(
+            matches!(&kinds[1], TokenKind::DoubleQuotedString(s) if s == "line1\\nline2\\t\\\\")
+        );
         assert!(matches!(&kinds[2], TokenKind::EOF));
     }
 

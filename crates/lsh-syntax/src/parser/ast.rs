@@ -42,6 +42,7 @@ pub enum Expr {
     Bool(bool),
     String(String),
     QuotedString(String),
+    InterpolatedString(Vec<Expr>),
     Object(HashMap<String, Expr>),
     Array(Vec<Expr>),
     Variable(String),

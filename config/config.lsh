@@ -17,10 +17,10 @@ plugin load git-prompt
 
 # Prompt configuration:
 # lsh uses a modular segment-based prompt system.
-# Built-in segments: "cwd"
+# Built-in segments: "newline", "cwd"
 # Plugin segments: "git" (from git-prompt)
 # You can define segment ordering using first-class array literals:
-$prompt.order = ["cwd", "git"]
+$prompt.order = ["newline", "cwd", "git"]
 
 # Separator placed between prompt segments:
 $prompt.separator = " "

@@ -133,6 +133,11 @@ impl Evaluator {
         let scope = self.scopes.first_mut().unwrap(); // TODO: Don't use unwrap.
 
         let mut segments_map = HashMap::new();
+        let newline_fn = Value::function(FunctionValue::native("newline", |_eval, _, _| {
+            Value::String(String::from("\n"))
+        }));
+        segments_map.insert(String::from("newline"), newline_fn.clone());
+        segments_map.insert(String::from("\n"), newline_fn);
         segments_map.insert(
             String::from("cwd"),
             Value::function(FunctionValue::native("cwd", |eval, _, _| {
@@ -161,7 +166,10 @@ impl Evaluator {
         );
         prompt_map.insert(
             "order".to_string(),
-            Value::array(vec![Value::String(String::from("cwd"))]),
+            Value::array(vec![
+                Value::String(String::from("newline")),
+                Value::String(String::from("cwd")),
+            ]),
         );
         prompt_map.insert("separator".to_string(), Value::String(String::from(" ")));
         prompt_map.insert("segments".to_string(), Value::object(segments_map));
@@ -440,7 +448,7 @@ impl Evaluator {
         }
 
         Err(format!(
-            "Plugin '{name_or_path}' must return an object manifest (e.g. 'return {{ name: \"...\", ... }}')."
+            "Plugin '{name_or_path}' must return an object manifest (e.g. 'return {{ name = \"...\", ... }}')."
         ))
     }
 
@@ -647,20 +655,63 @@ impl Evaluator {
                         Ok(g) => g,
                         Err(p) => p.into_inner(),
                     };
-                    if let Some(Value::Function(func)) = seg_guard.get(&name) {
-                        let rec = Some((Expr::Variable("this".to_string()), prompt_val.clone()));
-                        to_run.push(PromptSegmentInvocation {
-                            _name: name,
-                            func: Arc::clone(func),
-                            receiver: rec,
-                        });
+                    match seg_guard.get(&name) {
+                        Some(Value::Function(func)) => {
+                            let rec =
+                                Some((Expr::Variable("this".to_string()), prompt_val.clone()));
+                            to_run.push(PromptSegmentInvocation {
+                                _name: name,
+                                func: Arc::clone(func),
+                                receiver: rec,
+                            });
+                        }
+                        Some(Value::String(s)) => {
+                            let s_clone = s.clone();
+                            to_run.push(PromptSegmentInvocation {
+                                _name: name,
+                                func: Arc::new(FunctionValue::native(
+                                    "static_text",
+                                    move |_, _, _| Value::String(s_clone.clone()),
+                                )),
+                                receiver: None,
+                            });
+                        }
+                        _ => {
+                            if name == "newline" || name == "\n" {
+                                to_run.push(PromptSegmentInvocation {
+                                    _name: name,
+                                    func: Arc::new(FunctionValue::native(
+                                        "newline",
+                                        |_eval, _, _| Value::String(String::from("\n")),
+                                    )),
+                                    receiver: None,
+                                });
+                            }
+                        }
                     }
+                } else if name == "newline" || name == "\n" {
+                    to_run.push(PromptSegmentInvocation {
+                        _name: name,
+                        func: Arc::new(FunctionValue::native("newline", |_eval, _, _| {
+                            Value::String(String::from("\n"))
+                        })),
+                        receiver: None,
+                    });
                 }
+            } else if name == "newline" || name == "\n" {
+                to_run.push(PromptSegmentInvocation {
+                    _name: name,
+                    func: Arc::new(FunctionValue::native("newline", |_eval, _, _| {
+                        Value::String(String::from("\n"))
+                    })),
+                    receiver: None,
+                });
             }
         }
 
         let mut rendered = Vec::new();
         for invocation in to_run {
+            let is_newline_segment = invocation._name == "newline" || invocation._name == "\n";
             let val =
                 self.exec_function_with_receiver(&invocation.func, vec![], invocation.receiver);
             let text = match val {
@@ -669,13 +720,37 @@ impl Evaluator {
                 Value::Bool(b) => b.to_string(),
                 _ => String::new(),
             };
-            let trimmed = text.trim_end_matches('\n');
-            if !trimmed.is_empty() {
-                rendered.push(trimmed.to_string());
+
+            let cleaned = if text == "\n" || is_newline_segment {
+                text
+            } else {
+                text.trim_end_matches('\n').to_string()
+            };
+
+            if !cleaned.is_empty() {
+                rendered.push(cleaned);
             }
         }
 
-        rendered.join(separator)
+        let mut final_rendered = String::new();
+        for part in rendered {
+            if part.is_empty() {
+                continue;
+            }
+            if part == "\n" {
+                final_rendered.push('\n');
+            } else {
+                if !final_rendered.is_empty()
+                    && !final_rendered.ends_with('\n')
+                    && !part.starts_with('\n')
+                {
+                    final_rendered.push_str(separator);
+                }
+                final_rendered.push_str(&part);
+            }
+        }
+
+        final_rendered
     }
 
     pub fn push_var(&mut self, scope_index: usize, name: String, value: Value) {
@@ -1875,7 +1950,7 @@ impl Evaluator {
 
     fn expr_has_unquoted_glob_or_tilde(expr: &Expr) -> (bool, bool) {
         match expr {
-            Expr::QuotedString(_) => (false, false),
+            Expr::QuotedString(_) | Expr::InterpolatedString(_) => (false, false),
             Expr::String(s) => {
                 let has_tilde = s.starts_with('~');
                 let has_glob = expand::has_glob_metachars(s);
@@ -2098,6 +2173,33 @@ impl Evaluator {
                 let args = expand::expand_args(args, ExpandCtx::default());
 
                 if is_secondary {
+                    if let Some(val) = self.scoped_var(word, scope_indices) {
+                        return val;
+                    }
+                    if word.contains('.') {
+                        let parts: Vec<&str> = word.split('.').collect();
+                        if let Some(base_val) = self.scoped_var(parts[0], scope_indices) {
+                            let mut cur = base_val;
+                            for part in &parts[1..] {
+                                cur = match cur {
+                                    Value::Object(map) => {
+                                        let guard = match map.read() {
+                                            Ok(g) => g,
+                                            Err(p) => p.into_inner(),
+                                        };
+                                        guard.get(*part).cloned().unwrap_or(Value::Null)
+                                    }
+                                    _ => Value::Null,
+                                };
+                            }
+                            if !matches!(cur, Value::Null) {
+                                return cur;
+                            }
+                        }
+                    }
+                    if let Ok(env_var) = env::var(word) {
+                        return Value::String(env_var);
+                    }
                     return Value::String(word.to_owned());
                 }
 
@@ -2108,6 +2210,11 @@ impl Evaluator {
                 Value::Null
             }
             Expr::Variable(var_name) => {
+                if var_name.contains('.') {
+                    let expanded_target = Self::path_to_expr(var_name);
+                    return self.evaluate_expr(&expanded_target, is_secondary, scope_indices);
+                }
+
                 if let Some(value) = self.scoped_var(var_name, scope_indices) {
                     return value;
                 }
@@ -2287,6 +2394,32 @@ impl Evaluator {
                 Value::String(evaluated_value.get_type().to_string())
             }
             Expr::String(string) | Expr::QuotedString(string) => Value::String(string.to_owned()),
+            Expr::InterpolatedString(parts) => {
+                let mut buf = String::new();
+                for part in parts {
+                    let val = self.evaluate_expr(part, true, scope_indices);
+                    match val {
+                        Value::Object(map) => {
+                            let guard = match map.read() {
+                                Ok(g) => g,
+                                Err(p) => p.into_inner(),
+                            };
+                            if let (Some(_code), Some(out)) = (guard.get("code"), guard.get("out"))
+                            {
+                                let out_str = out.to_string();
+                                buf.push_str(out_str.trim_end_matches(['\r', '\n']));
+                            } else {
+                                drop(guard);
+                                buf.push_str(&Value::Object(map).to_string());
+                            }
+                        }
+                        other => {
+                            buf.push_str(&other.to_string());
+                        }
+                    }
+                }
+                Value::String(buf)
+            }
             Expr::Number(num) => Value::Number(*num),
             Expr::Bool(bool) => Value::Bool(*bool),
             Expr::CommandSub(expr) => {
@@ -2658,8 +2791,8 @@ mod tests {
         let res = eval_var(
             r#"
             let person = {
-                name: "Alice",
-                greet: () => {
+                name = "Alice",
+                greet = () => {
                     return "Hello, " + $this.name
                 }
             }
@@ -2675,8 +2808,8 @@ mod tests {
         let res = eval_var(
             r#"
             let counter = {
-                count: 0,
-                inc: () => {
+                count = 0,
+                inc = () => {
                     $this.count = $this.count + 1
                     return $this.count
                 }
@@ -2695,8 +2828,8 @@ mod tests {
         let res = eval_var(
             r#"
             let greeter = {
-                prefix: "Hi",
-                greet: (target) => {
+                prefix = "Hi",
+                greet = (target) => {
                     return $this.prefix + " " + $target
                 }
             }
@@ -2712,12 +2845,12 @@ mod tests {
         let res = eval_var(
             r#"
             let counter = {
-                count: 0,
-                inc: () => {
+                count = 0,
+                inc = () => {
                     $this.count = $this.count + 1
                     return $this.count
                 },
-                add_two: () => {
+                add_two = () => {
                     $this.inc()
                     $this.inc()
                     return $this.count
@@ -2736,9 +2869,9 @@ mod tests {
         let res = eval_var(
             r#"
             let user = {
-                stats: {
-                    score: 10,
-                    add: (pts) => {
+                stats = {
+                    score = 10,
+                    add = (pts) => {
                         $this.score = $this.score + $pts
                     }
                 }
@@ -2755,7 +2888,7 @@ mod tests {
     fn fn_declaration_on_object_binds_this() {
         let res = eval_var(
             r#"
-            let obj = { x: 42 }
+            let obj = { x = 42 }
             fn obj.get_x() {
                 return $this.x
             }
@@ -2770,7 +2903,7 @@ mod tests {
     fn object_variables_share_reference_mutations() {
         let res = eval_var(
             r#"
-            let a = { count: 1 }
+            let a = { count = 1 }
             let b = $a
             $b.count = 42
             let res = $a.count
@@ -2787,7 +2920,7 @@ mod tests {
             fn mutate_obj(target) {
                 $target.modified = true
             }
-            let my_obj = { modified: false }
+            let my_obj = { modified = false }
             mutate_obj $my_obj
             let res = $my_obj.modified
             "#,
@@ -2800,9 +2933,9 @@ mod tests {
     fn object_reference_equality_in_evaluator() {
         let res = eval_var(
             r#"
-            let a = { x: 1 }
+            let a = { x = 1 }
             let b = $a
-            let c = { x: 1 }
+            let c = { x = 1 }
             let same_ref = $a == $b
             "#,
             "same_ref",
@@ -2811,8 +2944,8 @@ mod tests {
 
         let res_deep = eval_var(
             r#"
-            let a = { x: 1 }
-            let c = { x: 1 }
+            let a = { x = 1 }
+            let c = { x = 1 }
             let deep_eq = $a == $c
             "#,
             "deep_eq",
@@ -2846,12 +2979,12 @@ mod tests {
             "test-plugin",
             r#"
             return {
-                name: "test-plugin",
-                version: "1.0.0",
-                description: "Test plugin",
-                prefix: ">>",
-                commands: {
-                    echo_prefixed: (msg) => {
+                name = "test-plugin",
+                version = "1.0.0",
+                description = "Test plugin",
+                prefix = ">>",
+                commands = {
+                    echo_prefixed = (msg) => {
                         return $this.prefix + " " + $msg
                     }
                 }
@@ -2887,17 +3020,17 @@ mod tests {
             "git-plugin",
             r#"
             return {
-                name: "git-plugin",
-                hooks: {
-                    on_chpwd: (old_p, new_p) => {
+                name = "git-plugin",
+                hooks = {
+                    on_chpwd = (old_p, new_p) => {
                         $this.current_dir = $new_p
                     },
-                    on_pre_prompt: () => {
+                    on_pre_prompt = () => {
                         $this.prompt_runs = 1
                     }
                 },
-                current_dir: "",
-                prompt_runs: 0
+                current_dir = "",
+                prompt_runs = 0
             }
             "#,
         );
@@ -2930,9 +3063,9 @@ mod tests {
             "temp-plugin",
             r#"
             return {
-                name: "temp-plugin",
-                commands: {
-                    temp_cmd: () => "temp"
+                name = "temp-plugin",
+                commands = {
+                    temp_cmd = () => "temp"
                 }
             }
             "#,
@@ -2960,10 +3093,10 @@ mod tests {
             "file-plugin",
             r#"
             return {
-                name: "file-plugin",
-                version: "2.0.0",
-                commands: {
-                    file_cmd: () => "from-file"
+                name = "file-plugin",
+                version = "2.0.0",
+                commands = {
+                    file_cmd = () => "from-file"
                 }
             }
             "#,
@@ -2987,7 +3120,7 @@ mod tests {
             "invalid-plugin",
             r#"
             let plugin = {
-                name: "invalid-plugin"
+                name = "invalid-plugin"
             }
             "#,
         );
@@ -3028,6 +3161,7 @@ mod tests {
         assert_eq!(
             order,
             Some(Value::array(vec![
+                Value::String("newline".to_string()),
                 Value::String("cwd".to_string()),
                 Value::String("git".to_string()),
             ]))
@@ -3072,12 +3206,12 @@ mod tests {
             "test-plugin",
             r#"
             return {
-                name: "test-plugin",
-                prompt_segments: {
-                    alpha: () => {
+                name = "test-plugin",
+                prompt_segments = {
+                    alpha = () => {
                         return "ALPHA"
                     },
-                    empty_seg: () => {
+                    empty_seg = () => {
                         return ""
                     }
                 }
@@ -3114,8 +3248,35 @@ mod tests {
             .to_string();
         assert!(!order_after.contains("alpha"));
         assert!(!order_after.contains("empty_seg"));
-        assert_eq!(order_after, "[\"cwd\"]");
+        assert_eq!(order_after, "[\"newline\", \"cwd\"]");
         let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn prompt_newline_segment_behavior() {
+        let (mut eval, _) = eval_with_evaluator("");
+
+        // 1. Leading newline is emitted cleanly without separator space after it
+        let rendered = eval.render_prompt_segments(Some("newline cwd"), None, None);
+        assert!(
+            rendered.starts_with('\n'),
+            "Leading newline should be emitted"
+        );
+        assert!(
+            !rendered.starts_with("\n "),
+            "Newline should not have separator space after it"
+        );
+        assert!(rendered.contains("\x1b[1;34m"));
+
+        // 2. Omission of newline gives a compact prompt without newline
+        let rendered_compact = eval.render_prompt_segments(Some("cwd"), None, None);
+        assert!(!rendered_compact.starts_with('\n'));
+
+        // 3. Middle newline is emitted cleanly for multi-line prompts
+        let rendered_multiline = eval.render_prompt_segments(Some("cwd newline cwd"), None, None);
+        assert!(rendered_multiline.contains('\n'));
+        assert!(!rendered_multiline.contains(" \n"));
+        assert!(!rendered_multiline.contains("\n "));
     }
 
     #[test]
@@ -3271,5 +3432,78 @@ mod tests {
         assert_eq!(out_space.trim(), "My Documents");
         assert_eq!(out_escapes.trim(), "{} ; $NOT_EXPANDED");
         assert_eq!(out_continuation.trim(), "line1 line2");
+    }
+
+    #[test]
+    fn evaluates_interpolated_string_with_variables_and_expressions() {
+        let code = r#"
+            let name = "world"
+            let msg = "Hello $name!"
+            let a = 10
+            let b = 20
+            let calc = "Sum: ${a + b}"
+            let single = 'Raw $name unexpanded'
+            let escaped = "Cost: \$100"
+        "#;
+        assert_eq!(
+            eval_var(code, "msg"),
+            Some(Value::String("Hello world!".to_string()))
+        );
+        assert_eq!(
+            eval_var(code, "calc"),
+            Some(Value::String("Sum: 30".to_string()))
+        );
+        assert_eq!(
+            eval_var(code, "single"),
+            Some(Value::String("Raw $name unexpanded".to_string()))
+        );
+        assert_eq!(
+            eval_var(code, "escaped"),
+            Some(Value::String("Cost: $100".to_string()))
+        );
+    }
+
+    #[test]
+    fn evaluates_interpolated_string_with_dot_path_and_indexing() {
+        let code = r#"
+            let user = { name = "Alice", role = "admin" }
+            let greeting = "Welcome ${user.name} (${$user.role})"
+            let items = ["first", "second"]
+            let item_msg = "Item 0: ${items[0]}"
+        "#;
+        assert_eq!(
+            eval_var(code, "greeting"),
+            Some(Value::String("Welcome Alice (admin)".to_string()))
+        );
+        assert_eq!(
+            eval_var(code, "item_msg"),
+            Some(Value::String("Item 0: first".to_string()))
+        );
+    }
+
+    #[test]
+    fn evaluates_interpolated_string_with_command_sub() {
+        let code = r#"
+            let msg = "Output: $(echo hi)"
+        "#;
+        assert_eq!(
+            eval_var(code, "msg"),
+            Some(Value::String("Output: hi".to_string()))
+        );
+    }
+
+    #[test]
+    fn evaluates_interpolated_string_in_command_arguments() {
+        let (mut eval, _) = eval_with_evaluator("");
+        let script = r#"
+            let who = "LSH"
+            let out = $(echo "Hello $who!").out
+        "#;
+        let statements = Parser::new(0, lexer::lex_input(0, script).unwrap())
+            .parse_program()
+            .unwrap();
+        eval.evaluate_statements(&statements.body, &mut vec![0]);
+        let out = eval.get_var(0, "out").unwrap().to_string();
+        assert_eq!(out.trim(), "Hello LSH!");
     }
 }

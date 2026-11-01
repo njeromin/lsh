@@ -158,7 +158,7 @@ fn token_style(token: &Token, _span: &str, is_command_sub_close: bool) -> Option
         | TokenKind::Return => Some("\x1b[1;35m"),
         TokenKind::Variable(_) => Some("\x1b[36m"),
         TokenKind::Number(_) | TokenKind::Bool(_) => Some("\x1b[33m"),
-        TokenKind::QuotedString(_) => Some("\x1b[32m"),
+        TokenKind::QuotedString(_) | TokenKind::DoubleQuotedString(_) => Some("\x1b[32m"),
         TokenKind::Pipe
         | TokenKind::And
         | TokenKind::Or
@@ -190,8 +190,7 @@ fn token_style(token: &Token, _span: &str, is_command_sub_close: bool) -> Option
         | TokenKind::RightBracket
         | TokenKind::Comma
         | TokenKind::Dot
-        | TokenKind::Semicolon
-        | TokenKind::Colon => Some("\x1b[2m"),
+        | TokenKind::Semicolon => Some("\x1b[2m"),
         TokenKind::String(_) | TokenKind::NewLine | TokenKind::EOF => None,
     }
 }

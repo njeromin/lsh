@@ -75,7 +75,10 @@ impl Parser {
                 Ok(Statement::Block(statements))
             }
             TokenKind::Dot | TokenKind::Slash => Ok(Statement::Command(self.parse_command_expr()?)),
-            TokenKind::String(_) | TokenKind::QuotedString(_) | TokenKind::Variable(_) => {
+            TokenKind::String(_)
+            | TokenKind::QuotedString(_)
+            | TokenKind::DoubleQuotedString(_)
+            | TokenKind::Variable(_) => {
                 let initial_index = self.index;
                 let expr = match self.parse_postfix() {
                     Ok(expr) => expr,
@@ -323,6 +326,14 @@ impl Parser {
         if let Some(compound_arg) = self.try_parse_command_equals_compound_arg() {
             let end_offset = self.end_offset_of_last_consumed_token();
             return Ok(Some((compound_arg, end_offset)));
+        }
+
+        if let TokenKind::DoubleQuotedString(s) = &self.current().kind {
+            let token = self.current().to_owned();
+            let parsed = Self::parse_interpolated_string(self.src_id, s, token.offset)?;
+            self.advance();
+            let end_offset = token.offset + Self::token_source_len(&token);
+            return Ok(Some((parsed, end_offset)));
         }
 
         if let Some(literal) = Self::token_kind_to_command_literal(&self.current().kind) {
@@ -779,8 +790,10 @@ impl Parser {
 
         let expr = match &self.current().kind {
             TokenKind::Number(n) => Expr::Number(*n),
-            TokenKind::Colon => Expr::String(":".to_string()),
             TokenKind::QuotedString(s) => Expr::QuotedString(s.clone()),
+            TokenKind::DoubleQuotedString(s) => {
+                Self::parse_interpolated_string(self.src_id, s, self.current().offset)?
+            }
             TokenKind::String(s) => {
                 // Check if this is the start of an anonymous function: x => ...
                 if self.check_peek(1, &TokenKind::FatArrow) {
@@ -802,7 +815,27 @@ impl Parser {
                         }
 
                         // This should really just use some form of parse_primary/parse_expr.
-                        if let Some(arg_expr) =
+                        if let TokenKind::DoubleQuotedString(raw) = &next_token.kind {
+                            let parsed = Self::parse_interpolated_string(
+                                self.src_id,
+                                raw,
+                                next_token.offset,
+                            )?;
+                            self.advance(); // Move to literal.
+
+                            if is_contiguous && !args.is_empty() {
+                                let previous = args
+                                    .pop()
+                                    .expect("Expected previous argument while concatenating.");
+                                args.push(Expr::Binary {
+                                    op: BinaryOp::Add,
+                                    left: Box::new(previous),
+                                    right: Box::new(parsed),
+                                });
+                            } else {
+                                args.push(parsed);
+                            }
+                        } else if let Some(arg_expr) =
                             Self::token_kind_to_primary_call_arg_literal(&next_token.kind)
                         {
                             self.advance(); // Move to literal.
@@ -837,9 +870,19 @@ impl Parser {
                                     break;
                                 }
 
-                                let Some(part_expr) =
+                                let part_expr = if let TokenKind::DoubleQuotedString(raw) =
+                                    &next_part.kind
+                                {
+                                    Self::parse_interpolated_string(
+                                        self.src_id,
+                                        raw,
+                                        next_part.offset,
+                                    )?
+                                } else if let Some(part_expr) =
                                     Self::token_kind_to_primary_call_arg_literal(&next_part.kind)
-                                else {
+                                {
+                                    part_expr
+                                } else {
                                     break;
                                 };
 
@@ -873,9 +916,19 @@ impl Parser {
                                     break;
                                 }
 
-                                if let Some(arg_expr) = Self::token_kind_to_primary_call_arg_literal(
-                                    &self.current().kind,
-                                ) {
+                                if let TokenKind::DoubleQuotedString(raw) = &self.current().kind {
+                                    let parsed = Self::parse_interpolated_string(
+                                        self.src_id,
+                                        raw,
+                                        self.current().offset,
+                                    )?;
+                                    args.push(parsed);
+                                    break;
+                                } else if let Some(arg_expr) =
+                                    Self::token_kind_to_primary_call_arg_literal(
+                                        &self.current().kind,
+                                    )
+                                {
                                     args.push(arg_expr);
                                     break;
                                 } else if let TokenKind::Variable(var) = &self.current().kind {
@@ -899,12 +952,13 @@ impl Parser {
                                 break;
                             }
                         } else if matches!(next_token.kind, TokenKind::Dot) {
-                            // Keep dotted literals correct:
-                            // - spaced: `git add .` => "." as separate arg
-                            // - contiguous: `..`, `file.txt` => concatenate
                             let current = self.current().to_owned();
                             let is_contiguous = next_token.offset
                                 == current.offset + Self::token_source_len(&current);
+
+                            if is_contiguous && args.is_empty() {
+                                break;
+                            }
 
                             if !is_contiguous {
                                 self.advance(); // Move to '.'
@@ -1008,7 +1062,9 @@ impl Parser {
 
                 if matches!(
                     self.current().kind,
-                    TokenKind::String(_) | TokenKind::QuotedString(_)
+                    TokenKind::String(_)
+                        | TokenKind::QuotedString(_)
+                        | TokenKind::DoubleQuotedString(_)
                 ) {
                     let cmd_expr = self.parse_command_expr_until(&[TokenKind::RightParen])?;
                     self.consume(
@@ -1046,14 +1102,16 @@ impl Parser {
                     }
 
                     let key = match &self.current().kind {
-                        TokenKind::String(s) | TokenKind::QuotedString(s) => s.clone(),
+                        TokenKind::String(s)
+                        | TokenKind::QuotedString(s)
+                        | TokenKind::DoubleQuotedString(s) => s.clone(),
                         TokenKind::Variable(v) => v.clone(),
                         TokenKind::Number(n) => n.to_string(),
                         _ => return self.error_here("Expected object key"),
                     };
 
                     self.advance();
-                    self.consume(&TokenKind::Colon, "Expected ':' after object key")?;
+                    self.consume(&TokenKind::Equals, "Expected '=' after object key")?;
 
                     let value = self.parse_expr()?;
 
@@ -1163,7 +1221,6 @@ impl Parser {
             // Treat punctuation/operator tokens as literal string arguments in command context.
             TokenKind::Comma => Some(Expr::String(",".to_string())),
             TokenKind::Dot => Some(Expr::String(".".to_string())),
-            TokenKind::Colon => Some(Expr::String(":".to_string())),
             TokenKind::Minus => Some(Expr::String("-".to_string())),
             TokenKind::Plus => Some(Expr::String("+".to_string())),
             TokenKind::Star => Some(Expr::String("*".to_string())),
@@ -1229,7 +1286,6 @@ impl Parser {
             // Keep these for command-like expression args only.
             TokenKind::Star => Some(Expr::String("*".to_string())),
             TokenKind::Slash => Some(Expr::String("/".to_string())),
-            TokenKind::Colon => Some(Expr::String(":".to_string())),
             _ => None,
         }
     }
@@ -1426,7 +1482,8 @@ impl Parser {
     fn token_kind_label(kind: &TokenKind) -> String {
         match kind {
             TokenKind::String(s) => format!("'{s}'"),
-            TokenKind::QuotedString(s) => format!("\"{s}\""),
+            TokenKind::QuotedString(s) => format!("'{s}'"),
+            TokenKind::DoubleQuotedString(s) => format!("\"{s}\""),
             TokenKind::Variable(v) => format!("'${v}'"),
             TokenKind::Number(n) => format!("'{n}'"),
             TokenKind::Bool(b) => format!("'{b}'"),
@@ -1468,7 +1525,6 @@ impl Parser {
             TokenKind::Comma => "','".to_string(),
             TokenKind::Dot => "'.'".to_string(),
             TokenKind::Semicolon => "';'".to_string(),
-            TokenKind::Colon => "':'".to_string(),
             TokenKind::NewLine => "newline".to_string(),
             TokenKind::EOF => "end of input".to_string(),
             TokenKind::Ampersand => "'&'".to_string(),
@@ -1513,6 +1569,232 @@ impl Parser {
         hint: impl Into<String>,
     ) -> Result<T, Diagnostic> {
         Err(self.diagnostic_here_with_hint(message, hint))
+    }
+
+    pub fn parse_interpolated_string(
+        src_id: usize,
+        raw: &str,
+        base_offset: usize,
+    ) -> Result<Expr, Diagnostic> {
+        let mut parts: Vec<Expr> = Vec::new();
+        let mut current_literal = String::new();
+        let mut chars = raw.char_indices().peekable();
+        let content_base = base_offset + 1; // skip leading '"'
+
+        while let Some((idx, ch)) = chars.next() {
+            if ch == '\\' {
+                let Some((_, next_ch)) = chars.next() else {
+                    return Err(Diagnostic::new(
+                        DiagnosticKind::ParseError,
+                        src_id,
+                        content_base + idx,
+                        content_base + idx + 1,
+                        "Unterminated escape sequence in string literal.",
+                    ));
+                };
+                match next_ch {
+                    'n' => current_literal.push('\n'),
+                    'r' => current_literal.push('\r'),
+                    't' => current_literal.push('\t'),
+                    '0' => current_literal.push('\0'),
+                    '\\' => current_literal.push('\\'),
+                    '"' => current_literal.push('"'),
+                    '\'' => current_literal.push('\''),
+                    '$' => current_literal.push('$'),
+                    other => {
+                        current_literal.push(other);
+                    }
+                }
+                continue;
+            }
+
+            if ch == '$' {
+                if let Some(&(_, '(')) = chars.peek() {
+                    chars.next(); // consume '('
+                    let sub_start_idx = idx; // starts at '$'
+
+                    let mut paren_depth = 1usize;
+                    let mut expr_end_idx = None;
+
+                    while let Some((inner_idx, inner_ch)) = chars.next() {
+                        if inner_ch == '\\' {
+                            chars.next();
+                            continue;
+                        }
+                        if inner_ch == '"' || inner_ch == '\'' {
+                            let quote = inner_ch;
+                            while let Some((_, qc)) = chars.next() {
+                                if qc == '\\' {
+                                    chars.next();
+                                    continue;
+                                }
+                                if qc == quote {
+                                    break;
+                                }
+                            }
+                            continue;
+                        }
+                        if inner_ch == '(' {
+                            paren_depth += 1;
+                        } else if inner_ch == ')' {
+                            paren_depth -= 1;
+                            if paren_depth == 0 {
+                                expr_end_idx = Some(inner_idx);
+                                break;
+                            }
+                        }
+                    }
+
+                    let Some(sub_end_idx) = expr_end_idx else {
+                        return Err(Diagnostic::new(
+                            DiagnosticKind::ParseError,
+                            src_id,
+                            content_base + sub_start_idx,
+                            content_base + raw.len(),
+                            "Unterminated command substitution in string interpolation.",
+                        ));
+                    };
+
+                    let cmd_raw_with_dollar = &raw[sub_start_idx..=sub_end_idx];
+
+                    let tokens = crate::lexer::lex_input(src_id, cmd_raw_with_dollar).map_err(
+                        |mut diag| {
+                            diag.source.start += content_base + sub_start_idx;
+                            diag.source.end += content_base + sub_start_idx;
+                            diag
+                        },
+                    )?;
+
+                    let mut parser = Parser::new(src_id, tokens);
+                    let parsed_expr = parser.parse_primary().map_err(|mut diag| {
+                        diag.source.start += content_base + sub_start_idx;
+                        diag.source.end += content_base + sub_start_idx;
+                        diag
+                    })?;
+
+                    if !current_literal.is_empty() {
+                        parts.push(Expr::QuotedString(std::mem::take(&mut current_literal)));
+                    }
+                    parts.push(parsed_expr);
+                    continue;
+                }
+
+                if let Some(&(_, '{')) = chars.peek() {
+                    chars.next(); // consume '{'
+                    let sub_start_idx = idx; // starts at '$'
+                    let expr_start_idx = idx + 2; // after '${'
+
+                    let mut brace_depth = 1usize;
+                    let mut expr_end_idx = None;
+
+                    while let Some((inner_idx, inner_ch)) = chars.next() {
+                        if inner_ch == '\\' {
+                            chars.next();
+                            continue;
+                        }
+                        if inner_ch == '"' || inner_ch == '\'' {
+                            let quote = inner_ch;
+                            while let Some((_, qc)) = chars.next() {
+                                if qc == '\\' {
+                                    chars.next();
+                                    continue;
+                                }
+                                if qc == quote {
+                                    break;
+                                }
+                            }
+                            continue;
+                        }
+                        if inner_ch == '{' {
+                            brace_depth += 1;
+                        } else if inner_ch == '}' {
+                            brace_depth -= 1;
+                            if brace_depth == 0 {
+                                expr_end_idx = Some(inner_idx);
+                                break;
+                            }
+                        }
+                    }
+
+                    let Some(sub_end_idx) = expr_end_idx else {
+                        return Err(Diagnostic::new(
+                            DiagnosticKind::ParseError,
+                            src_id,
+                            content_base + sub_start_idx,
+                            content_base + raw.len(),
+                            "Unterminated expression substitution in string interpolation.",
+                        ));
+                    };
+
+                    let expr_str = &raw[expr_start_idx..sub_end_idx];
+                    if expr_str.trim().is_empty() {
+                        return Err(Diagnostic::new(
+                            DiagnosticKind::ParseError,
+                            src_id,
+                            content_base + sub_start_idx,
+                            content_base + sub_end_idx + 1,
+                            "Empty expression in string interpolation.",
+                        ));
+                    }
+
+                    let tokens =
+                        crate::lexer::lex_input(src_id, expr_str).map_err(|mut diag| {
+                            diag.source.start += content_base + expr_start_idx;
+                            diag.source.end += content_base + expr_start_idx;
+                            diag
+                        })?;
+
+                    let mut parser = Parser::new(src_id, tokens);
+                    let parsed_expr = parser.parse_expr().map_err(|mut diag| {
+                        diag.source.start += content_base + expr_start_idx;
+                        diag.source.end += content_base + expr_start_idx;
+                        diag
+                    })?;
+
+                    if !current_literal.is_empty() {
+                        parts.push(Expr::QuotedString(std::mem::take(&mut current_literal)));
+                    }
+                    parts.push(parsed_expr);
+                    continue;
+                }
+
+                // Variable substitution: $var
+                if let Some(&(_, next_c)) = chars.peek()
+                    && (next_c == '_' || next_c.is_ascii_alphabetic())
+                {
+                    let mut var_name = String::new();
+                    while let Some(&(_, var_c)) = chars.peek() {
+                        if var_c == '_' || var_c.is_ascii_alphanumeric() {
+                            var_name.push(var_c);
+                            chars.next();
+                        } else {
+                            break;
+                        }
+                    }
+
+                    if !current_literal.is_empty() {
+                        parts.push(Expr::QuotedString(std::mem::take(&mut current_literal)));
+                    }
+                    parts.push(Expr::Variable(var_name));
+                    continue;
+                }
+
+                // Literal '$'
+                current_literal.push('$');
+                continue;
+            }
+
+            current_literal.push(ch);
+        }
+
+        if parts.is_empty() {
+            Ok(Expr::QuotedString(current_literal))
+        } else {
+            if !current_literal.is_empty() {
+                parts.push(Expr::QuotedString(current_literal));
+            }
+            Ok(Expr::InterpolatedString(parts))
+        }
     }
 }
 
@@ -1995,8 +2277,8 @@ mod tests {
     }
 
     #[test]
-    fn parses_object_literal_with_colon_separator() {
-        let body = parse_program("let x = { key: value }");
+    fn parses_object_literal_with_equals_separator() {
+        let body = parse_program("let x = { key = value }");
 
         let Statement::Let { name, value } = &body[0] else {
             panic!("Expected let statement");
@@ -2188,11 +2470,11 @@ mod tests {
     #[test]
     fn parses_nested_objects_without_trailing_commas() {
         let input = r#"let obj = {
-            outer_fn: () => {
+            outer_fn = () => {
                 return 42
             },
-            nested: {
-                inner_fn: () => {
+            nested = {
+                inner_fn = () => {
                     return "hello"
                 }
             }
@@ -2315,5 +2597,95 @@ mod tests {
         } else {
             panic!("Expected If statement");
         }
+    }
+
+    #[test]
+    fn parses_interpolated_string_with_variable() {
+        let body = parse_program(r#"let msg = "Hello $name!""#);
+        let Statement::Let { value, .. } = &body[0] else {
+            panic!("Expected let statement");
+        };
+        let Expr::InterpolatedString(parts) = value else {
+            panic!("Expected InterpolatedString, got {value:?}");
+        };
+        assert_eq!(parts.len(), 3);
+        assert!(matches!(&parts[0], Expr::QuotedString(s) if s == "Hello "));
+        assert!(matches!(&parts[1], Expr::Variable(v) if v == "name"));
+        assert!(matches!(&parts[2], Expr::QuotedString(s) if s == "!"));
+    }
+
+    #[test]
+    fn parses_interpolated_string_with_expression() {
+        let body = parse_program(r#"let msg = "Result: ${count + 1}""#);
+        let Statement::Let { value, .. } = &body[0] else {
+            panic!("Expected let statement");
+        };
+        let Expr::InterpolatedString(parts) = value else {
+            panic!("Expected InterpolatedString, got {value:?}");
+        };
+        assert_eq!(parts.len(), 2);
+        assert!(matches!(&parts[0], Expr::QuotedString(s) if s == "Result: "));
+        assert!(matches!(
+            &parts[1],
+            Expr::Binary {
+                op: BinaryOp::Add,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn parses_interpolated_string_with_command_substitution() {
+        let body = parse_program(r#"let msg = "Branch: $(git branch)""#);
+        let Statement::Let { value, .. } = &body[0] else {
+            panic!("Expected let statement");
+        };
+        let Expr::InterpolatedString(parts) = value else {
+            panic!("Expected InterpolatedString, got {value:?}");
+        };
+        assert_eq!(parts.len(), 2);
+        assert!(matches!(&parts[0], Expr::QuotedString(s) if s == "Branch: "));
+        assert!(matches!(&parts[1], Expr::CommandSubCommand(_)));
+    }
+
+    #[test]
+    fn parses_interpolated_string_with_escaped_dollar() {
+        let body = parse_program(r#"let msg = "Price: \$100""#);
+        let Statement::Let { value, .. } = &body[0] else {
+            panic!("Expected let statement");
+        };
+        assert!(matches!(value, Expr::QuotedString(s) if s == "Price: $100"));
+    }
+
+    #[test]
+    fn parses_single_quoted_string_as_literal_unexpanded() {
+        let body = parse_program("let msg = 'Hello $name $(cmd) ${1+2}'");
+        let Statement::Let { value, .. } = &body[0] else {
+            panic!("Expected let statement");
+        };
+        assert!(matches!(value, Expr::QuotedString(s) if s == "Hello $name $(cmd) ${1+2}"));
+    }
+
+    #[test]
+    fn parses_nested_quotes_in_interpolations() {
+        let body = parse_program(r#"let msg = "Nested: $(echo "inner")""#);
+        let Statement::Let { value, .. } = &body[0] else {
+            panic!("Expected let statement");
+        };
+        let Expr::InterpolatedString(parts) = value else {
+            panic!("Expected InterpolatedString, got {value:?}");
+        };
+        assert_eq!(parts.len(), 2);
+        assert!(matches!(&parts[0], Expr::QuotedString(s) if s == "Nested: "));
+        assert!(matches!(&parts[1], Expr::CommandSubCommand(_)));
+    }
+
+    #[test]
+    fn parses_interpolated_string_in_command_arguments() {
+        let body = parse_program(r#"echo "Hello $name""#);
+        let (identifier, args) = extract_call_parts(&body[0]);
+        assert_command_identifier(identifier, "echo");
+        assert_eq!(args.len(), 1);
+        assert!(matches!(&args[0], Expr::InterpolatedString(parts) if parts.len() == 2));
     }
 }

@@ -120,6 +120,9 @@ fn print_parser_expr(expr: &Expr) {
         Expr::String(str) | Expr::QuotedString(str) => {
             println!("String({str})");
         }
+        Expr::InterpolatedString(parts) => {
+            println!("InterpolatedString({parts:?})");
+        }
         Expr::Number(num) => {
             println!("Number({num})");
         }

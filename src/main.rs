@@ -123,6 +123,9 @@ fn interactive_session(
                 reset_interrupted();
                 continue;
             }
+            Err(ReadlineError::Eof) => {
+                break Ok(());
+            }
             Err(e) => {
                 print_error(&mut cerr, e.to_string().as_str());
                 continue;
