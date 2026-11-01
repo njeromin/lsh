@@ -69,6 +69,7 @@ pub enum ValueType {
     Number,
     Bool,
     Object,
+    Array,
     Function,
     Null,
 }
@@ -80,6 +81,7 @@ impl fmt::Display for ValueType {
             Self::Number => write!(f, "number"),
             Self::Bool => write!(f, "bool"),
             Self::Object => write!(f, "object"),
+            Self::Array => write!(f, "array"),
             Self::Function => write!(f, "function"),
             Self::Null => write!(f, "null"),
         }
@@ -92,6 +94,7 @@ pub enum Value {
     Number(f64),
     Bool(bool),
     Object(Arc<RwLock<HashMap<String, Value>>>),
+    Array(Arc<RwLock<Vec<Value>>>),
     Function(Arc<FunctionValue>),
     Null,
 }
@@ -114,6 +117,21 @@ impl fmt::Display for Value {
 
                 writeln!(f, "}}")
             }
+            Self::Array(arr) => {
+                write!(f, "[")?;
+                if let Ok(guard) = arr.read() {
+                    for (i, item) in guard.iter().enumerate() {
+                        if i > 0 {
+                            write!(f, ", ")?;
+                        }
+                        match item {
+                            Self::String(s) => write!(f, "\"{s}\"")?,
+                            _ => write!(f, "{item}")?,
+                        }
+                    }
+                }
+                write!(f, "]")
+            }
             Self::Function(func) => match &func.kind {
                 FunctionKind::Ast => write!(
                     f,
@@ -133,6 +151,10 @@ impl Value {
         Self::Object(Arc::new(RwLock::new(map)))
     }
 
+    pub fn array(vec: Vec<Value>) -> Self {
+        Self::Array(Arc::new(RwLock::new(vec)))
+    }
+
     pub fn function(func: FunctionValue) -> Self {
         Self::Function(Arc::new(func))
     }
@@ -140,6 +162,13 @@ impl Value {
     pub fn as_object(&self) -> Option<&Arc<RwLock<HashMap<String, Value>>>> {
         match self {
             Self::Object(map) => Some(map),
+            _ => None,
+        }
+    }
+
+    pub fn as_array(&self) -> Option<&Arc<RwLock<Vec<Value>>>> {
+        match self {
+            Self::Array(arr) => Some(arr),
             _ => None,
         }
     }
@@ -178,6 +207,7 @@ impl Value {
             Self::Number(_) => ValueType::Number,
             Self::Bool(_) => ValueType::Bool,
             Self::Object(_) => ValueType::Object,
+            Self::Array(_) => ValueType::Array,
             Self::Function(_) => ValueType::Function,
             Self::Null => ValueType::Null,
         }
@@ -189,6 +219,7 @@ impl Value {
             Self::Number(n) => *n != 0.0,
             Self::String(s) => !s.is_empty(),
             Self::Object(map) => map.read().map(|m| !m.is_empty()).unwrap_or(true),
+            Self::Array(arr) => arr.read().map(|a| !a.is_empty()).unwrap_or(true),
             Self::Function(_) => true,
             Self::Null => false,
         }
@@ -202,6 +233,7 @@ impl Value {
                 Self::Number(n) => Self::Number(*n),
                 Self::Bool(b) => Self::Number(if *b { 1.0 } else { 0.0 }),
                 Self::Object(_) => Self::Null,
+                Self::Array(_) => Self::Null,
                 Self::Function(_) => Self::Null,
                 Self::Null => Self::Null,
             },
@@ -209,6 +241,10 @@ impl Value {
             ValueType::Object => match self {
                 Self::Object(map) => Self::Object(Arc::clone(map)),
                 _ => Self::object(HashMap::new()),
+            },
+            ValueType::Array => match self {
+                Self::Array(arr) => Self::Array(Arc::clone(arr)),
+                _ => Self::array(vec![self.clone()]),
             },
             ValueType::Function => match self {
                 Self::Function(func) => Self::Function(Arc::clone(func)),
@@ -256,6 +292,24 @@ impl Value {
                 }
             }
 
+            // Array equality: reference identity or deep structural equality
+            (Self::Array(a1), Self::Array(a2)) => {
+                if Arc::ptr_eq(a1, a2) {
+                    true
+                } else {
+                    let v1 = match a1.read() {
+                        Ok(g) => g,
+                        Err(p) => p.into_inner(),
+                    };
+                    let v2 = match a2.read() {
+                        Ok(g) => g,
+                        Err(p) => p.into_inner(),
+                    };
+                    v1.len() == v2.len()
+                        && v1.iter().zip(v2.iter()).all(|(x, y)| x.check_equality(y))
+                }
+            }
+
             // Function equality: reference identity
             (Self::Function(f1), Self::Function(f2)) => Arc::ptr_eq(f1, f2),
 
@@ -290,9 +344,21 @@ impl From<HashMap<String, Value>> for Value {
     }
 }
 
+impl From<Vec<Value>> for Value {
+    fn from(vec: Vec<Value>) -> Self {
+        Self::array(vec)
+    }
+}
+
 impl From<Arc<RwLock<HashMap<String, Value>>>> for Value {
     fn from(arc: Arc<RwLock<HashMap<String, Value>>>) -> Self {
         Self::Object(arc)
+    }
+}
+
+impl From<Arc<RwLock<Vec<Value>>>> for Value {
+    fn from(arc: Arc<RwLock<Vec<Value>>>) -> Self {
+        Self::Array(arc)
     }
 }
 

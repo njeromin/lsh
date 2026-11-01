@@ -683,6 +683,14 @@ impl Parser {
     fn parse_postfix_on_current(&mut self, mut expr: Expr) -> Result<Expr, Diagnostic> {
         loop {
             if self.check_current(&TokenKind::LeftBracket) {
+                // Ensure no whitespace between expression and '[' for it to be an index.
+                let prev_token = &self.tokens[self.index - 1];
+                let current_token = self.current();
+
+                if current_token.offset != prev_token.offset + Self::token_source_len(prev_token) {
+                    break;
+                }
+
                 self.advance(); // Skip '['.
 
                 let index_expr = self.parse_expr()?;
@@ -1071,6 +1079,53 @@ impl Parser {
 
                 Expr::Object(expr_map)
             }
+            TokenKind::LeftBracket => {
+                self.advance(); // Skip past '['.
+
+                let mut elements = Vec::new();
+                while !self.check_current(&TokenKind::RightBracket) {
+                    while self.check_current(&TokenKind::NewLine)
+                        || self.check_current(&TokenKind::Semicolon)
+                    {
+                        self.advance();
+                    }
+
+                    if self.check_current(&TokenKind::RightBracket) {
+                        break;
+                    }
+
+                    let elem = self.parse_expr()?;
+                    elements.push(elem);
+
+                    while self.check_current(&TokenKind::NewLine)
+                        || self.check_current(&TokenKind::Semicolon)
+                    {
+                        self.advance();
+                    }
+
+                    if !self.check_current(&TokenKind::RightBracket) {
+                        if self.check_current(&TokenKind::Comma) {
+                            self.advance();
+                        } else if self.check_current(&TokenKind::NewLine)
+                            || self.check_current(&TokenKind::Semicolon)
+                        {
+                            // Newline/semicolon separators are allowed in array literals.
+                        } else {
+                            self.consume(
+                                &TokenKind::Comma,
+                                "Expected ',' between array elements.",
+                            )?;
+                        }
+                    }
+                }
+                self.consume(
+                    &TokenKind::RightBracket,
+                    "Expected ']' after array elements.",
+                )?;
+                should_advance = false;
+
+                Expr::Array(elements)
+            }
             TokenKind::ThinArrow => {
                 return self.error_here(
                     "Unexpected '->' here. Redirection is only valid after a command.",
@@ -1121,6 +1176,8 @@ impl Parser {
             TokenKind::GreaterThan => Some(Expr::String(">".to_string())),
             TokenKind::LessThan => Some(Expr::String("<".to_string())),
             TokenKind::Ampersand => Some(Expr::String("&".to_string())),
+            TokenKind::LeftBracket => Some(Expr::String("[".to_string())),
+            TokenKind::RightBracket => Some(Expr::String("]".to_string())),
             _ => None,
         }
     }
@@ -1130,6 +1187,8 @@ impl Parser {
             TokenKind::String(s) | TokenKind::QuotedString(s) => Some(s.clone()),
             TokenKind::Number(n) => Some(n.to_string()),
             TokenKind::Bool(b) => Some(b.to_string()),
+            TokenKind::LeftBracket => Some("[".to_string()),
+            TokenKind::RightBracket => Some("]".to_string()),
             _ => None,
         }
     }
@@ -1203,11 +1262,14 @@ impl Parser {
 
     fn parse_postfix_from_seed(&mut self, mut expr: Expr) -> Result<Expr, Diagnostic> {
         loop {
-            if self
-                .tokens
-                .get(self.index + 1)
-                .is_some_and(|tok| tok.kind.compare(&TokenKind::LeftBracket))
+            if let Some(next_tok) = self.tokens.get(self.index + 1)
+                && next_tok.kind.compare(&TokenKind::LeftBracket)
             {
+                let cur_tok = &self.tokens[self.index];
+                if next_tok.offset != cur_tok.offset + Self::token_source_len(cur_tok) {
+                    break;
+                }
+
                 self.advance(); // Move to '['.
                 self.advance(); // Skip '['.
 
@@ -2157,5 +2219,38 @@ mod tests {
         }"#;
         let body = parse_program(input);
         assert_eq!(body.len(), 1);
+    }
+
+    #[test]
+    fn parses_array_literals_empty_and_populated() {
+        let input = r#"let empty = [];
+        let items = ["cwd", "git", 42, true];
+        let nested = [[1, 2], ["a", "b"]];
+        let trailing = [
+            "one",
+            "two",
+        ];"#;
+        let body = parse_program(input);
+        assert_eq!(body.len(), 4);
+
+        if let Statement::Let {
+            value: Expr::Array(elements),
+            ..
+        } = &body[1]
+        {
+            assert_eq!(elements.len(), 4);
+        } else {
+            panic!("Expected Expr::Array for items");
+        }
+
+        if let Statement::Let {
+            value: Expr::Array(elements),
+            ..
+        } = &body[3]
+        {
+            assert_eq!(elements.len(), 2);
+        } else {
+            panic!("Expected Expr::Array for trailing");
+        }
     }
 }

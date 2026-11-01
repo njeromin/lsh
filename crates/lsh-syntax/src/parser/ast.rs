@@ -43,6 +43,7 @@ pub enum Expr {
     String(String),
     QuotedString(String),
     Object(HashMap<String, Expr>),
+    Array(Vec<Expr>),
     Variable(String),
 
     // a + b, a - b, ...

@@ -129,6 +129,9 @@ fn print_parser_expr(expr: &Expr) {
         Expr::Object(map) => {
             println!("Object({map:?})");
         }
+        Expr::Array(elements) => {
+            println!("Array({elements:?})");
+        }
         Expr::Variable(var) => {
             println!("Variable({var})");
         }

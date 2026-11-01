@@ -159,7 +159,10 @@ impl Evaluator {
             "text".to_string(),
             Value::String(String::from("\x1b[35m$\x1b[0m ")),
         );
-        prompt_map.insert("order".to_string(), Value::String(String::from("cwd")));
+        prompt_map.insert(
+            "order".to_string(),
+            Value::array(vec![Value::String(String::from("cwd"))]),
+        );
         prompt_map.insert("separator".to_string(), Value::String(String::from(" ")));
         prompt_map.insert("segments".to_string(), Value::object(segments_map));
         prompt_map.insert("render".to_string(), render_fn);
@@ -476,23 +479,38 @@ impl Evaluator {
             }
         }
 
-        let current_order = match prompt_guard.get("order") {
-            Some(Value::String(s)) => s.clone(),
-            _ => String::new(),
-        };
+        match prompt_guard.get_mut("order") {
+            Some(Value::Array(arr)) => {
+                if let Ok(mut a) = arr.write() {
+                    for seg_name in segment_names {
+                        if !a.iter().any(|v| match v {
+                            Value::String(s) => s == &seg_name,
+                            _ => false,
+                        }) {
+                            a.push(Value::String(seg_name));
+                        }
+                    }
+                }
+            }
+            Some(Value::String(order_str)) => {
+                let mut order_parts: Vec<String> = order_str
+                    .split_whitespace()
+                    .map(|s| s.to_string())
+                    .collect();
 
-        let mut order_parts: Vec<String> = current_order
-            .split_whitespace()
-            .map(|s| s.to_string())
-            .collect();
+                for seg_name in segment_names {
+                    if !order_parts.iter().any(|part| part == &seg_name) {
+                        order_parts.push(seg_name);
+                    }
+                }
 
-        for seg_name in segment_names {
-            if !order_parts.iter().any(|part| part == &seg_name) {
-                order_parts.push(seg_name);
+                *order_str = order_parts.join(" ");
+            }
+            _ => {
+                let items: Vec<Value> = segment_names.into_iter().map(Value::String).collect();
+                prompt_guard.insert("order".to_string(), Value::array(items));
             }
         }
-
-        prompt_guard.insert("order".to_string(), Value::String(order_parts.join(" ")));
     }
 
     pub fn on_plugin_unregistered(&mut self, plugin_name: &str) {
@@ -518,18 +536,26 @@ impl Evaluator {
             }
         }
 
-        let current_order = match prompt_guard.get("order") {
-            Some(Value::String(s)) => s.clone(),
-            _ => String::new(),
-        };
+        match prompt_guard.get_mut("order") {
+            Some(Value::Array(arr)) => {
+                if let Ok(mut a) = arr.write() {
+                    a.retain(|v| match v {
+                        Value::String(s) => !segment_names.contains(s),
+                        _ => true,
+                    });
+                }
+            }
+            Some(Value::String(order_str)) => {
+                let order_parts: Vec<String> = order_str
+                    .split_whitespace()
+                    .filter(|part| !segment_names.iter().any(|seg| seg == part))
+                    .map(|s| s.to_string())
+                    .collect();
 
-        let order_parts: Vec<String> = current_order
-            .split_whitespace()
-            .filter(|part| !segment_names.iter().any(|seg| seg == part))
-            .map(|s| s.to_string())
-            .collect();
-
-        prompt_guard.insert("order".to_string(), Value::String(order_parts.join(" ")));
+                *order_str = order_parts.join(" ");
+            }
+            _ => {}
+        }
     }
 
     pub fn render_prompt_segments(
@@ -547,15 +573,12 @@ impl Evaluator {
             }
         };
 
-        let (order_str, separator_str) = if let Value::Object(ref prompt_map) = prompt_val {
+        let (order_val, separator_str) = if let Value::Object(ref prompt_map) = prompt_val {
             let guard = match prompt_map.read() {
                 Ok(g) => g,
                 Err(p) => p.into_inner(),
             };
-            let order = guard.get("order").and_then(|v| match v {
-                Value::String(s) => Some(s.clone()),
-                _ => None,
-            });
+            let order = guard.get("order").cloned();
             let sep = guard
                 .get("separator")
                 .and_then(|v| match v {
@@ -575,8 +598,18 @@ impl Evaluator {
                 .split_whitespace()
                 .map(|s| s.to_string())
                 .collect()
-        } else if let Some(ref order) = order_str {
-            order.split_whitespace().map(|s| s.to_string()).collect()
+        } else if let Some(ref order) = order_val {
+            match order {
+                Value::Array(arr) => {
+                    let guard = match arr.read() {
+                        Ok(g) => g,
+                        Err(p) => p.into_inner(),
+                    };
+                    guard.iter().map(|v| v.to_string()).collect()
+                }
+                Value::String(s) => s.split_whitespace().map(|s| s.to_string()).collect(),
+                _ => Vec::new(),
+            }
         } else {
             let mut names = Vec::new();
             if let Value::Object(ref prompt_map) = prompt_val {
@@ -1580,12 +1613,29 @@ impl Evaluator {
                         };
                         m.insert(key, value);
                     }
+                    Value::Array(arr) => {
+                        let mut a = match arr.write() {
+                            Ok(g) => g,
+                            Err(p) => p.into_inner(),
+                        };
+                        if let Ok(idx) = key.parse::<isize>() {
+                            let actual_idx = if idx < 0 { a.len() as isize + idx } else { idx };
+                            if actual_idx >= 0 {
+                                let u_idx = actual_idx as usize;
+                                if u_idx < a.len() {
+                                    a[u_idx] = value;
+                                } else if u_idx == a.len() {
+                                    a.push(value);
+                                }
+                            }
+                        }
+                    }
                     Value::Null => {
                         let mut new_map = HashMap::new();
                         new_map.insert(key, value);
                         self.assign_target(object, Value::object(new_map), scope_indices);
                     }
-                    _ => panic!("Assignment target must be an object member."),
+                    _ => panic!("Assignment target must be an object or array member."),
                 }
             }
             _ => panic!("Invalid assignment target."),
@@ -1714,6 +1764,75 @@ impl Evaluator {
                         };
                         guard.get(&k).cloned().unwrap_or(Value::Null)
                     }
+                    (Value::Array(arr), Some(k)) => match k.as_str() {
+                        "len" | "length" => {
+                            let arr_clone = Arc::clone(arr);
+                            Value::function(FunctionValue::native("len", move |_, _, _| {
+                                let guard = match arr_clone.read() {
+                                    Ok(g) => g,
+                                    Err(p) => p.into_inner(),
+                                };
+                                Value::Number(guard.len() as f64)
+                            }))
+                        }
+                        "push" => {
+                            let arr_clone = Arc::clone(arr);
+                            Value::function(FunctionValue::native("push", move |_, args, _| {
+                                let mut guard = match arr_clone.write() {
+                                    Ok(g) => g,
+                                    Err(p) => p.into_inner(),
+                                };
+                                for arg in args {
+                                    guard.push(arg);
+                                }
+                                Value::Number(guard.len() as f64)
+                            }))
+                        }
+                        "pop" => {
+                            let arr_clone = Arc::clone(arr);
+                            Value::function(FunctionValue::native("pop", move |_, _, _| {
+                                let mut guard = match arr_clone.write() {
+                                    Ok(g) => g,
+                                    Err(p) => p.into_inner(),
+                                };
+                                guard.pop().unwrap_or(Value::Null)
+                            }))
+                        }
+                        "join" => {
+                            let arr_clone = Arc::clone(arr);
+                            Value::function(FunctionValue::native("join", move |_, args, _| {
+                                let sep = args
+                                    .first()
+                                    .and_then(|v| match v {
+                                        Value::String(s) => Some(s.as_str()),
+                                        _ => None,
+                                    })
+                                    .unwrap_or("");
+                                let guard = match arr_clone.read() {
+                                    Ok(g) => g,
+                                    Err(p) => p.into_inner(),
+                                };
+                                let s = guard
+                                    .iter()
+                                    .map(|item| item.to_string())
+                                    .collect::<Vec<_>>()
+                                    .join(sep);
+                                Value::String(s)
+                            }))
+                        }
+                        "contains" => {
+                            let arr_clone = Arc::clone(arr);
+                            Value::function(FunctionValue::native("contains", move |_, args, _| {
+                                let target = args.first().cloned().unwrap_or(Value::Null);
+                                let guard = match arr_clone.read() {
+                                    Ok(g) => g,
+                                    Err(p) => p.into_inner(),
+                                };
+                                Value::Bool(guard.iter().any(|item| item.check_equality(&target)))
+                            }))
+                        }
+                        _ => Value::Null,
+                    },
                     _ => Value::Null,
                 };
                 (func_val, Some((receiver_expr, receiver_val)))
@@ -1784,19 +1903,48 @@ impl Evaluator {
         let mut all_args = expand::expand_args(resolved_args, ExpandCtx::default());
 
         for arg in args {
-            let evaluated = self.evaluate_expr(arg, true, scope_indices).to_string();
-            let (has_tilde, has_glob) = Self::expr_has_unquoted_glob_or_tilde(arg);
+            let val = self.evaluate_expr(arg, true, scope_indices);
+            match val {
+                Value::Array(arr) => {
+                    let guard = match arr.read() {
+                        Ok(g) => g,
+                        Err(p) => p.into_inner(),
+                    };
+                    for item in guard.iter() {
+                        let evaluated = item.to_string();
+                        let (has_tilde, has_glob) = (
+                            evaluated.starts_with('~'),
+                            expand::has_glob_metachars(&evaluated),
+                        );
+                        if has_tilde || has_glob {
+                            all_args.extend(expand::expand_arg(
+                                evaluated,
+                                ExpandCtx {
+                                    tilde: has_tilde,
+                                    glob: has_glob,
+                                },
+                            ));
+                        } else {
+                            all_args.push(evaluated);
+                        }
+                    }
+                }
+                other => {
+                    let evaluated = other.to_string();
+                    let (has_tilde, has_glob) = Self::expr_has_unquoted_glob_or_tilde(arg);
 
-            if has_tilde || has_glob {
-                all_args.extend(expand::expand_arg(
-                    evaluated,
-                    ExpandCtx {
-                        tilde: has_tilde,
-                        glob: has_glob,
-                    },
-                ));
-            } else {
-                all_args.push(evaluated);
+                    if has_tilde || has_glob {
+                        all_args.extend(expand::expand_arg(
+                            evaluated,
+                            ExpandCtx {
+                                tilde: has_tilde,
+                                glob: has_glob,
+                            },
+                        ));
+                    } else {
+                        all_args.push(evaluated);
+                    }
+                }
             }
         }
 
@@ -1983,10 +2131,29 @@ impl Evaluator {
                 let left_type = left_res.get_type();
 
                 match *op {
-                    BinaryOp::Add => match (left_res, right_res.cast(left_type)) {
+                    BinaryOp::Add => match (left_res, right_res) {
                         (Value::Number(l), Value::Number(r)) => Value::Number(l + r),
                         (Value::String(l), Value::String(r)) => Value::String(l + &r),
-                        _ => Value::Null, // or error if you prefer
+                        (Value::String(l), r) => Value::String(l + &r.to_string()),
+                        (Value::Array(a1), Value::Array(a2)) => {
+                            let mut combined = Vec::new();
+                            if let Ok(g1) = a1.read() {
+                                combined.extend(g1.clone());
+                            }
+                            if let Ok(g2) = a2.read() {
+                                combined.extend(g2.clone());
+                            }
+                            Value::array(combined)
+                        }
+                        (Value::Array(a), other) => {
+                            let mut combined = Vec::new();
+                            if let Ok(g) = a.read() {
+                                combined.extend(g.clone());
+                            }
+                            combined.push(other);
+                            Value::array(combined)
+                        }
+                        _ => Value::Null,
                     },
 
                     BinaryOp::Sub => match (left_res, right_res.cast(left_type)) {
@@ -2083,6 +2250,32 @@ impl Evaluator {
                                 Err(p) => p.into_inner(),
                             };
                             guard.get(&key).cloned().unwrap_or(Value::Null)
+                        }
+                    }
+                    (Value::Array(arr), Some(key)) => {
+                        if let Ok(idx) = key.parse::<isize>() {
+                            let guard = match arr.read() {
+                                Ok(g) => g,
+                                Err(p) => p.into_inner(),
+                            };
+                            let actual_idx = if idx < 0 {
+                                guard.len() as isize + idx
+                            } else {
+                                idx
+                            };
+                            if actual_idx >= 0 && (actual_idx as usize) < guard.len() {
+                                guard[actual_idx as usize].clone()
+                            } else {
+                                Value::Null
+                            }
+                        } else if key == "len" || key == "length" {
+                            let guard = match arr.read() {
+                                Ok(g) => g,
+                                Err(p) => p.into_inner(),
+                            };
+                            Value::Number(guard.len() as f64)
+                        } else {
+                            Value::Null
                         }
                     }
                     _ => Value::Null,
@@ -2236,6 +2429,13 @@ impl Evaluator {
                     obj.insert(key.to_string(), value_value);
                 }
                 Value::object(obj)
+            }
+            Expr::Array(elements) => {
+                let mut evaluated = Vec::with_capacity(elements.len());
+                for elem in elements {
+                    evaluated.push(self.evaluate_expr(elem, true, scope_indices));
+                }
+                Value::array(evaluated)
             }
         }
     }
@@ -2825,7 +3025,13 @@ mod tests {
 
         let prompt_obj = eval.get_var(0, "prompt").expect("prompt should exist");
         let order = prompt_obj.get_property("order");
-        assert_eq!(order, Some(Value::String("cwd git".to_string())));
+        assert_eq!(
+            order,
+            Some(Value::array(vec![
+                Value::String("cwd".to_string()),
+                Value::String("git".to_string()),
+            ]))
+        );
 
         let segments = prompt_obj
             .get_property("segments")
@@ -2908,7 +3114,140 @@ mod tests {
             .to_string();
         assert!(!order_after.contains("alpha"));
         assert!(!order_after.contains("empty_seg"));
-        assert_eq!(order_after, "cwd");
+        assert_eq!(order_after, "[\"cwd\"]");
         let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn native_array_literals_indexing_methods_and_operations() {
+        let (mut eval, _) = eval_with_evaluator("");
+
+        let script = r#"
+        let arr = ["first", 20, "third"];
+        let first = $arr[0];
+        let last = $arr[-1];
+        let len_prop = $arr.len;
+        let len_call = $arr.len();
+        
+        $arr[0] = "updated_first";
+        $arr.push("fourth");
+        let popped = $arr.pop();
+        let joined = $arr.join("-");
+        let has_twenty = $arr.contains(20);
+        let has_missing = $arr.contains("missing");
+
+        let combined = [1, 2] + [3, 4];
+        let appended = [1, 2] + 3;
+        "#;
+
+        let statements = Parser::new(0, lexer::lex_input(0, script).unwrap())
+            .parse_program()
+            .unwrap();
+        eval.evaluate_statements(&statements.body, &mut vec![0]);
+
+        assert_eq!(
+            eval.get_var(0, "first"),
+            Some(&Value::String("first".to_string()))
+        );
+        assert_eq!(
+            eval.get_var(0, "last"),
+            Some(&Value::String("third".to_string()))
+        );
+        assert_eq!(eval.get_var(0, "len_prop"), Some(&Value::Number(3.0)));
+        assert_eq!(eval.get_var(0, "len_call"), Some(&Value::Number(3.0)));
+
+        let arr_val = eval.get_var(0, "arr").expect("arr exists");
+        if let Value::Array(a) = arr_val {
+            let guard = a.read().unwrap();
+            assert_eq!(guard[0], Value::String("updated_first".to_string()));
+            assert_eq!(guard.len(), 3);
+        } else {
+            panic!("Expected Value::Array");
+        }
+
+        assert_eq!(
+            eval.get_var(0, "popped"),
+            Some(&Value::String("fourth".to_string()))
+        );
+        assert_eq!(
+            eval.get_var(0, "joined"),
+            Some(&Value::String("updated_first-20-third".to_string()))
+        );
+        assert_eq!(eval.get_var(0, "has_twenty"), Some(&Value::Bool(true)));
+        assert_eq!(eval.get_var(0, "has_missing"), Some(&Value::Bool(false)));
+
+        let combined_val = eval.get_var(0, "combined").expect("combined exists");
+        assert_eq!(
+            combined_val,
+            &Value::array(vec![
+                Value::Number(1.0),
+                Value::Number(2.0),
+                Value::Number(3.0),
+                Value::Number(4.0),
+            ])
+        );
+
+        let appended_val = eval.get_var(0, "appended").expect("appended exists");
+        assert_eq!(
+            appended_val,
+            &Value::array(vec![
+                Value::Number(1.0),
+                Value::Number(2.0),
+                Value::Number(3.0),
+            ])
+        );
+    }
+
+    #[test]
+    fn prompt_order_with_native_array_literal() {
+        let (mut eval, _) = eval_with_evaluator("");
+
+        let script = r#"
+        $prompt.order = ["cwd"];
+        let rendered = $prompt.render();
+        "#;
+
+        let statements = Parser::new(0, lexer::lex_input(0, script).unwrap())
+            .parse_program()
+            .unwrap();
+        eval.evaluate_statements(&statements.body, &mut vec![0]);
+
+        let rendered = eval.get_var(0, "rendered").expect("rendered exists");
+        assert!(!rendered.to_string().is_empty());
+    }
+
+    #[test]
+    fn command_with_array_expansion_and_indexing() {
+        let (mut eval, _) = eval_with_evaluator("");
+
+        let script = r#"
+        let words = ["one", "two", "three"];
+        let out_full = $(echo $words).out;
+        let out_idx = $(echo $words[0] $words[-1]).out;
+        "#;
+
+        let statements = Parser::new(0, lexer::lex_input(0, script).unwrap())
+            .parse_program()
+            .unwrap();
+        eval.evaluate_statements(&statements.body, &mut vec![0]);
+
+        let out_full = eval.get_var(0, "out_full").unwrap().to_string();
+        let out_idx = eval.get_var(0, "out_idx").unwrap().to_string();
+        assert_eq!(out_full.trim(), "one two three");
+        assert_eq!(out_idx.trim(), "one three");
+
+        let script_brackets = r#"
+        let out_brackets = $(echo [0-9]).out;
+        let out_compound = $(echo --flag=[val]).out;
+        "#;
+        let stmts_brackets = Parser::new(0, lexer::lex_input(0, script_brackets).unwrap())
+            .parse_program()
+            .unwrap();
+        eval.evaluate_statements(&stmts_brackets.body, &mut vec![0]);
+
+        let out_brackets = eval.get_var(0, "out_brackets").unwrap().to_string();
+        let out_compound = eval.get_var(0, "out_compound").unwrap().to_string();
+        assert_eq!(out_brackets.trim(), "[0-9]");
+        assert_eq!(out_compound.trim(), "--flag=[val]");
     }
 }
