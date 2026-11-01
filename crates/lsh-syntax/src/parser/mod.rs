@@ -270,11 +270,8 @@ impl Parser {
 
         let eq_end_offset = eq_offset + eq_len;
         let current_offset = self.current().offset;
-        // Values for prefix assignments must be contiguous with '='. `$VAR` is a
-        // special case where the variable token starts one byte after '$'.
-        let contiguous = current_offset == eq_end_offset
-            || (matches!(self.current().kind, TokenKind::Variable(_))
-                && current_offset == eq_end_offset + 1);
+        // Values for prefix assignments must be contiguous with '='.
+        let contiguous = current_offset == eq_end_offset;
         if !contiguous {
             self.index = start_index;
             return Ok(None);
@@ -1178,6 +1175,8 @@ impl Parser {
             TokenKind::Ampersand => Some(Expr::String("&".to_string())),
             TokenKind::LeftBracket => Some(Expr::String("[".to_string())),
             TokenKind::RightBracket => Some(Expr::String("]".to_string())),
+            TokenKind::LeftCurly => Some(Expr::String("{".to_string())),
+            TokenKind::RightCurly => Some(Expr::String("}".to_string())),
             _ => None,
         }
     }
@@ -1189,33 +1188,14 @@ impl Parser {
             TokenKind::Bool(b) => Some(b.to_string()),
             TokenKind::LeftBracket => Some("[".to_string()),
             TokenKind::RightBracket => Some("]".to_string()),
+            TokenKind::LeftCurly => Some("{".to_string()),
+            TokenKind::RightCurly => Some("}".to_string()),
             _ => None,
         }
     }
 
     fn token_source_len(token: &Token) -> usize {
-        match &token.kind {
-            TokenKind::Variable(name) => name.len(),
-            TokenKind::String(s) => s.len(),
-            TokenKind::QuotedString(s) => s.len() + 2,
-            TokenKind::Number(n) => n.to_string().len(),
-            TokenKind::Bool(b) => b.to_string().len(),
-            TokenKind::And
-            | TokenKind::Or
-            | TokenKind::EqualsEquals
-            | TokenKind::GtEquals
-            | TokenKind::LtEquals
-            | TokenKind::NotEquals
-            | TokenKind::PlusEquals
-            | TokenKind::MinusEquals
-            | TokenKind::StarEquals
-            | TokenKind::SlashEquals
-            | TokenKind::DollarLeftParen
-            | TokenKind::FatArrow
-            | TokenKind::ThinArrow => 2,
-            TokenKind::EOF => 0,
-            _ => 1,
-        }
+        token.len
     }
 
     fn is_valid_env_name(name: &str) -> bool {
@@ -2251,6 +2231,89 @@ mod tests {
             assert_eq!(elements.len(), 2);
         } else {
             panic!("Expected Expr::Array for trailing");
+        }
+    }
+
+    #[test]
+    fn parses_find_command_with_braces_and_escaped_semicolon() {
+        let input = "find . -exec echo {} \\;";
+        let body = parse_program(input);
+        assert_eq!(body.len(), 1);
+        if let Statement::Command(CommandExpr::Call {
+            identifier: Expr::String(cmd),
+            args,
+            ..
+        }) = &body[0]
+        {
+            assert_eq!(cmd, "find");
+            assert_eq!(args.len(), 5);
+            assert!(matches!(&args[0], Expr::String(s) if s == "."));
+            assert!(matches!(&args[1], Expr::String(s) if s == "-exec"));
+            assert!(matches!(&args[2], Expr::String(s) if s == "echo"));
+            assert!(
+                matches!(&args[3], Expr::Binary { op: BinaryOp::Add, left, right }
+                if matches!(left.as_ref(), Expr::String(s) if s == "{")
+                && matches!(right.as_ref(), Expr::String(s) if s == "}"))
+            );
+            assert!(matches!(&args[4], Expr::String(s) if s == ";"));
+        } else {
+            panic!("Expected CommandExpr::Call");
+        }
+    }
+
+    #[test]
+    fn parses_command_with_escaped_spaces() {
+        let input = "cat My\\ File.txt";
+        let body = parse_program(input);
+        assert_eq!(body.len(), 1);
+        let (identifier, args) = extract_call_parts(&body[0]);
+        assert_command_identifier(identifier, "cat");
+        assert_eq!(args.len(), 1);
+        assert!(matches!(&args[0], Expr::String(s) if s == "My File.txt"));
+    }
+
+    #[test]
+    fn parses_line_continuation_in_commands_and_expressions() {
+        let input = "echo hello \\\n world;\nlet x = 10 \\\n + 20;";
+        let body = parse_program(input);
+        assert_eq!(body.len(), 2);
+        let (identifier, args) = extract_call_parts(&body[0]);
+        assert_command_identifier(identifier, "echo");
+        assert_eq!(args.len(), 2);
+        assert!(matches!(&args[0], Expr::String(s) if s == "hello"));
+        assert!(matches!(&args[1], Expr::String(s) if s == "world"));
+
+        if let Statement::Let { value, .. } = &body[1] {
+            assert!(matches!(
+                value,
+                Expr::Binary {
+                    op: BinaryOp::Add,
+                    ..
+                }
+            ));
+        } else {
+            panic!("Expected let statement");
+        }
+    }
+
+    #[test]
+    fn parses_block_containing_command_with_braces() {
+        let input = "if true { echo {} }";
+        let body = parse_program(input);
+        assert_eq!(body.len(), 1);
+        if let Statement::If {
+            then_branch: if_body,
+            ..
+        } = &body[0]
+        {
+            assert_eq!(if_body.len(), 1);
+            if let Statement::Command(CommandExpr::Call { args, .. }) = &if_body[0] {
+                assert_eq!(args.len(), 1);
+            } else {
+                panic!("Expected command inside block");
+            }
+        } else {
+            panic!("Expected If statement");
         }
     }
 }

@@ -3250,4 +3250,26 @@ mod tests {
         assert_eq!(out_brackets.trim(), "[0-9]");
         assert_eq!(out_compound.trim(), "--flag=[val]");
     }
+
+    #[test]
+    fn command_with_escapes_and_line_continuations() {
+        let (mut eval, _) = eval_with_evaluator("");
+
+        let script = "let out_space = $(echo My\\ Documents).out;\n\
+                      let out_escapes = $(echo {} \\; \\$NOT_EXPANDED).out;\n\
+                      let out_continuation = $(echo line1 \\\n line2).out;";
+
+        let statements = Parser::new(0, lexer::lex_input(0, script).unwrap())
+            .parse_program()
+            .unwrap();
+        eval.evaluate_statements(&statements.body, &mut vec![0]);
+
+        let out_space = eval.get_var(0, "out_space").unwrap().to_string();
+        let out_escapes = eval.get_var(0, "out_escapes").unwrap().to_string();
+        let out_continuation = eval.get_var(0, "out_continuation").unwrap().to_string();
+
+        assert_eq!(out_space.trim(), "My Documents");
+        assert_eq!(out_escapes.trim(), "{} ; $NOT_EXPANDED");
+        assert_eq!(out_continuation.trim(), "line1 line2");
+    }
 }
