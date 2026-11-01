@@ -6,6 +6,63 @@ use std::{
 
 use lsh_syntax::ast::Statement;
 
+use crate::eval::Evaluator;
+
+pub type NativeFn = Arc<dyn Fn(&mut Evaluator, Vec<Value>, Option<Value>) -> Value + Send + Sync>;
+
+#[derive(Clone)]
+pub enum FunctionKind {
+    Ast,
+    Native { name: String, func: NativeFn },
+}
+
+#[derive(Clone)]
+pub struct FunctionValue {
+    pub params: Vec<String>,
+    pub body: Vec<Statement>,
+    pub kind: FunctionKind,
+}
+
+impl fmt::Debug for FunctionValue {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.kind {
+            FunctionKind::Ast => f
+                .debug_struct("FunctionValue::Ast")
+                .field("params", &self.params)
+                .field("body_len", &self.body.len())
+                .finish(),
+            FunctionKind::Native { name, .. } => f
+                .debug_struct("FunctionValue::Native")
+                .field("name", name)
+                .finish(),
+        }
+    }
+}
+
+impl FunctionValue {
+    pub fn ast(params: Vec<String>, body: Vec<Statement>) -> Self {
+        Self {
+            params,
+            body,
+            kind: FunctionKind::Ast,
+        }
+    }
+
+    pub fn native<F>(name: impl Into<String>, func: F) -> Self
+    where
+        F: Fn(&mut Evaluator, Vec<Value>, Option<Value>) -> Value + Send + Sync + 'static,
+    {
+        Self {
+            params: vec![],
+            body: vec![],
+            kind: FunctionKind::Native {
+                name: name.into(),
+                func: Arc::new(func),
+            },
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ValueType {
     String,
@@ -27,12 +84,6 @@ impl fmt::Display for ValueType {
             Self::Null => write!(f, "null"),
         }
     }
-}
-
-#[derive(Debug, Clone)]
-pub struct FunctionValue {
-    pub params: Vec<String>,
-    pub body: Vec<Statement>,
 }
 
 #[derive(Debug, Clone)]
@@ -63,12 +114,15 @@ impl fmt::Display for Value {
 
                 writeln!(f, "}}")
             }
-            Self::Function(func) => write!(
-                f,
-                "function({}): {}",
-                func.params.join(", "),
-                func.body.len()
-            ),
+            Self::Function(func) => match &func.kind {
+                FunctionKind::Ast => write!(
+                    f,
+                    "function({}): {}",
+                    func.params.join(", "),
+                    func.body.len()
+                ),
+                FunctionKind::Native { name, .. } => write!(f, "function [native {name}]"),
+            },
             Self::Null => write!(f, ""),
         }
     }
@@ -368,15 +422,9 @@ mod tests {
 
     #[test]
     fn function_reference_equality() {
-        let f1 = Value::function(FunctionValue {
-            params: vec!["a".to_string()],
-            body: vec![],
-        });
+        let f1 = Value::function(FunctionValue::ast(vec!["a".to_string()], vec![]));
         let f1_clone = f1.clone();
-        let f2 = Value::function(FunctionValue {
-            params: vec!["a".to_string()],
-            body: vec![],
-        });
+        let f2 = Value::function(FunctionValue::ast(vec!["a".to_string()], vec![]));
 
         assert_eq!(f1, f1_clone);
         assert_ne!(f1, f2);

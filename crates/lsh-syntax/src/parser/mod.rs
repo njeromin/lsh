@@ -1066,7 +1066,8 @@ impl Parser {
                         }
                     }
                 }
-                self.advance(); // Skip past '}'.
+                self.consume(&TokenKind::RightCurly, "Expected '}' after object.")?;
+                should_advance = false;
 
                 Expr::Object(expr_map)
             }
@@ -2140,5 +2141,21 @@ mod tests {
         let input = "fn add(a, b) {\n    return $a + $b;\n}\n\nfn greet(name) {\n    return \"Hello, \" + $name\n}\n\necho \"add 2 3 ->\" $(add 2 3).out\necho \"add 10 5 ->\" $(add 10 5).out\necho $(greet \"lsh\").out\n";
         let body = parse_program(input);
         assert_eq!(body.len(), 5);
+    }
+
+    #[test]
+    fn parses_nested_objects_without_trailing_commas() {
+        let input = r#"let obj = {
+            outer_fn: () => {
+                return 42
+            },
+            nested: {
+                inner_fn: () => {
+                    return "hello"
+                }
+            }
+        }"#;
+        let body = parse_program(input);
+        assert_eq!(body.len(), 1);
     }
 }

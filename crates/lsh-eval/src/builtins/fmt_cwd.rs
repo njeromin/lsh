@@ -39,6 +39,20 @@ fn resolve_home_dir(eval: &Evaluator) -> Option<PathBuf> {
     dirs::home_dir()
 }
 
+pub fn format_cwd_for_eval(eval: &Evaluator) -> String {
+    let path = if let Some(Value::String(pwd)) = eval.get_var(0, "PWD") {
+        PathBuf::from(pwd)
+    } else {
+        PathBuf::from(".")
+    };
+
+    if let Some(home_dir) = resolve_home_dir(eval) {
+        format_cwd(path.as_path(), home_dir.as_path())
+    } else {
+        path.to_string_lossy().into_owned()
+    }
+}
+
 pub fn fmt_cwd<R: io::Read, W: io::Write, WE: io::Write>(
     eval: &mut Evaluator,
     io: &mut IoCtx<R, W, WE>,
@@ -49,19 +63,17 @@ pub fn fmt_cwd<R: io::Read, W: io::Write, WE: io::Write>(
         return 1;
     }
 
-    let path = if let Some(path_arg) = args.first() {
-        paths::expand_tilde(PathBuf::from(path_arg))
-    } else if let Some(Value::String(pwd)) = eval.get_var(0, "PWD") {
-        PathBuf::from(pwd)
+    let formatted = if let Some(path_arg) = args.first() {
+        let path = paths::expand_tilde(PathBuf::from(path_arg));
+        if let Some(home_dir) = resolve_home_dir(eval) {
+            format_cwd(path.as_path(), home_dir.as_path())
+        } else {
+            path.to_string_lossy().into_owned()
+        }
     } else {
-        PathBuf::from(".")
+        format_cwd_for_eval(eval)
     };
 
-    let formatted = if let Some(home_dir) = resolve_home_dir(eval) {
-        format_cwd(path.as_path(), home_dir.as_path())
-    } else {
-        path.to_string_lossy().into_owned()
-    };
     if let Err(e) = write!(&mut io.out, "{formatted}")
         && e.kind() != io::ErrorKind::BrokenPipe
     {

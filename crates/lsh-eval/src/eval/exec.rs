@@ -2,9 +2,9 @@ use std::{fs, io::stderr, path::PathBuf};
 
 use lsh_syntax::{SourceMap, debug, lexer, parser::Parser, print_diagnostic, print_error};
 
-use crate::eval::Evaluator;
+use crate::eval::{EvalOutcome, Evaluator};
 
-pub fn exec_file(evaluator: &mut Evaluator, path: PathBuf) -> i32 {
+pub fn exec_file_outcome(evaluator: &mut Evaluator, path: PathBuf) -> Result<EvalOutcome, String> {
     let mut cerr = stderr();
 
     match fs::read_to_string(&path) {
@@ -16,7 +16,7 @@ pub fn exec_file(evaluator: &mut Evaluator, path: PathBuf) -> i32 {
                 Ok(tokens) => tokens,
                 Err(diag) => {
                     print_diagnostic(&mut cerr, &diag, &source_map);
-                    return 1;
+                    return Err(diag.message);
                 }
             };
 
@@ -27,17 +27,24 @@ pub fn exec_file(evaluator: &mut Evaluator, path: PathBuf) -> i32 {
                 Ok(prog) => prog,
                 Err(diag) => {
                     print_diagnostic(&mut cerr, &diag, &source_map);
-                    return 1;
+                    return Err(diag.message);
                 }
             };
 
             debug::print_parser(&prog);
 
-            evaluator.evaluate(prog)
+            Ok(evaluator.evaluate_program(prog))
         }
         Err(e) => {
-            print_error(&mut cerr, e.to_string().as_str());
-            1
+            let msg = e.to_string();
+            print_error(&mut cerr, msg.as_str());
+            Err(msg)
         }
     }
+}
+
+pub fn exec_file(evaluator: &mut Evaluator, path: PathBuf) -> i32 {
+    exec_file_outcome(evaluator, path)
+        .map(|outcome| outcome.last_status)
+        .unwrap_or(1)
 }

@@ -19,6 +19,8 @@ use rustyline::{
 const DEFAULT_PROMPT: &str = "\x1b[35m›\x1b[0m ";
 
 fn get_prompt(eval: &mut Evaluator) -> String {
+    eval.trigger_pre_prompt();
+
     let before = eval
         .get_var(0, "prompt")
         .and_then(|v| match v {
@@ -35,6 +37,11 @@ fn get_prompt(eval: &mut Evaluator) -> String {
     if let (Some(before_fn), Some(prompt_obj)) = (before, prompt_val) {
         let prompt_expr = lsh_syntax::ast::Expr::Variable("prompt".to_string());
         eval.exec_function_with_receiver(&before_fn, vec![], Some((prompt_expr, prompt_obj)));
+    } else {
+        let rendered = eval.render_prompt_segments(None, None, None);
+        if !rendered.is_empty() {
+            println!("{rendered}");
+        }
     }
 
     eval.get_var(0, "prompt")
@@ -94,8 +101,9 @@ fn interactive_session(
         osc::write_133("A");
         if let Some(helper) = editor.helper_mut() {
             helper.reset_prompt_marks();
-            let aliases = eval.get_aliases().keys().cloned().collect();
-            helper.set_aliases(aliases);
+            let mut commands = eval.get_aliases().keys().cloned().collect::<Vec<_>>();
+            commands.extend(eval.plugin_manager.list_commands());
+            helper.set_aliases(commands);
             helper.set_vars(eval.get_var_names());
         }
 
@@ -149,7 +157,9 @@ fn interactive_session(
         debug::print_parser(&prog);
 
         osc::write_133("C");
+        eval.trigger_pre_exec(&input);
         let status = eval.evaluate(prog);
+        eval.trigger_post_exec(&input, status);
         osc::write_133(&format!("D;{status}"));
         let _ = src_map.remove(src_id);
     }
@@ -175,6 +185,9 @@ fn main() {
     };
 
     let config_entrypoint = config_dir.join("config.lsh");
+    eval.plugin_manager
+        .search_paths
+        .insert(0, config_dir.join("plugins"));
 
     // Evaluate config if it exists.
     if fs::exists(&config_entrypoint).expect("Failed to check config file existence") {

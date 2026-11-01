@@ -1,0 +1,37 @@
+return {
+    name: "git-prompt",
+    version: "0.1.0",
+    description: "Git branch and status indicator for the prompt",
+    options: {
+        show_ahead: true,
+        show_changes: true
+    },
+    prompt_segments: {
+        git: () => {
+            if $(git rev-parse --is-inside-work-tree).code == 0 {
+                let branch = $(git branch --show-current | tr -d '\n').out
+                let git_info = $palette.reset + $palette.green + $branch
+
+                if $this.options.show_ahead {
+                    let ahead_num = $(git status --porcelain --branch | awk 'NR==1{if(match($0,/ahead [0-9]+/)){printf substr($0,RSTART+6,RLENGTH-6)}else{printf 0}}').out
+                    if $ahead_num != 0 {
+                        let ahead = $palette.cyan + " ↑" + $ahead_num
+                        $git_info = $git_info + $ahead
+                    }
+                }
+
+                if $this.options.show_changes {
+                    let changes_num = $(git status --porcelain | awk 'END{printf NR}').out
+                    if $changes_num != 0 {
+                        let changes = $palette.yellow + " ~" + $changes_num
+                        $git_info = $git_info + $changes
+                    }
+                }
+
+                return $git_info
+            }
+
+            return ""
+        }
+    }
+}
