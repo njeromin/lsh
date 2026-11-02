@@ -1137,7 +1137,7 @@ impl Evaluator {
                         && let Some(scope) = self.scopes.get_mut(*last_scope_index)
                     {
                         scope.vars.insert(name.to_owned(), expr.clone());
-                        self.sync_env_var_if_exported(&name, &expr);
+                        self.sync_env_var_if_exported(name, &expr);
                     } else {
                         panic!("Failed to get current scope.");
                     }

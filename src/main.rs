@@ -1,11 +1,10 @@
 use std::{
     env::{self, current_dir},
-    fs,
-    io::{self, Write},
+    fs, io,
     path::{Path, PathBuf},
 };
 
-use crossterm::{cursor, queue};
+use crossterm::{cursor, execute};
 use lsh_eval::{Evaluator, Value, exec_file};
 use lsh_syntax::{
     SourceMap, debug, diagnostics::print_diagnostic, lexer, parser::Parser, print_error,
@@ -51,20 +50,7 @@ fn get_prompt(eval: &mut Evaluator) -> String {
     };
 
     if rendered.is_empty() {
-        return DEFAULT_PROMPT.to_string();
-    }
-
-    if let Some(last_newline) = rendered.rfind('\n') {
-        let (pre, active) = rendered.split_at(last_newline + 1);
-        if !pre.is_empty() {
-            print!("{pre}");
-            let _ = io::stdout().flush();
-        }
-        if active.is_empty() {
-            DEFAULT_PROMPT.to_string()
-        } else {
-            active.to_string()
-        }
+        DEFAULT_PROMPT.to_string()
     } else {
         rendered
     }
@@ -77,14 +63,14 @@ fn interactive_session(
 ) -> rustyline::Result<()> {
     init_interactive_terminal();
 
-    let mut cout = io::stdout();
     let mut cerr = io::stderr();
 
-    if let Err(e) = queue!(cout, cursor::SetCursorStyle::BlinkingBar) {
+    if let Err(e) = execute!(io::stdout(), cursor::SetCursorStyle::BlinkingBar) {
         print_error(&mut cerr, e.to_string().as_str());
     }
 
     let config = Config::builder()
+        .check_cursor_position(true)
         .completion_type(CompletionType::List)
         .build();
     let mut editor = Editor::<LineEditorHelper, DefaultHistory>::with_config(config)?;
@@ -113,7 +99,6 @@ fn interactive_session(
             }
         }
 
-        osc::write_133("A");
         if let Some(helper) = editor.helper_mut() {
             helper.reset_prompt_marks();
             let mut commands = eval.get_aliases().keys().cloned().collect::<Vec<_>>();
