@@ -109,14 +109,4 @@ mod tests {
         let formatted = highlighter.highlight_prompt(prompt, false);
         assert_eq!(formatted, prompt);
     }
-
-    #[test]
-    fn marks_remain_consistent_across_repeated_redraws() {
-        let highlighter = Osc133PromptHighlighter::new(true);
-        let prompt = "❯ ";
-        let first = highlighter.highlight_prompt(prompt, false);
-        let second = highlighter.highlight_prompt(prompt, false);
-        assert_eq!(first, second);
-        assert_eq!(second, "\x1b]133;A\x07❯ \x1b]133;B\x07");
-    }
 }

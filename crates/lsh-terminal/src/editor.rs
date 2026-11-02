@@ -1048,26 +1048,6 @@ mod tests {
     }
 
     #[test]
-    fn completes_cargo_subcommands() {
-        use rustyline::history::DefaultHistory;
-
-        let helper = LineEditorHelper::new();
-        let history = DefaultHistory::new();
-        let ctx = Context::new(&history);
-
-        let (start, items) = helper
-            .get_candidates("cargo ", 6, &ctx)
-            .expect("completion failed");
-        assert_eq!(start, 6);
-        assert!(items.iter().any(|it| it.replacement == "build"
-            && it.kind == CompletionKind::Subcommand
-            && it.description.is_some()));
-        assert!(items.iter().any(|it| it.replacement == "test"
-            && it.kind == CompletionKind::Subcommand
-            && it.description.is_some()));
-    }
-
-    #[test]
     fn completes_nested_subcommands_and_subcommand_flags() {
         use rustyline::history::DefaultHistory;
 

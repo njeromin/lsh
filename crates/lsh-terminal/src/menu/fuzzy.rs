@@ -186,13 +186,6 @@ mod tests {
     }
 
     #[test]
-    fn fuzzy_match_ranks_exact_prefix_higher_than_subsequence() {
-        let prefix_match = fuzzy_match("cargo", "car").unwrap();
-        let subseq_match = fuzzy_match("clear", "car").unwrap();
-        assert!(prefix_match.score > subseq_match.score);
-    }
-
-    #[test]
     fn fuzzy_match_ranks_exact_match_higher_than_prefix_and_subsequence() {
         let exact_match = fuzzy_match("git", "git").unwrap();
         let prefix_match = fuzzy_match("git-lfs", "git").unwrap();

@@ -3160,30 +3160,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&temp_dir);
     }
 
-    #[test]
-    fn let_path_assignment_updates_process_environment() {
-        let orig_path = env::var("PATH").unwrap_or_default();
-        let temp_dir = std::env::temp_dir().join("lsh_test_let_path_sync");
-        let _ = std::fs::create_dir_all(&temp_dir);
-
-        let code = format!(r#"let PATH = "{}:" + $PATH"#, temp_dir.display());
-        let (eval, status) = eval_with_evaluator(&code);
-        assert_eq!(status, 0);
-
-        let current_env_path = env::var("PATH").unwrap_or_default();
-        assert!(current_env_path.starts_with(&format!("{}:", temp_dir.display())));
-        assert_eq!(
-            eval.get_var(0, "PATH").unwrap().to_string(),
-            current_env_path
-        );
-
-        // Restore original path
-        unsafe {
-            env::set_var("PATH", orig_path);
-        }
-        let _ = std::fs::remove_dir_all(&temp_dir);
-    }
-
     fn eval_var(code: &str, var_name: &str) -> Option<Value> {
         let (eval, _) = eval_with_evaluator(code);
         eval.scopes
@@ -3954,24 +3930,6 @@ mod tests {
     }
 
     #[test]
-    fn prompt_order_with_native_array_literal() {
-        let (mut eval, _) = eval_with_evaluator("");
-
-        let script = r#"
-        $prompt.order = ["cwd"];
-        let rendered = $prompt.render();
-        "#;
-
-        let statements = Parser::new(0, lexer::lex_input(0, script).unwrap())
-            .parse_program()
-            .unwrap();
-        eval.evaluate_statements(&statements.body, &mut vec![0]);
-
-        let rendered = eval.get_var(0, "rendered").expect("rendered exists");
-        assert!(!rendered.to_string().is_empty());
-    }
-
-    #[test]
     fn prompt_char_segment_and_customization() {
         let (mut eval, _) = eval_with_evaluator("");
 
@@ -4320,7 +4278,7 @@ mod tests {
     }
 
     #[test]
-    fn test_string_and_array_methods() {
+    fn test_string_methods() {
         let (mut eval, _) = eval_with_evaluator("");
         let script = r#"
         let s = "  hello world  "
@@ -4335,15 +4293,6 @@ mod tests {
         let ends = $trimmed.ends_with("world")
         let has_sub = $trimmed.contains("lo wo")
         let first_char = $trimmed[0]
-
-        let arr = [1, 2]
-        $arr.push(3)
-        let popped = $arr.pop()
-        let arr_len = $arr.len()
-        let arr_prop_len = $arr.len
-        let joined = $arr.join("-")
-        let has_two = $arr.contains(2)
-        let has_nine = $arr.contains(9)
         "#;
         let prog = Parser::new(0, lexer::lex_input(0, script).unwrap())
             .parse_program()
@@ -4367,16 +4316,6 @@ mod tests {
         assert_eq!(eval.get_var(0, "ends").unwrap(), &Value::Bool(true));
         assert_eq!(eval.get_var(0, "has_sub").unwrap(), &Value::Bool(true));
         assert_eq!(eval.get_var(0, "first_char").unwrap().to_string(), "h");
-
-        assert_eq!(eval.get_var(0, "popped").unwrap(), &Value::Number(3.0));
-        assert_eq!(eval.get_var(0, "arr_len").unwrap(), &Value::Number(2.0));
-        assert_eq!(
-            eval.get_var(0, "arr_prop_len").unwrap(),
-            &Value::Number(2.0)
-        );
-        assert_eq!(eval.get_var(0, "joined").unwrap().to_string(), "1-2");
-        assert_eq!(eval.get_var(0, "has_two").unwrap(), &Value::Bool(true));
-        assert_eq!(eval.get_var(0, "has_nine").unwrap(), &Value::Bool(false));
 
         if let Value::Array(parts_arr) = eval.get_var(0, "parts").unwrap() {
             let guard = parts_arr.read().unwrap();

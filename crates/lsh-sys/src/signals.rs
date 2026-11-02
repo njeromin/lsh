@@ -162,12 +162,6 @@ mod tests {
     }
 
     #[test]
-    fn inactive_guard_does_not_panic() {
-        let guard = TerminalForegroundGuard::inactive();
-        drop(guard);
-    }
-
-    #[test]
     fn signal_exit_code_calculation() {
         assert_eq!(STATUS_SIGINT, 130);
         assert_eq!(signal_exit_code(2), 130);

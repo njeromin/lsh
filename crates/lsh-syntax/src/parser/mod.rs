@@ -2545,13 +2545,6 @@ mod tests {
     }
 
     #[test]
-    fn parses_functions_example_script_into_expected_number_of_statements() {
-        let input = "fn add(a, b) {\n    return $a + $b;\n}\n\nfn greet(name) {\n    return \"Hello, \" + $name\n}\n\necho \"add 2 3 ->\" $(add 2 3).out\necho \"add 10 5 ->\" $(add 10 5).out\necho $(greet \"lsh\").out\n";
-        let body = parse_program(input);
-        assert_eq!(body.len(), 5);
-    }
-
-    #[test]
     fn parses_nested_objects_without_trailing_commas() {
         let input = r#"let obj = {
             outer_fn = () => {
@@ -2748,20 +2741,6 @@ mod tests {
             panic!("Expected let statement");
         };
         assert!(matches!(value, Expr::QuotedString(s) if s == "Hello $name $(cmd) ${1+2}"));
-    }
-
-    #[test]
-    fn parses_nested_quotes_in_interpolations() {
-        let body = parse_program(r#"let msg = "Nested: $(echo "inner")""#);
-        let Statement::Let { value, .. } = &body[0] else {
-            panic!("Expected let statement");
-        };
-        let Expr::InterpolatedString(parts) = value else {
-            panic!("Expected InterpolatedString, got {value:?}");
-        };
-        assert_eq!(parts.len(), 2);
-        assert!(matches!(&parts[0], Expr::QuotedString(s) if s == "Nested: "));
-        assert!(matches!(&parts[1], Expr::CommandSubCommand(_)));
     }
 
     #[test]

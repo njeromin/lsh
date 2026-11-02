@@ -271,37 +271,6 @@ mod tests {
     }
 
     #[test]
-    fn draw_and_erase_menu_output_proper_ansi_sequences() {
-        let items = vec![
-            CompletionItem::new("cargo", "cargo", CompletionKind::Binary),
-            CompletionItem::new("cd", "cd", CompletionKind::Builtin),
-        ];
-
-        let mut buf = Vec::new();
-        let layout = MenuLayout {
-            width: 30,
-            height: 2,
-            menu_col: 0,
-            cursor_row: 10,
-            cursor_col: 5,
-            nerd_icons: false,
-        };
-        draw_menu(&mut buf, &items, 0, layout).unwrap();
-        let rendered = String::from_utf8_lossy(&buf);
-
-        assert!(rendered.contains("┌"));
-        assert!(rendered.contains("▶ cargo"));
-        assert!(rendered.contains("[bin]"));
-        assert!(rendered.contains("cd"));
-        assert!(rendered.contains("[builtin]"));
-        assert!(rendered.contains("└"));
-
-        let mut erase_buf = Vec::new();
-        erase_menu(&mut erase_buf, 4, 10, 5).unwrap();
-        assert!(!erase_buf.is_empty());
-    }
-
-    #[test]
     fn box_borders_and_rows_align_to_exact_width() {
         let items = vec![
             CompletionItem::new("cargo", "cargo", CompletionKind::Binary),

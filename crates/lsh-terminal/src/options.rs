@@ -70,7 +70,7 @@ impl From<&str> for EditMode {
 impl From<EditMode> for rustyline::EditMode {
     fn from(value: EditMode) -> Self {
         match value {
-            EditMode::Default => rustyline::EditMode::Vi,
+            EditMode::Default => rustyline::EditMode::Emacs,
             EditMode::Emacs => rustyline::EditMode::Emacs,
             EditMode::Vi => rustyline::EditMode::Vi,
         }
@@ -218,11 +218,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn options_default_has_nerd_icons_field() {
-        let default_opts = Options::default();
-        assert_eq!(default_opts.tab_stop, 4);
-        assert_eq!(default_opts.edit_mode, EditMode::Default);
-        assert_eq!(default_opts.completion_type, CompletionType::Menu);
+    fn edit_mode_default_converts_to_emacs() {
+        assert_eq!(
+            rustyline::EditMode::from(EditMode::Default),
+            rustyline::EditMode::Emacs
+        );
+        assert_eq!(
+            rustyline::EditMode::from(EditMode::Emacs),
+            rustyline::EditMode::Emacs
+        );
+        assert_eq!(
+            rustyline::EditMode::from(EditMode::Vi),
+            rustyline::EditMode::Vi
+        );
     }
 
     #[test]

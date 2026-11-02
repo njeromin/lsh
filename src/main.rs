@@ -12,8 +12,8 @@ use lsh_syntax::{
 use lsh_sys::signals::{init_interactive_terminal, reset_interrupted};
 use lsh_terminal::{LineEditorHelper, Options, osc};
 use rustyline::{
-    Cmd, CompletionType, Config, Editor, KeyEvent, Movement, config::Configurer,
-    error::ReadlineError, history::DefaultHistory,
+    At, Cmd, CompletionType, Config, Editor, KeyCode, KeyEvent, Modifiers, Movement, Word,
+    config::Configurer, error::ReadlineError, history::DefaultHistory,
 };
 
 const DEFAULT_PROMPT: &str = "\x1b[35m›\x1b[0m ";
@@ -75,6 +75,22 @@ fn interactive_session(
         .build();
     let mut editor = Editor::<LineEditorHelper, DefaultHistory>::with_config(config)?;
     editor.bind_sequence(KeyEvent::ctrl('c'), Cmd::Kill(Movement::WholeBuffer));
+    editor.bind_sequence(
+        KeyEvent(KeyCode::Left, Modifiers::CTRL),
+        Cmd::Move(Movement::BackwardWord(1, Word::Emacs)),
+    );
+    editor.bind_sequence(
+        KeyEvent(KeyCode::Right, Modifiers::CTRL),
+        Cmd::Move(Movement::ForwardWord(1, At::AfterEnd, Word::Emacs)),
+    );
+    editor.bind_sequence(
+        KeyEvent(KeyCode::Backspace, Modifiers::CTRL),
+        Cmd::Kill(Movement::BackwardWord(1, Word::Emacs)),
+    );
+    editor.bind_sequence(
+        KeyEvent(KeyCode::Delete, Modifiers::CTRL),
+        Cmd::Kill(Movement::ForwardWord(1, At::AfterEnd, Word::Emacs)),
+    );
     let mut helper = LineEditorHelper::new();
     helper.set_completion_registry(std::sync::Arc::clone(&eval.completion_registry));
     editor.set_helper(Some(helper));
