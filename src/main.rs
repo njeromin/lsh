@@ -12,7 +12,7 @@ use lsh_syntax::{
 use lsh_sys::signals::{init_interactive_terminal, reset_interrupted};
 use lsh_terminal::{LineEditorHelper, Options, osc};
 use rustyline::{
-    CompletionType, Config, Editor, config::Configurer, error::ReadlineError,
+    Cmd, CompletionType, Config, Editor, KeyEvent, Movement, config::Configurer, error::ReadlineError,
     history::DefaultHistory,
 };
 
@@ -74,6 +74,10 @@ fn interactive_session(
         .completion_type(CompletionType::List)
         .build();
     let mut editor = Editor::<LineEditorHelper, DefaultHistory>::with_config(config)?;
+    editor.bind_sequence(
+        KeyEvent::ctrl('c'),
+        Cmd::Kill(Movement::WholeBuffer),
+    );
     let mut helper = LineEditorHelper::new();
     helper.set_completion_registry(std::sync::Arc::clone(&eval.completion_registry));
     editor.set_helper(Some(helper));

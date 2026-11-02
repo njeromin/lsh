@@ -32,4 +32,4 @@ $prompt.separator = " "
 # $prompt.order.push("time")
 
 # The prompt character / symbol rendered on the input line:
-$prompt.text = $palette.bright_magenta + "$ " + $palette.reset
+$prompt.text = $palette.bright_magenta + "❯ " + $palette.reset
