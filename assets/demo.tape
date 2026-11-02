@@ -22,9 +22,7 @@ Enter
 Sleep 1s
 Type "export LSH_CONFIG_DIR=./config; export LSH_NERD_ICONS=true; alias lsh=./target/release/lsh"
 Enter
-Type "clear"
-Enter
-Type "lsh"
+Type "clear; lsh"
 Enter
 Sleep 1s
 Show
