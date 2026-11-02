@@ -37,6 +37,8 @@ nix build .#x86_64-pc-windows-gnu
 
 ## Language snapshot
 
+For full language documentation and examples, see the [Syntax Reference](docs/syntax.md).
+
 ```lsh
 # variables
 let name = "lsh"
