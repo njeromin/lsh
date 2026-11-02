@@ -68,6 +68,7 @@ Current builtins are:
 - `cd`
 - `exec` (run a file in a fresh evaluator)
 - `exit`
+- `export` (set/list environment variables)
 - `fmt-cwd`
 - `source` (run a file in current evaluator)
 

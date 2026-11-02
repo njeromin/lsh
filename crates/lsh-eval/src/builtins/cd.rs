@@ -79,6 +79,12 @@ pub fn cd<R: io::Read, W: io::Write, WE: io::Write>(
             String::from("PWD"),
             Value::String(logical_target.to_string_lossy().into_owned()),
         );
+        unsafe {
+            env::set_var("PWD", logical_target.to_string_lossy().as_ref());
+            env::set_var("OLDPWD", current_logical_pwd.to_string_lossy().as_ref());
+        }
+        eval.exported_vars.insert("PWD".to_string());
+        eval.exported_vars.insert("OLDPWD".to_string());
         eval.trigger_chpwd(
             &current_logical_pwd.to_string_lossy(),
             &logical_target.to_string_lossy(),

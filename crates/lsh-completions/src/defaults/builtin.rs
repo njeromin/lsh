@@ -88,6 +88,10 @@ pub fn populate_builtin_rules(rules: &mut HashMap<String, CompletionRule>) {
         CompletionKind::Flag,
     )];
     rules.insert("exit".to_string(), exit_rule);
+
+    let export_rule =
+        CompletionRule::new().with_description("Set or list exported environment variables");
+    rules.insert("export".to_string(), export_rule);
 }
 
 pub use populate_builtin_rules as populate_rules;

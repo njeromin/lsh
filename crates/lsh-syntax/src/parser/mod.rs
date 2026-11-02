@@ -101,15 +101,35 @@ impl Parser {
                 };
 
                 // Assignment is only valid for assignable targets.
-                if self.check_current(&TokenKind::Equals)
-                    && matches!(expr, Expr::Variable(_) | Expr::Index { .. })
-                {
+                let is_assignable = match &expr {
+                    Expr::Variable(_) | Expr::Index { .. } => true,
+                    Expr::Call { target, args } if args.is_empty() => {
+                        matches!(target.as_ref(), Expr::Word(_))
+                    }
+                    _ => false,
+                };
+
+                if self.check_current(&TokenKind::Equals) && is_assignable {
+                    let pre_assign_index = self.index;
                     self.advance(); // Skip '='.
-                    let value = self.parse_expr()?;
-                    return Ok(Statement::Assign {
-                        target: expr,
-                        value,
-                    });
+                    if let Ok(value) = self.parse_expr() {
+                        let statement_ends = self.check_current(&TokenKind::Semicolon)
+                            || self.check_current(&TokenKind::NewLine)
+                            || self.check_current(&TokenKind::EOF)
+                            || self.check_current(&TokenKind::RightCurly);
+
+                        if statement_ends {
+                            let target = match expr {
+                                Expr::Call { target, args } if args.is_empty() => match *target {
+                                    Expr::Word(name) => Expr::Variable(name),
+                                    other => other,
+                                },
+                                other => other,
+                            };
+                            return Ok(Statement::Assign { target, value });
+                        }
+                    }
+                    self.index = pre_assign_index;
                 }
 
                 // If it's a Call and the statement ends here, treat it as an expression statement.

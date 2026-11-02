@@ -245,6 +245,7 @@ pub struct LineEditorHelper {
     cached_binaries: Vec<String>,
     cached_aliases: Vec<String>,
     cached_vars: Vec<String>,
+    last_path: Option<std::ffi::OsString>,
     pub completion_type: CompletionType,
     pub nerd_icons: bool,
     pub completion_registry: Arc<RwLock<CompletionRegistry>>,
@@ -266,6 +267,7 @@ impl LineEditorHelper {
             cached_binaries: scan_path_binaries(),
             cached_aliases: Vec::new(),
             cached_vars: Vec::new(),
+            last_path: std::env::var_os("PATH"),
             completion_type: CompletionType::Menu,
             nerd_icons: false,
             completion_registry: Arc::new(RwLock::new(CompletionRegistry::with_defaults())),
@@ -290,6 +292,14 @@ impl LineEditorHelper {
 
     pub fn set_vars(&mut self, vars: Vec<String>) {
         self.cached_vars = vars;
+    }
+
+    pub fn refresh_binaries_if_path_changed(&mut self) {
+        let current_path = std::env::var_os("PATH");
+        if current_path != self.last_path {
+            self.cached_binaries = scan_path_binaries();
+            self.last_path = current_path;
+        }
     }
 
     pub fn reset_prompt_marks(&self) {
@@ -1133,5 +1143,52 @@ mod tests {
         assert_eq!(start, 10);
         assert!(items.iter().any(|it| it.replacement == "start"));
         assert!(items.iter().any(|it| it.replacement == "stop"));
+    }
+
+    #[test]
+    fn refresh_binaries_on_path_change() {
+        let orig_path = std::env::var_os("PATH");
+        let temp_dir = std::env::temp_dir().join("lsh_test_terminal_bin_refresh");
+        let _ = std::fs::create_dir_all(&temp_dir);
+        let test_bin = temp_dir.join("unique_test_tool_xyz");
+        let _ = std::fs::write(&test_bin, "#!/bin/sh\nexit 0\n");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&test_bin, std::fs::Permissions::from_mode(0o755));
+        }
+
+        let mut helper = LineEditorHelper::new();
+        assert!(
+            !helper
+                .cached_binaries
+                .contains(&"unique_test_tool_xyz".to_string())
+        );
+
+        let new_path = format!(
+            "{}:{}",
+            temp_dir.display(),
+            orig_path
+                .as_ref()
+                .and_then(|p| p.to_str())
+                .unwrap_or_default()
+        );
+        unsafe {
+            std::env::set_var("PATH", &new_path);
+        }
+
+        helper.refresh_binaries_if_path_changed();
+        assert!(
+            helper
+                .cached_binaries
+                .contains(&"unique_test_tool_xyz".to_string())
+        );
+
+        if let Some(orig) = orig_path {
+            unsafe {
+                std::env::set_var("PATH", orig);
+            }
+        }
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }

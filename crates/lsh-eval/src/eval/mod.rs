@@ -4,7 +4,7 @@ pub mod hooks;
 pub mod value;
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     env,
     fs::File,
     io,
@@ -78,10 +78,15 @@ pub struct Evaluator {
     pub plugin_manager: PluginManager,
     pub hook_registry: Arc<RwLock<HookRegistry>>,
     pub module_cache: Arc<RwLock<HashMap<PathBuf, Value>>>,
+    pub exported_vars: HashSet<String>,
 }
 
 impl Evaluator {
     pub fn new() -> Evaluator {
+        let mut exported_vars: HashSet<String> = env::vars().map(|(k, _)| k).collect();
+        exported_vars.insert("PATH".to_string());
+        exported_vars.insert("PWD".to_string());
+
         Evaluator {
             scopes: vec![Scope::default()],
             aliases: HashMap::new(),
@@ -91,6 +96,32 @@ impl Evaluator {
             plugin_manager: PluginManager::new(),
             hook_registry: Arc::new(RwLock::new(HookRegistry::new())),
             module_cache: Arc::new(RwLock::new(HashMap::new())),
+            exported_vars,
+        }
+    }
+
+    pub fn is_exported(&self, name: &str) -> bool {
+        name == "PATH" || self.exported_vars.contains(name) || env::var(name).is_ok()
+    }
+
+    pub fn export_var(&mut self, name: &str, value: &str) {
+        self.exported_vars.insert(name.to_string());
+        unsafe {
+            env::set_var(name, value);
+        }
+        if let Some(scope) = self.scopes.first_mut() {
+            scope
+                .vars
+                .insert(name.to_string(), Value::String(value.to_string()));
+        }
+    }
+
+    pub fn sync_env_var_if_exported(&mut self, name: &str, value: &Value) {
+        if self.is_exported(name) {
+            self.exported_vars.insert(name.to_string());
+            unsafe {
+                env::set_var(name, value.to_string());
+            }
         }
     }
 
@@ -456,6 +487,9 @@ impl Evaluator {
         scope
             .vars
             .insert(String::from("PWD"), Value::String(logical_pwd));
+        if let Ok(path) = env::var("PATH") {
+            scope.vars.insert(String::from("PATH"), Value::String(path));
+        }
 
         self
     }
@@ -956,8 +990,9 @@ impl Evaluator {
     }
 
     pub fn set_var(&mut self, scope: usize, name: &str, value: Value) -> Result<(), EvalError> {
-        let scope = self.scopes.get_mut(scope).ok_or(EvalError::ScopeNotFound)?;
-        scope.vars.insert(name.to_string(), value);
+        let s = self.scopes.get_mut(scope).ok_or(EvalError::ScopeNotFound)?;
+        s.vars.insert(name.to_string(), value.clone());
+        self.sync_env_var_if_exported(name, &value);
 
         Ok(())
     }
@@ -976,11 +1011,12 @@ impl Evaluator {
     }
 
     pub fn get_var_names(&self) -> Vec<String> {
-        let mut vars = Vec::new();
+        let mut vars = HashSet::new();
         for scope in &self.scopes {
             vars.extend(scope.vars.keys().cloned());
         }
-        vars
+        vars.extend(self.exported_vars.iter().cloned());
+        vars.into_iter().collect()
     }
 
     pub fn evaluate_program(&mut self, prog: Program) -> EvalOutcome {
@@ -1100,7 +1136,8 @@ impl Evaluator {
                     if let Some(last_scope_index) = scope_indices.last()
                         && let Some(scope) = self.scopes.get_mut(*last_scope_index)
                     {
-                        scope.vars.insert(name.to_owned(), expr);
+                        scope.vars.insert(name.to_owned(), expr.clone());
+                        self.sync_env_var_if_exported(&name, &expr);
                     } else {
                         panic!("Failed to get current scope.");
                     }
@@ -1936,7 +1973,8 @@ impl Evaluator {
         for scope_index in scope_indices.iter().rev() {
             if let Some(scope) = self.scopes.get_mut(*scope_index) {
                 if scope.vars.contains_key(var_name) {
-                    scope.vars.insert(var_name.to_owned(), value);
+                    scope.vars.insert(var_name.to_owned(), value.clone());
+                    self.sync_env_var_if_exported(var_name, &value);
                     return;
                 }
             } else {
@@ -1947,7 +1985,8 @@ impl Evaluator {
         if let Some(scope_index) = scope_indices.last().copied()
             && let Some(scope) = self.scopes.get_mut(scope_index)
         {
-            scope.vars.insert(var_name.to_owned(), value);
+            scope.vars.insert(var_name.to_owned(), value.clone());
+            self.sync_env_var_if_exported(var_name, &value);
         } else {
             panic!("Failed to get current scope for assignment.");
         }
@@ -3095,6 +3134,54 @@ mod tests {
     fn pipeline_streaming_returns_last_stage_exit_code() {
         let status = eval_str("echo 'test stream' | cat");
         assert_eq!(status, 0);
+    }
+
+    #[test]
+    fn path_assignment_updates_process_environment() {
+        let orig_path = env::var("PATH").unwrap_or_default();
+        let temp_dir = std::env::temp_dir().join("lsh_test_path_sync");
+        let _ = std::fs::create_dir_all(&temp_dir);
+
+        let code = format!(r#"$PATH = "{}:" + $PATH"#, temp_dir.display());
+        let (eval, status) = eval_with_evaluator(&code);
+        assert_eq!(status, 0);
+
+        let current_env_path = env::var("PATH").unwrap_or_default();
+        assert!(current_env_path.starts_with(&format!("{}:", temp_dir.display())));
+        assert_eq!(
+            eval.get_var(0, "PATH").unwrap().to_string(),
+            current_env_path
+        );
+
+        // Restore original path
+        unsafe {
+            env::set_var("PATH", orig_path);
+        }
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn let_path_assignment_updates_process_environment() {
+        let orig_path = env::var("PATH").unwrap_or_default();
+        let temp_dir = std::env::temp_dir().join("lsh_test_let_path_sync");
+        let _ = std::fs::create_dir_all(&temp_dir);
+
+        let code = format!(r#"let PATH = "{}:" + $PATH"#, temp_dir.display());
+        let (eval, status) = eval_with_evaluator(&code);
+        assert_eq!(status, 0);
+
+        let current_env_path = env::var("PATH").unwrap_or_default();
+        assert!(current_env_path.starts_with(&format!("{}:", temp_dir.display())));
+        assert_eq!(
+            eval.get_var(0, "PATH").unwrap().to_string(),
+            current_env_path
+        );
+
+        // Restore original path
+        unsafe {
+            env::set_var("PATH", orig_path);
+        }
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 
     fn eval_var(code: &str, var_name: &str) -> Option<Value> {

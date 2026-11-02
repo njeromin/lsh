@@ -30,4 +30,3 @@ $prompt.segments = [
 
 # Separator placed between adjacent segments on the same line:
 $prompt.separator = " "
-

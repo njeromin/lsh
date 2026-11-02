@@ -120,6 +120,7 @@ fn interactive_session(
             commands.extend(eval.plugin_manager.list_commands());
             helper.set_aliases(commands);
             helper.set_vars(eval.get_var_names());
+            helper.refresh_binaries_if_path_changed();
         }
 
         let prompt = get_prompt(eval);
