@@ -1,5 +1,6 @@
 pub mod cmds;
 pub mod exec;
+pub mod hooks;
 pub mod value;
 
 use std::{
@@ -7,11 +8,14 @@ use std::{
     env,
     fs::File,
     io,
+    path::PathBuf,
     sync::{
         Arc, RwLock,
         atomic::{AtomicBool, Ordering},
     },
 };
+
+use hooks::HookRegistry;
 
 use lsh_completions::CompletionRegistry;
 use lsh_syntax::{
@@ -55,12 +59,6 @@ struct ExternalPipelineStage {
     stdout_redirect: Option<String>,
 }
 
-struct PromptSegmentInvocation {
-    _name: String,
-    func: Arc<FunctionValue>,
-    receiver: Option<(Expr, Value)>,
-}
-
 type NamedReceiver = (String, Value);
 type NamedFunctionWithReceiver = (Arc<FunctionValue>, Option<NamedReceiver>);
 
@@ -76,6 +74,8 @@ pub struct Evaluator {
     pub interrupted: Arc<AtomicBool>,
     pub completion_registry: Arc<RwLock<CompletionRegistry>>,
     pub plugin_manager: PluginManager,
+    pub hook_registry: Arc<RwLock<HookRegistry>>,
+    pub module_cache: Arc<RwLock<HashMap<PathBuf, Value>>>,
 }
 
 impl Evaluator {
@@ -87,6 +87,8 @@ impl Evaluator {
             interrupted: get_interrupt_flag(),
             completion_registry: Arc::new(RwLock::new(CompletionRegistry::with_defaults())),
             plugin_manager: PluginManager::new(),
+            hook_registry: Arc::new(RwLock::new(HookRegistry::new())),
+            module_cache: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -132,19 +134,21 @@ impl Evaluator {
     pub fn with_globals(mut self) -> Evaluator {
         let scope = self.scopes.first_mut().unwrap(); // TODO: Don't use unwrap.
 
-        let mut segments_map = HashMap::new();
-        let newline_fn = Value::function(FunctionValue::native("newline", |_eval, _, _| {
-            Value::String(String::from("\n"))
+        let fmt_cwd_fn = Value::function(FunctionValue::native("fmt_cwd", |eval, args, _| {
+            let formatted = if let Some(path_arg) = args.first() {
+                let path =
+                    lsh_syntax::paths::expand_tilde(std::path::PathBuf::from(path_arg.to_string()));
+                if let Some(home_dir) = crate::builtins::fmt_cwd::resolve_home_dir(eval) {
+                    crate::builtins::fmt_cwd::format_cwd(path.as_path(), home_dir.as_path())
+                } else {
+                    path.to_string_lossy().into_owned()
+                }
+            } else {
+                crate::builtins::fmt_cwd::format_cwd_for_eval(eval)
+            };
+            Value::String(formatted)
         }));
-        segments_map.insert(String::from("newline"), newline_fn.clone());
-        segments_map.insert(String::from("\n"), newline_fn);
-        segments_map.insert(
-            String::from("cwd"),
-            Value::function(FunctionValue::native("cwd", |eval, _, _| {
-                let cwd = crate::builtins::fmt_cwd::format_cwd_for_eval(eval);
-                Value::String(format!("\x1b[1;34m{cwd}\x1b[0m"))
-            })),
-        );
+        scope.vars.insert(String::from("fmt_cwd"), fmt_cwd_fn.clone());
 
         let render_fn = Value::function(FunctionValue::native("render", |eval, args, receiver| {
             let order_arg = args.first().and_then(|v| match v {
@@ -160,24 +164,118 @@ impl Evaluator {
         }));
 
         let mut prompt_map = HashMap::new();
+        prompt_map.insert("separator".to_string(), Value::String(String::from(" ")));
         prompt_map.insert(
-            "text".to_string(),
-            Value::String(String::from("\x1b[35m$\x1b[0m ")),
-        );
-        prompt_map.insert(
-            "order".to_string(),
+            "segments".to_string(),
             Value::array(vec![
-                Value::String(String::from("newline")),
-                Value::String(String::from("cwd")),
+                Value::String(String::from("\n")),
+                fmt_cwd_fn,
+                Value::String(String::from("\n")),
+                Value::String(String::from("\x1b[35m›\x1b[0m ")),
             ]),
         );
-        prompt_map.insert("separator".to_string(), Value::String(String::from(" ")));
-        prompt_map.insert("segments".to_string(), Value::object(segments_map));
         prompt_map.insert("render".to_string(), render_fn);
 
         scope
             .vars
             .insert(String::from("prompt"), Value::object(prompt_map));
+
+        let import_fn = Value::function(FunctionValue::native("import", |eval, args, _receiver| {
+            let Some(target) = args.first() else {
+                return Value::Null;
+            };
+            let target_str = match target {
+                Value::String(s) => s.clone(),
+                _ => target.to_string(),
+            };
+            match eval.import_module(&target_str) {
+                Ok(val) => val,
+                Err(err) => {
+                    eprintln!("import error: {err}");
+                    Value::Null
+                }
+            }
+        }));
+        scope.vars.insert(String::from("import"), import_fn);
+
+        let hooks_registry = Arc::clone(&self.hook_registry);
+
+        let add_fn = {
+            let reg = Arc::clone(&hooks_registry);
+            Value::function(FunctionValue::native("add", move |_eval, args, _| {
+                let Some(event_val) = args.first() else {
+                    return Value::Bool(false);
+                };
+                let Some(func_val) = args.get(1) else {
+                    return Value::Bool(false);
+                };
+                let event = match event_val {
+                    Value::String(s) => s.as_str(),
+                    _ => return Value::Bool(false),
+                };
+                let Value::Function(f) = func_val else {
+                    return Value::Bool(false);
+                };
+                reg.write().unwrap().add(event, Arc::clone(f));
+                Value::Bool(true)
+            }))
+        };
+
+        let remove_fn = {
+            let reg = Arc::clone(&hooks_registry);
+            Value::function(FunctionValue::native("remove", move |_eval, args, _| {
+                let Some(event_val) = args.first() else {
+                    return Value::Bool(false);
+                };
+                let Some(func_val) = args.get(1) else {
+                    return Value::Bool(false);
+                };
+                let event = match event_val {
+                    Value::String(s) => s.as_str(),
+                    _ => return Value::Bool(false),
+                };
+                let Value::Function(f) = func_val else {
+                    return Value::Bool(false);
+                };
+                let removed = reg.write().unwrap().remove(event, f);
+                Value::Bool(removed)
+            }))
+        };
+
+        let clear_fn = {
+            let reg = Arc::clone(&hooks_registry);
+            Value::function(FunctionValue::native("clear", move |_eval, args, _| {
+                let event = args.first().and_then(|v| match v {
+                    Value::String(s) => Some(s.as_str()),
+                    _ => None,
+                });
+                reg.write().unwrap().clear(event);
+                Value::Null
+            }))
+        };
+
+        let list_fn = {
+            let reg = Arc::clone(&hooks_registry);
+            Value::function(FunctionValue::native("list", move |_eval, _args, _| {
+                let list = reg.read().unwrap().list();
+                let map = list
+                    .into_iter()
+                    .map(|(k, count)| (k, Value::Number(count as f64)))
+                    .collect();
+                Value::object(map)
+            }))
+        };
+
+        let mut hooks_map = HashMap::new();
+        hooks_map.insert("add".to_string(), add_fn.clone());
+        hooks_map.insert("on".to_string(), add_fn);
+        hooks_map.insert("remove".to_string(), remove_fn);
+        hooks_map.insert("clear".to_string(), clear_fn);
+        hooks_map.insert("list".to_string(), list_fn);
+
+        scope
+            .vars
+            .insert(String::from("hooks"), Value::object(hooks_map));
 
         scope
             .vars
@@ -372,154 +470,188 @@ impl Evaluator {
     }
 
     pub fn trigger_pre_prompt(&mut self) {
-        let hooks = self.plugin_manager.get_hooks_for("on_pre_prompt");
-        for (func, receiver) in hooks {
+        let registry_hooks = self.hook_registry.read().unwrap().get_hooks("pre_prompt");
+        for func in registry_hooks {
             let mut scope_indices = vec![0];
-            let rec = Some((Expr::Variable("this".to_string()), receiver));
-            self.call_user_function_with_values_and_receiver(
-                &func,
-                vec![],
-                rec,
-                &mut scope_indices,
-            );
+            self.call_user_function_with_values_and_receiver(&func, vec![], None, &mut scope_indices);
         }
     }
 
     pub fn trigger_pre_exec(&mut self, cmd_line: &str) {
-        let hooks = self.plugin_manager.get_hooks_for("on_pre_exec");
-        for (func, receiver) in hooks {
+        let registry_hooks = self.hook_registry.read().unwrap().get_hooks("pre_exec");
+        for func in registry_hooks {
             let mut scope_indices = vec![0];
-            let rec = Some((Expr::Variable("this".to_string()), receiver));
             self.call_user_function_with_values_and_receiver(
                 &func,
                 vec![Value::String(cmd_line.to_string())],
-                rec,
+                None,
                 &mut scope_indices,
             );
         }
     }
 
     pub fn trigger_post_exec(&mut self, cmd_line: &str, exit_code: i32) {
-        let hooks = self.plugin_manager.get_hooks_for("on_post_exec");
-        for (func, receiver) in hooks {
+        let registry_hooks = self.hook_registry.read().unwrap().get_hooks("post_exec");
+        for func in registry_hooks {
             let mut scope_indices = vec![0];
-            let rec = Some((Expr::Variable("this".to_string()), receiver));
             self.call_user_function_with_values_and_receiver(
                 &func,
                 vec![
                     Value::String(cmd_line.to_string()),
                     Value::Number(exit_code as f64),
                 ],
-                rec,
+                None,
                 &mut scope_indices,
             );
         }
     }
 
     pub fn trigger_chpwd(&mut self, old_pwd: &str, new_pwd: &str) {
-        let hooks = self.plugin_manager.get_hooks_for("on_chpwd");
-        for (func, receiver) in hooks {
+        let registry_hooks = self.hook_registry.read().unwrap().get_hooks("chpwd");
+        for func in registry_hooks {
             let mut scope_indices = vec![0];
-            let rec = Some((Expr::Variable("this".to_string()), receiver));
             self.call_user_function_with_values_and_receiver(
                 &func,
                 vec![
                     Value::String(old_pwd.to_string()),
                     Value::String(new_pwd.to_string()),
                 ],
-                rec,
+                None,
                 &mut scope_indices,
             );
         }
     }
 
-    pub fn load_plugin(&mut self, name_or_path: &str) -> Result<String, String> {
+    pub fn import_module(&mut self, name_or_path: &str) -> Result<Value, String> {
         let path = self
             .plugin_manager
             .find_plugin_file(name_or_path)
-            .ok_or_else(|| format!("Plugin '{name_or_path}' not found in search paths."))?;
+            .ok_or_else(|| format!("Module or plugin '{name_or_path}' not found in search paths."))?;
 
-        let outcome = crate::eval::exec::exec_file_outcome(self, path)?;
+        let canonical_path = path.canonicalize().unwrap_or_else(|_| path.clone());
 
-        if let EvalFlow::Return(manifest_val @ Value::Object(_)) = outcome.flow {
-            let name = self.plugin_manager.register(manifest_val)?;
-            self.on_plugin_registered(&name);
-            return Ok(name);
+        {
+            let cache = self.module_cache.read().unwrap();
+            if let Some(cached_val) = cache.get(&canonical_path) {
+                return Ok(cached_val.clone());
+            }
         }
 
-        Err(format!(
-            "Plugin '{name_or_path}' must return an object manifest (e.g. 'return {{ name = \"...\", ... }}')."
-        ))
+        let scope_index = self.make_scope();
+        let mut scope_indices = vec![0, scope_index];
+        let outcome_res =
+            crate::eval::exec::exec_file_outcome_scoped(self, path, &mut scope_indices);
+
+        if scope_indices.pop() == Some(scope_index) {
+            self.scopes.pop();
+        }
+
+        let outcome = outcome_res?;
+        let export_val = match outcome.flow {
+            EvalFlow::Return(v) => v,
+            _ => Value::Null,
+        };
+
+        if let Value::Object(ref map) = export_val {
+            // Flatten prompt_segments so plugin methods (like .git) can be accessed directly on manifest
+            if let Some(Value::Object(seg_map)) = export_val
+                .get_property("prompt_segments")
+                .or_else(|| export_val.get_property("segments"))
+            {
+                let seg_guard = seg_map.read().unwrap_or_else(|p| p.into_inner()).clone();
+                let mut m_guard = map.write().unwrap_or_else(|p| p.into_inner());
+                for (k, v) in seg_guard {
+                    m_guard.entry(k).or_insert(v);
+                }
+            }
+
+            // Register hooks in hook_registry
+            let mut hooks_to_register = Vec::new();
+            if let Some(Value::Object(hooks_map)) = export_val.get_property("hooks") {
+                let h_guard = hooks_map.read().unwrap_or_else(|p| p.into_inner()).clone();
+                for (event_name, hook_val) in h_guard {
+                    if let Value::Function(f) = hook_val {
+                        let bound = Arc::new(f.with_bound_this(export_val.clone()));
+                        hooks_to_register.push((event_name, bound));
+                    }
+                }
+            }
+
+            let top_level_hook_candidates = [
+                "on_chpwd", "chpwd",
+                "on_pre_prompt", "pre_prompt",
+                "on_pre_exec", "pre_exec",
+                "on_post_exec", "post_exec",
+            ];
+            for hook_name in top_level_hook_candidates {
+                if let Some(Value::Function(f)) = export_val.get_property(hook_name) {
+                    let bound = Arc::new(f.with_bound_this(export_val.clone()));
+                    hooks_to_register.push((hook_name.to_string(), bound));
+                }
+            }
+
+            if !hooks_to_register.is_empty() {
+                let mut reg = self.hook_registry.write().unwrap();
+                for (event, func) in hooks_to_register {
+                    reg.add(&event, func);
+                }
+            }
+
+            // Register in plugin_manager if manifest has a non-empty name
+            if let Some(Value::String(ref name)) = export_val.get_property("name")
+                && !name.trim().is_empty()
+            {
+                let _ = self.plugin_manager.register(export_val.clone());
+            }
+        }
+
+        self.module_cache
+            .write()
+            .unwrap()
+            .insert(canonical_path, export_val.clone());
+
+        Ok(export_val)
+    }
+
+    pub fn load_plugin(&mut self, name_or_path: &str) -> Result<String, String> {
+        let manifest_val = self.import_module(name_or_path)?;
+        let Value::Object(_) = manifest_val else {
+            return Err(format!(
+                "Plugin '{name_or_path}' must return an object manifest (e.g. 'return {{ name = \"...\", ... }}')."
+            ));
+        };
+        let name = match manifest_val.get_property("name") {
+            Some(Value::String(s)) if !s.trim().is_empty() => s.trim().to_string(),
+            _ => {
+                return Err(format!(
+                    "Plugin '{name_or_path}' must return an object manifest (e.g. 'return {{ name = \"...\", ... }}')."
+                ));
+            }
+        };
+        Ok(name)
     }
 
     pub fn unload_plugin(&mut self, name: &str) -> bool {
         self.on_plugin_unregistered(name);
+        if let Some(plugin) = self.plugin_manager.get(name) {
+            let manifest = plugin.manifest.clone();
+            let candidate_hooks = ["pre_prompt", "pre_exec", "post_exec", "chpwd"];
+            for hook in candidate_hooks {
+                let full = format!("on_{hook}");
+                let func_to_remove = manifest
+                    .get_property("hooks")
+                    .and_then(|h| h.get_property(&full).or_else(|| h.get_property(hook)))
+                    .or_else(|| manifest.get_property(&full))
+                    .or_else(|| manifest.get_property(hook));
+                if let Some(Value::Function(f)) = func_to_remove {
+                    self.hook_registry.write().unwrap().remove(hook, &f);
+                }
+            }
+        }
         self.plugin_manager.unregister(name)
     }
 
-    pub fn on_plugin_registered(&mut self, plugin_name: &str) {
-        let segment_names = self.plugin_manager.list_prompt_segments_for(plugin_name);
-        if segment_names.is_empty() {
-            return;
-        }
-
-        let Some(prompt_val) = self.get_var(0, "prompt").cloned() else {
-            return;
-        };
-
-        let Value::Object(ref prompt_map) = prompt_val else {
-            return;
-        };
-
-        let mut prompt_guard = prompt_map.write().unwrap_or_else(|p| p.into_inner());
-
-        let segments_obj = prompt_guard
-            .entry("segments".to_string())
-            .or_insert_with(|| Value::object(HashMap::new()))
-            .clone();
-
-        if let Value::Object(ref seg_map) = segments_obj {
-            let mut seg_guard = seg_map.write().unwrap_or_else(|p| p.into_inner());
-            for seg_name in &segment_names {
-                if let Some((func, _)) = self.plugin_manager.get_prompt_segment(seg_name) {
-                    seg_guard.insert(seg_name.clone(), Value::Function(func));
-                }
-            }
-        }
-
-        match prompt_guard.get_mut("order") {
-            Some(Value::Array(arr)) => {
-                if let Ok(mut a) = arr.write() {
-                    for seg_name in segment_names {
-                        if !a.iter().any(|v| match v {
-                            Value::String(s) => s == &seg_name,
-                            _ => false,
-                        }) {
-                            a.push(Value::String(seg_name));
-                        }
-                    }
-                }
-            }
-            Some(Value::String(order_str)) => {
-                let mut order_parts: Vec<String> = order_str
-                    .split_whitespace()
-                    .map(|s| s.to_string())
-                    .collect();
-
-                for seg_name in segment_names {
-                    if !order_parts.iter().any(|part| part == &seg_name) {
-                        order_parts.push(seg_name);
-                    }
-                }
-
-                *order_str = order_parts.join(" ");
-            }
-            _ => {
-                let items: Vec<Value> = segment_names.into_iter().map(Value::String).collect();
-                prompt_guard.insert("order".to_string(), Value::array(items));
-            }
-        }
-    }
+    pub fn on_plugin_registered(&mut self, _plugin_name: &str) {}
 
     pub fn on_plugin_unregistered(&mut self, plugin_name: &str) {
         let segment_names = self.plugin_manager.list_prompt_segments_for(plugin_name);
@@ -537,7 +669,22 @@ impl Evaluator {
 
         let mut prompt_guard = prompt_map.write().unwrap_or_else(|p| p.into_inner());
 
-        if let Some(Value::Object(seg_map)) = prompt_guard.get("segments") {
+        if let Some(Value::Array(arr)) = prompt_guard.get("segments") {
+            if let Ok(mut a) = arr.write() {
+                a.retain(|v| match v {
+                    Value::Function(f) => {
+                        if let Some(ref bound) = f.bound_this
+                            && let Some(Value::String(name)) = bound.get_property("name")
+                        {
+                            return name != plugin_name;
+                        }
+                        true
+                    }
+                    Value::String(s) => !segment_names.contains(s),
+                    _ => true,
+                });
+            }
+        } else if let Some(Value::Object(seg_map)) = prompt_guard.get("segments") {
             let mut seg_guard = seg_map.write().unwrap_or_else(|p| p.into_inner());
             for seg_name in &segment_names {
                 seg_guard.remove(seg_name);
@@ -581,31 +728,39 @@ impl Evaluator {
             }
         };
 
-        let (order_val, separator_str) = if let Value::Object(ref prompt_map) = prompt_val {
-            let guard = match prompt_map.read() {
-                Ok(g) => g,
-                Err(p) => p.into_inner(),
+        let (segments_val, order_val, separator_str) =
+            if let Value::Object(ref prompt_map) = prompt_val {
+                let guard = match prompt_map.read() {
+                    Ok(g) => g,
+                    Err(p) => p.into_inner(),
+                };
+                let segs = guard.get("segments").cloned();
+                let order = guard.get("order").cloned();
+                let sep = guard
+                    .get("separator")
+                    .and_then(|v| match v {
+                        Value::String(s) => Some(s.clone()),
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| " ".to_string());
+                (segs, order, sep)
+            } else {
+                (None, None, " ".to_string())
             };
-            let order = guard.get("order").cloned();
-            let sep = guard
-                .get("separator")
-                .and_then(|v| match v {
-                    Value::String(s) => Some(s.clone()),
-                    _ => None,
-                })
-                .unwrap_or_else(|| " ".to_string());
-            (order, sep)
-        } else {
-            (None, " ".to_string())
-        };
 
         let separator = separator_arg.unwrap_or(&separator_str);
 
-        let segment_names: Vec<String> = if let Some(order_override) = order_arg {
+        let items: Vec<Value> = if let Some(order_override) = order_arg {
             order_override
                 .split_whitespace()
-                .map(|s| s.to_string())
+                .map(|s| Value::String(s.to_string()))
                 .collect()
+        } else if let Some(Value::Array(arr)) = segments_val {
+            let guard = match arr.read() {
+                Ok(g) => g,
+                Err(p) => p.into_inner(),
+            };
+            guard.clone()
         } else if let Some(ref order) = order_val {
             match order {
                 Value::Array(arr) => {
@@ -613,122 +768,129 @@ impl Evaluator {
                         Ok(g) => g,
                         Err(p) => p.into_inner(),
                     };
-                    guard.iter().map(|v| v.to_string()).collect()
+                    guard.clone()
                 }
-                Value::String(s) => s.split_whitespace().map(|s| s.to_string()).collect(),
+                Value::String(s) => s
+                    .split_whitespace()
+                    .map(|w| Value::String(w.to_string()))
+                    .collect(),
                 _ => Vec::new(),
             }
+        } else if let Some(Value::Object(seg_map)) = segments_val {
+            let guard = match seg_map.read() {
+                Ok(g) => g,
+                Err(p) => p.into_inner(),
+            };
+            guard.values().cloned().collect()
         } else {
-            let mut names = Vec::new();
-            if let Value::Object(ref prompt_map) = prompt_val {
-                let guard = match prompt_map.read() {
-                    Ok(g) => g,
-                    Err(p) => p.into_inner(),
-                };
-                if let Some(Value::Object(seg_map)) = guard.get("segments") {
-                    let seg_guard = match seg_map.read() {
-                        Ok(g) => g,
-                        Err(p) => p.into_inner(),
-                    };
-                    names.extend(seg_guard.keys().cloned());
-                }
-            }
-            names
+            Vec::new()
         };
 
-        let mut to_run: Vec<PromptSegmentInvocation> = Vec::new();
-        for name in segment_names {
-            if let Some((func, manifest)) = self.plugin_manager.get_prompt_segment(&name) {
-                let rec = Some((Expr::Variable("this".to_string()), manifest));
-                to_run.push(PromptSegmentInvocation {
-                    _name: name,
-                    func,
-                    receiver: rec,
-                });
-            } else if let Value::Object(ref prompt_map) = prompt_val {
-                let guard = match prompt_map.read() {
-                    Ok(g) => g,
-                    Err(p) => p.into_inner(),
-                };
-                if let Some(Value::Object(seg_map)) = guard.get("segments") {
-                    let seg_guard = match seg_map.read() {
-                        Ok(g) => g,
-                        Err(p) => p.into_inner(),
+        let mut rendered: Vec<String> = Vec::new();
+        for item in items {
+            match item {
+                Value::Function(func) => {
+                    let rec = if func.bound_this.is_some() {
+                        None
+                    } else {
+                        Some((Expr::Variable("this".to_string()), prompt_val.clone()))
                     };
-                    match seg_guard.get(&name) {
-                        Some(Value::Function(func)) => {
-                            let rec =
-                                Some((Expr::Variable("this".to_string()), prompt_val.clone()));
-                            to_run.push(PromptSegmentInvocation {
-                                _name: name,
-                                func: Arc::clone(func),
-                                receiver: rec,
-                            });
+                    let is_newline = func.name() == Some("newline");
+                    let val = self.exec_function_with_receiver(&func, vec![], rec);
+                    let text = match val {
+                        Value::String(s) => s,
+                        Value::Number(n) => n.to_string(),
+                        Value::Bool(b) => b.to_string(),
+                        _ => String::new(),
+                    };
+                    let cleaned = if text == "\n" || is_newline {
+                        text
+                    } else {
+                        text.trim_end_matches('\n').to_string()
+                    };
+                    if !cleaned.is_empty() {
+                        rendered.push(cleaned);
+                    }
+                }
+                Value::String(s) => {
+                    if s == "newline" || s == "\n" {
+                        rendered.push("\n".to_string());
+                    } else if s == "cwd" {
+                        let cwd = crate::builtins::fmt_cwd::format_cwd_for_eval(self);
+                        rendered.push(format!("\x1b[1;34m{cwd}\x1b[0m"));
+                    } else if s == "char" || s == "symbol" {
+                        let text = if let Value::Object(ref prompt_map) = prompt_val
+                            && let Ok(guard) = prompt_map.read()
+                            && let Some(Value::String(t)) = guard.get("text")
+                        {
+                            t.clone()
+                        } else {
+                            "\x1b[35m›\x1b[0m ".to_string()
+                        };
+                        let cleaned = text.trim_end_matches('\n').to_string();
+                        if !cleaned.is_empty() {
+                            rendered.push(cleaned);
                         }
-                        Some(Value::String(s)) => {
-                            let s_clone = s.clone();
-                            to_run.push(PromptSegmentInvocation {
-                                _name: name,
-                                func: Arc::new(FunctionValue::native(
-                                    "static_text",
-                                    move |_, _, _| Value::String(s_clone.clone()),
-                                )),
-                                receiver: None,
-                            });
+                    } else if let Some((plugin_func, manifest)) =
+                        self.plugin_manager.get_prompt_segment(&s)
+                    {
+                        let rec = Some((Expr::Variable("this".to_string()), manifest));
+                        let val = self.exec_function_with_receiver(&plugin_func, vec![], rec);
+                        let text = match val {
+                            Value::String(t) => t,
+                            Value::Number(n) => n.to_string(),
+                            Value::Bool(b) => b.to_string(),
+                            _ => String::new(),
+                        };
+                        let cleaned = text.trim_end_matches('\n').to_string();
+                        if !cleaned.is_empty() {
+                            rendered.push(cleaned);
                         }
-                        _ => {
-                            if name == "newline" || name == "\n" {
-                                to_run.push(PromptSegmentInvocation {
-                                    _name: name,
-                                    func: Arc::new(FunctionValue::native(
-                                        "newline",
-                                        |_eval, _, _| Value::String(String::from("\n")),
-                                    )),
-                                    receiver: None,
-                                });
+                    } else if let Value::Object(ref prompt_map) = prompt_val
+                        && let Ok(guard) = prompt_map.read()
+                        && let Some(Value::Object(seg_map)) = guard.get("segments")
+                        && let Ok(seg_guard) = seg_map.read()
+                        && let Some(seg_val) = seg_guard.get(&s)
+                    {
+                        match seg_val {
+                            Value::Function(func) => {
+                                let rec =
+                                    Some((Expr::Variable("this".to_string()), prompt_val.clone()));
+                                let val = self.exec_function_with_receiver(func, vec![], rec);
+                                let text = match val {
+                                    Value::String(t) => t,
+                                    Value::Number(n) => n.to_string(),
+                                    Value::Bool(b) => b.to_string(),
+                                    _ => String::new(),
+                                };
+                                let cleaned = text.trim_end_matches('\n').to_string();
+                                if !cleaned.is_empty() {
+                                    rendered.push(cleaned);
+                                }
                             }
+                            Value::String(t) => {
+                                let cleaned = t.trim_end_matches('\n').to_string();
+                                if !cleaned.is_empty() {
+                                    rendered.push(cleaned);
+                                }
+                            }
+                            _ => {}
+                        }
+                    } else {
+                        // Direct string!
+                        let cleaned = s.trim_end_matches('\n').to_string();
+                        if !cleaned.is_empty() {
+                            rendered.push(cleaned);
                         }
                     }
-                } else if name == "newline" || name == "\n" {
-                    to_run.push(PromptSegmentInvocation {
-                        _name: name,
-                        func: Arc::new(FunctionValue::native("newline", |_eval, _, _| {
-                            Value::String(String::from("\n"))
-                        })),
-                        receiver: None,
-                    });
                 }
-            } else if name == "newline" || name == "\n" {
-                to_run.push(PromptSegmentInvocation {
-                    _name: name,
-                    func: Arc::new(FunctionValue::native("newline", |_eval, _, _| {
-                        Value::String(String::from("\n"))
-                    })),
-                    receiver: None,
-                });
-            }
-        }
-
-        let mut rendered = Vec::new();
-        for invocation in to_run {
-            let is_newline_segment = invocation._name == "newline" || invocation._name == "\n";
-            let val =
-                self.exec_function_with_receiver(&invocation.func, vec![], invocation.receiver);
-            let text = match val {
-                Value::String(s) => s,
-                Value::Number(n) => n.to_string(),
-                Value::Bool(b) => b.to_string(),
-                _ => String::new(),
-            };
-
-            let cleaned = if text == "\n" || is_newline_segment {
-                text
-            } else {
-                text.trim_end_matches('\n').to_string()
-            };
-
-            if !cleaned.is_empty() {
-                rendered.push(cleaned);
+                Value::Number(n) => {
+                    rendered.push(n.to_string());
+                }
+                Value::Bool(b) => {
+                    rendered.push(b.to_string());
+                }
+                _ => {}
             }
         }
 
@@ -2053,8 +2215,14 @@ impl Evaluator {
         receiver: Option<(Expr, Value)>,
         scope_indices: &mut Vec<usize>,
     ) -> Value {
+        let effective_receiver = receiver.clone().or_else(|| {
+            func.bound_this.as_ref().map(|this_val| {
+                (Expr::Variable("this".to_string()), this_val.clone())
+            })
+        });
+
         if let crate::eval::value::FunctionKind::Native { ref func, .. } = func.kind {
-            let this_val = receiver.map(|(_, ref v)| v.clone());
+            let this_val = effective_receiver.map(|(_, ref v)| v.clone());
             return (func.clone())(self, evaluated_args, this_val);
         }
 
@@ -2062,7 +2230,7 @@ impl Evaluator {
         scope_indices.push(scope_index);
 
         if let Some(scope) = self.scopes.get_mut(scope_index) {
-            if let Some((_, ref this_val)) = receiver {
+            if let Some((_, ref this_val)) = effective_receiver {
                 scope.vars.insert("this".to_string(), this_val.clone());
             }
 
@@ -2180,7 +2348,9 @@ impl Evaluator {
                         let parts: Vec<&str> = word.split('.').collect();
                         if let Some(base_val) = self.scoped_var(parts[0], scope_indices) {
                             let mut cur = base_val;
+                            let mut parent = cur.clone();
                             for part in &parts[1..] {
+                                parent = cur.clone();
                                 cur = match cur {
                                     Value::Object(map) => {
                                         let guard = match map.read() {
@@ -2193,6 +2363,13 @@ impl Evaluator {
                                 };
                             }
                             if !matches!(cur, Value::Null) {
+                                if let Value::Function(f) = cur {
+                                    if f.bound_this.is_none() {
+                                        return Value::function(f.with_bound_this(parent));
+                                    } else {
+                                        return Value::Function(f);
+                                    }
+                                }
                                 return cur;
                             }
                         }
@@ -2333,30 +2510,53 @@ impl Evaluator {
 
                 match (&object_value, Self::object_index_key(index_value)) {
                     (Value::Object(map), Some(key)) => {
-                        if key.contains('.') {
-                            let mut val = Value::Object(Arc::clone(map));
-                            for part in key.split('.') {
-                                val = match &val {
+                        let (prop_val, parent_obj) = if key.contains('.') {
+                            let parts: Vec<&str> = key.split('.').collect();
+                            let mut cur_obj = object_value.clone();
+                            for part in &parts[..parts.len() - 1] {
+                                cur_obj = match &cur_obj {
                                     Value::Object(m) => {
                                         let guard = match m.read() {
                                             Ok(g) => g,
                                             Err(p) => p.into_inner(),
                                         };
-                                        guard.get(part).cloned().unwrap_or(Value::Null)
+                                        guard.get(*part).cloned().unwrap_or(Value::Null)
                                     }
                                     _ => Value::Null,
                                 };
-                                if matches!(val, Value::Null) {
+                                if matches!(cur_obj, Value::Null) {
                                     break;
                                 }
                             }
-                            val
+                            let last = parts.last().unwrap();
+                            let prop = match &cur_obj {
+                                Value::Object(m) => {
+                                    let guard = match m.read() {
+                                        Ok(g) => g,
+                                        Err(p) => p.into_inner(),
+                                    };
+                                    guard.get(*last).cloned().unwrap_or(Value::Null)
+                                }
+                                _ => Value::Null,
+                            };
+                            (prop, cur_obj)
                         } else {
                             let guard = match map.read() {
                                 Ok(g) => g,
                                 Err(p) => p.into_inner(),
                             };
-                            guard.get(&key).cloned().unwrap_or(Value::Null)
+                            let prop = guard.get(&key).cloned().unwrap_or(Value::Null);
+                            (prop, object_value.clone())
+                        };
+
+                        if let Value::Function(f) = prop_val {
+                            if f.bound_this.is_none() {
+                                Value::function(f.with_bound_this(parent_obj))
+                            } else {
+                                Value::Function(f)
+                            }
+                        } else {
+                            prop_val
                         }
                     }
                     (Value::Array(arr), Some(key)) => {
@@ -3157,21 +3357,16 @@ mod tests {
         assert_eq!(load_res, Ok("git-prompt".to_string()));
 
         let prompt_obj = eval.get_var(0, "prompt").expect("prompt should exist");
-        let order = prompt_obj.get_property("order");
-        assert_eq!(
-            order,
-            Some(Value::array(vec![
-                Value::String("newline".to_string()),
-                Value::String("cwd".to_string()),
-                Value::String("git".to_string()),
-            ]))
-        );
-
         let segments = prompt_obj
             .get_property("segments")
             .expect("segments exists");
-        assert!(segments.get_property("cwd").is_some());
-        assert!(segments.get_property("git").is_some());
+
+        if let Value::Array(arr) = segments {
+            let guard = arr.read().unwrap();
+            assert_eq!(guard.len(), 4);
+        } else {
+            panic!("Expected segments to be an array");
+        }
 
         let rendered = eval.render_prompt_segments(None, None, None);
         assert!(!rendered.is_empty());
@@ -3180,24 +3375,24 @@ mod tests {
         let custom_rendered = eval.render_prompt_segments(Some("git"), None, None);
         assert!(!custom_rendered.is_empty());
 
+        // Test import function, importable methods, and segments array configuration
         let (mut script_eval, _) = eval_with_evaluator("");
         script_eval
             .plugin_manager
             .search_paths
             .insert(0, manifest_path);
-        let _ = script_eval.load_plugin("git-prompt");
-        let render_call_res = script_eval.evaluate_statements(
-            &lsh_syntax::parser::Parser::new(
-                0,
-                lsh_syntax::lexer::lex_input(0, "let out = $prompt.render()").unwrap(),
-            )
+        let script = r#"
+        let git_prompt = import("git-prompt")
+        $prompt.segments = ["\n", $fmt_cwd, $git_prompt.git, "\n", "❯ "]
+        let out = $prompt.render()
+        "#;
+        let statements = Parser::new(0, lexer::lex_input(0, script).unwrap())
             .parse_program()
-            .unwrap()
-            .body,
-            &mut vec![0],
-        );
-        assert_eq!(render_call_res.flow, crate::eval::EvalFlow::Continue);
-        assert!(script_eval.get_var(0, "out").is_some());
+            .unwrap();
+        let res = script_eval.evaluate_statements(&statements.body, &mut vec![0]);
+        assert_eq!(res.flow, crate::eval::EvalFlow::Continue);
+        let out = script_eval.get_var(0, "out").expect("out exists").to_string();
+        assert!(out.contains("❯ "));
     }
 
     #[test]
@@ -3226,10 +3421,25 @@ mod tests {
             Ok("test-plugin".to_string())
         );
 
+        // Explicitly register imported segments into $prompt.segments
+        let script = r#"
+        let p = import("test-plugin")
+        $prompt.segments = $prompt.segments + [$p.alpha, $p.empty_seg]
+        "#;
+        let statements = Parser::new(0, lexer::lex_input(0, script).unwrap())
+            .parse_program()
+            .unwrap();
+        eval.evaluate_statements(&statements.body, &mut vec![0]);
+
         let prompt_obj = eval.get_var(0, "prompt").expect("prompt exists");
-        let order = prompt_obj.get_property("order").unwrap().to_string();
-        assert!(order.contains("alpha"));
-        assert!(order.contains("empty_seg"));
+        let segments = prompt_obj.get_property("segments").expect("segments exists");
+        if let Value::Array(arr) = segments {
+            let guard = arr.read().unwrap();
+            // Default 4 segments + 2 explicitly added = 6
+            assert_eq!(guard.len(), 6);
+        } else {
+            panic!("Expected segments to be an array");
+        }
 
         // empty_seg returns "" so it must be omitted
         let rendered = eval.render_prompt_segments(Some("alpha empty_seg"), None, None);
@@ -3242,13 +3452,15 @@ mod tests {
         // Unload removes segments
         assert!(eval.unload_plugin("test-plugin"));
         let prompt_after_unload = eval.get_var(0, "prompt").expect("prompt exists");
-        let order_after = prompt_after_unload
-            .get_property("order")
-            .unwrap()
-            .to_string();
-        assert!(!order_after.contains("alpha"));
-        assert!(!order_after.contains("empty_seg"));
-        assert_eq!(order_after, "[\"newline\", \"cwd\"]");
+        let segments_after = prompt_after_unload
+            .get_property("segments")
+            .expect("segments exists");
+        if let Value::Array(arr) = segments_after {
+            let guard = arr.read().unwrap();
+            assert_eq!(guard.len(), 4);
+        } else {
+            panic!("Expected segments to be an array");
+        }
         let _ = std::fs::remove_dir_all(&temp_dir);
     }
 
@@ -3375,6 +3587,67 @@ mod tests {
 
         let rendered = eval.get_var(0, "rendered").expect("rendered exists");
         assert!(!rendered.to_string().is_empty());
+    }
+
+    #[test]
+    fn prompt_char_segment_and_customization() {
+        let (mut eval, _) = eval_with_evaluator("");
+
+        // Default char and symbol segments
+        let char_rendered = eval.render_prompt_segments(Some("char"), None, None);
+        assert!(char_rendered.contains("›"));
+
+        let symbol_rendered = eval.render_prompt_segments(Some("symbol"), None, None);
+        assert_eq!(char_rendered, symbol_rendered);
+
+        // Customize char segment with $prompt.text
+        let script = r#"
+        $prompt.text = "❯ "
+        let custom = $prompt.render("char")
+        "#;
+        let statements = Parser::new(0, lexer::lex_input(0, script).unwrap())
+            .parse_program()
+            .unwrap();
+        eval.evaluate_statements(&statements.body, &mut vec![0]);
+        let custom = eval.get_var(0, "custom").expect("custom exists");
+        assert_eq!(custom.to_string(), "❯ ");
+
+        // Configure prompt.segments directly with direct strings
+        let script_direct = r#"
+        $prompt.segments = ["\n", $fmt_cwd, "\n", "❯ "]
+        let rendered_direct = $prompt.render()
+        "#;
+        let stmts_direct = Parser::new(0, lexer::lex_input(0, script_direct).unwrap())
+            .parse_program()
+            .unwrap();
+        eval.evaluate_statements(&stmts_direct.body, &mut vec![0]);
+        let rendered_direct = eval.get_var(0, "rendered_direct").expect("rendered_direct exists");
+        assert!(rendered_direct.to_string().ends_with("❯ "));
+    }
+
+    #[test]
+    fn fmt_cwd_function_and_lambda_in_prompt_segments() {
+        let (mut eval, _) = eval_with_evaluator("");
+
+        let script = r#"
+        let path = fmt_cwd()
+        $prompt.segments = [
+            "\n",
+            () => { return "[" + fmt_cwd() + "]" },
+            "\n",
+            "❯ "
+        ]
+        let rendered = $prompt.render()
+        "#;
+        let statements = Parser::new(0, lexer::lex_input(0, script).unwrap())
+            .parse_program()
+            .unwrap();
+        eval.evaluate_statements(&statements.body, &mut vec![0]);
+        let path = eval.get_var(0, "path").expect("path exists");
+        assert!(!path.to_string().is_empty());
+        let rendered = eval.get_var(0, "rendered").expect("rendered exists");
+        assert!(rendered.to_string().contains(&format!("[{}]", path.to_string())));
+        assert!(rendered.to_string().ends_with("❯ "));
     }
 
     #[test]
@@ -3505,5 +3778,123 @@ mod tests {
         eval.evaluate_statements(&statements.body, &mut vec![0]);
         let out = eval.get_var(0, "out").unwrap().to_string();
         assert_eq!(out.trim(), "Hello LSH!");
+    }
+
+    #[test]
+    fn hooks_registry_lifecycle_and_methods() {
+        let (mut eval, _) = eval_with_evaluator("");
+
+        let script = r#"
+        let chpwd_run = ""
+        let pre_prompt_runs = 0
+
+        $hooks.add("chpwd", (old_p, new_p) => {
+            $chpwd_run = $old_p + " -> " + $new_p
+        })
+
+        $hooks.on("pre_prompt", () => {
+            $pre_prompt_runs = $pre_prompt_runs + 1
+        })
+
+        let counts_before = $hooks.list()
+        "#;
+        let statements = Parser::new(0, lexer::lex_input(0, script).unwrap())
+            .parse_program()
+            .unwrap();
+        eval.evaluate_statements(&statements.body, &mut vec![0]);
+
+        eval.trigger_chpwd("/a", "/b");
+        eval.trigger_pre_prompt();
+
+        let chpwd_val = eval.get_var(0, "chpwd_run").unwrap().to_string();
+        assert_eq!(chpwd_val, "/a -> /b");
+
+        let pre_prompt_val = eval.get_var(0, "pre_prompt_runs").unwrap().clone();
+        assert_eq!(pre_prompt_val, Value::Number(1.0));
+
+        let counts = eval.get_var(0, "counts_before").unwrap().clone();
+        assert_eq!(counts.get_property("chpwd"), Some(Value::Number(1.0)));
+        assert_eq!(counts.get_property("pre_prompt"), Some(Value::Number(1.0)));
+
+        // Clear pre_prompt hooks
+        let script_clear = r#"
+        $hooks.clear("pre_prompt")
+        let counts_after = $hooks.list()
+        "#;
+        let stmts_clear = Parser::new(0, lexer::lex_input(0, script_clear).unwrap())
+            .parse_program()
+            .unwrap();
+        eval.evaluate_statements(&stmts_clear.body, &mut vec![0]);
+
+        eval.trigger_pre_prompt();
+        let pre_prompt_val2 = eval.get_var(0, "pre_prompt_runs").unwrap().clone();
+        assert_eq!(pre_prompt_val2, Value::Number(1.0)); // unchanged
+
+        let counts_after = eval.get_var(0, "counts_after").unwrap().clone();
+        assert_eq!(counts_after.get_property("pre_prompt"), None);
+    }
+
+    #[test]
+    fn module_caching_and_scope_isolation() {
+        let (temp_dir, module_file) = write_test_plugin(
+            "cache-mod",
+            r#"
+            let internal_secret = 42
+            return {
+                name = "cache-mod",
+                val = "loaded"
+            }
+            "#,
+        );
+
+        let (mut eval, _) = eval_with_evaluator("");
+        let path_str = module_file.to_str().unwrap();
+
+        // First import
+        let val1 = eval.import_module(path_str).expect("first import succeeds");
+        assert_eq!(
+            val1.get_property("val"),
+            Some(Value::String("loaded".to_string()))
+        );
+
+        // Check internal variable did not leak into global scope
+        assert_eq!(eval.get_var(0, "internal_secret"), None);
+
+        // Mutate the returned object
+        if let Value::Object(map) = &val1 {
+            map.write()
+                .unwrap()
+                .insert("mutated".to_string(), Value::Bool(true));
+        }
+
+        // Second import: returns cached instance with mutated property
+        let val2 = eval.import_module(path_str).expect("second import succeeds");
+        assert_eq!(val2.get_property("mutated"), Some(Value::Bool(true)));
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn property_access_method_binding_with_this() {
+        let (mut eval, _) = eval_with_evaluator("");
+
+        let script = r#"
+        let counter = {
+            count = 10,
+            get_count = () => {
+                return $this.count
+            }
+        }
+
+        let extracted_fn = $counter.get_count
+        let res = $extracted_fn()
+        "#;
+        let statements = Parser::new(0, lexer::lex_input(0, script).unwrap())
+            .parse_program()
+            .unwrap();
+        eval.evaluate_statements(&statements.body, &mut vec![0]);
+
+        let res = eval.get_var(0, "res").expect("res exists").clone();
+        assert_eq!(res, Value::Number(10.0));
     }
 }

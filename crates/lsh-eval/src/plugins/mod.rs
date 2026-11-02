@@ -244,9 +244,11 @@ impl PluginManager {
             return Some(p.to_path_buf());
         }
         if p.is_dir() {
-            let candidate = p.join("plugin.lsh");
-            if candidate.is_file() {
-                return Some(candidate);
+            for entry in ["plugin.lsh", "init.lsh", "index.lsh", "mod.lsh"] {
+                let candidate = p.join(entry);
+                if candidate.is_file() {
+                    return Some(candidate);
+                }
             }
         }
 
@@ -260,9 +262,11 @@ impl PluginManager {
         }
 
         for base in &self.search_paths {
-            let dir_candidate = base.join(name_or_path).join("plugin.lsh");
-            if dir_candidate.is_file() {
-                return Some(dir_candidate);
+            for entry in ["plugin.lsh", "init.lsh", "index.lsh", "mod.lsh"] {
+                let dir_candidate = base.join(name_or_path).join(entry);
+                if dir_candidate.is_file() {
+                    return Some(dir_candidate);
+                }
             }
             let file_candidate = base.join(format!("{name_or_path}.lsh"));
             if file_candidate.is_file() {

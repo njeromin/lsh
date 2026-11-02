@@ -21,6 +21,7 @@ pub struct FunctionValue {
     pub params: Vec<String>,
     pub body: Vec<Statement>,
     pub kind: FunctionKind,
+    pub bound_this: Option<Value>,
 }
 
 impl fmt::Debug for FunctionValue {
@@ -45,6 +46,7 @@ impl FunctionValue {
             params,
             body,
             kind: FunctionKind::Ast,
+            bound_this: None,
         }
     }
 
@@ -59,6 +61,23 @@ impl FunctionValue {
                 name: name.into(),
                 func: Arc::new(func),
             },
+            bound_this: None,
+        }
+    }
+
+    pub fn with_bound_this(&self, this_val: Value) -> Self {
+        Self {
+            params: self.params.clone(),
+            body: self.body.clone(),
+            kind: self.kind.clone(),
+            bound_this: Some(this_val),
+        }
+    }
+
+    pub fn name(&self) -> Option<&str> {
+        match &self.kind {
+            FunctionKind::Native { name, .. } => Some(name.as_str()),
+            FunctionKind::Ast => None,
         }
     }
 }

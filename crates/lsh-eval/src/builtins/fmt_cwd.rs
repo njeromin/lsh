@@ -10,7 +10,7 @@ use crate::{
     io::IoCtx,
 };
 
-fn format_cwd(path: &Path, home_dir: &Path) -> String {
+pub fn format_cwd(path: &Path, home_dir: &Path) -> String {
     if let Ok(stripped_cwd) = path.strip_prefix(home_dir) {
         let stripped = stripped_cwd.to_string_lossy();
         if stripped.is_empty() {
@@ -23,7 +23,7 @@ fn format_cwd(path: &Path, home_dir: &Path) -> String {
     }
 }
 
-fn resolve_home_dir(eval: &Evaluator) -> Option<PathBuf> {
+pub fn resolve_home_dir(eval: &Evaluator) -> Option<PathBuf> {
     if let Some(Value::String(home)) = eval.get_var(0, "HOME")
         && !home.is_empty()
     {

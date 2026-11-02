@@ -1,6 +1,7 @@
 use std::{
     env::{self, current_dir},
-    fs, io,
+    fs,
+    io::{self, Write},
     path::{Path, PathBuf},
 };
 
@@ -34,26 +35,35 @@ fn get_prompt(eval: &mut Evaluator) -> String {
 
     let prompt_val = eval.get_var(0, "prompt").cloned();
 
-    if let (Some(before_fn), Some(prompt_obj)) = (before, prompt_val) {
+    if let (Some(before_fn), Some(prompt_obj)) = (before, prompt_val.as_ref()) {
         let prompt_expr = lsh_syntax::ast::Expr::Variable("prompt".to_string());
-        eval.exec_function_with_receiver(&before_fn, vec![], Some((prompt_expr, prompt_obj)));
-    } else {
-        let rendered = eval.render_prompt_segments(None, None, None);
-        if !rendered.is_empty() {
-            println!("{rendered}");
-        }
+        eval.exec_function_with_receiver(&before_fn, vec![], Some((prompt_expr, prompt_obj.clone())));
     }
 
-    eval.get_var(0, "prompt")
-        .and_then(|v| match v {
-            Value::Object(prompt) => prompt.read().ok().and_then(|p| p.get("text").cloned()),
-            _ => None,
-        })
-        .and_then(|v| match v {
-            Value::String(text) => Some(text),
-            _ => None,
-        })
-        .unwrap_or_else(|| DEFAULT_PROMPT.to_string())
+    let rendered = match prompt_val {
+        Some(Value::String(s)) => s,
+        Some(Value::Object(_)) | None => eval.render_prompt_segments(None, None, None),
+        _ => String::new(),
+    };
+
+    if rendered.is_empty() {
+        return DEFAULT_PROMPT.to_string();
+    }
+
+    if let Some(last_newline) = rendered.rfind('\n') {
+        let (pre, active) = rendered.split_at(last_newline + 1);
+        if !pre.is_empty() {
+            print!("{pre}");
+            let _ = io::stdout().flush();
+        }
+        if active.is_empty() {
+            DEFAULT_PROMPT.to_string()
+        } else {
+            active.to_string()
+        }
+    } else {
+        rendered
+    }
 }
 
 fn interactive_session(

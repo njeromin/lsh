@@ -4,7 +4,11 @@ use lsh_syntax::{SourceMap, debug, lexer, parser::Parser, print_diagnostic, prin
 
 use crate::eval::{EvalOutcome, Evaluator};
 
-pub fn exec_file_outcome(evaluator: &mut Evaluator, path: PathBuf) -> Result<EvalOutcome, String> {
+pub fn exec_file_outcome_scoped(
+    evaluator: &mut Evaluator,
+    path: PathBuf,
+    scope_indices: &mut Vec<usize>,
+) -> Result<EvalOutcome, String> {
     let mut cerr = stderr();
 
     match fs::read_to_string(&path) {
@@ -33,7 +37,7 @@ pub fn exec_file_outcome(evaluator: &mut Evaluator, path: PathBuf) -> Result<Eva
 
             debug::print_parser(&prog);
 
-            Ok(evaluator.evaluate_program(prog))
+            Ok(evaluator.evaluate_statements(&prog.body, scope_indices))
         }
         Err(e) => {
             let msg = e.to_string();
@@ -41,6 +45,10 @@ pub fn exec_file_outcome(evaluator: &mut Evaluator, path: PathBuf) -> Result<Eva
             Err(msg)
         }
     }
+}
+
+pub fn exec_file_outcome(evaluator: &mut Evaluator, path: PathBuf) -> Result<EvalOutcome, String> {
+    exec_file_outcome_scoped(evaluator, path, &mut vec![0])
 }
 
 pub fn exec_file(evaluator: &mut Evaluator, path: PathBuf) -> i32 {
