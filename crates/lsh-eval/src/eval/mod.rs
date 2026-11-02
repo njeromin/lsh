@@ -43,6 +43,8 @@ pub enum EvalError {
 #[derive(Debug, PartialEq)]
 pub enum EvalFlow {
     Continue,
+    LoopBreak,
+    LoopContinue,
     Return(Value),
 }
 
@@ -1001,6 +1003,37 @@ impl Evaluator {
         outcome
     }
 
+    fn evaluate_in_new_scope_with_var(
+        &mut self,
+        statements: &[Statement],
+        var_name: &str,
+        var_val: Value,
+        scope_indices: &mut Vec<usize>,
+    ) -> EvalOutcome {
+        let scope_index = self.make_scope();
+        if let Some(scope) = self.scopes.get_mut(scope_index) {
+            scope.vars.insert(var_name.to_string(), var_val);
+        }
+        scope_indices.push(scope_index);
+
+        let outcome = self.evaluate_statements(statements, scope_indices);
+
+        let popped_scope_index = scope_indices
+            .pop()
+            .expect("Failed to pop scope index after scoped evaluation.");
+        if popped_scope_index != scope_index {
+            panic!(
+                "Scope stack mismatch: expected to pop scope {scope_index}, popped {popped_scope_index}."
+            );
+        }
+
+        self.scopes
+            .pop()
+            .expect("Failed to pop evaluator scope after scoped evaluation.");
+
+        outcome
+    }
+
     fn evaluate_statements(
         &mut self,
         statements: &[Statement],
@@ -1073,21 +1106,15 @@ impl Evaluator {
                     if cond_res.is_truthy() {
                         let outcome = self.evaluate_in_new_scope(then_branch, scope_indices);
                         last_status = outcome.last_status;
-                        if let EvalFlow::Return(value) = outcome.flow {
-                            return EvalOutcome {
-                                flow: EvalFlow::Return(value),
-                                last_status,
-                            };
+                        if outcome.flow != EvalFlow::Continue {
+                            return outcome;
                         }
                     } else if let Some(else_branch_statements) = else_branch {
                         let outcome =
                             self.evaluate_in_new_scope(else_branch_statements, scope_indices);
                         last_status = outcome.last_status;
-                        if let EvalFlow::Return(value) = outcome.flow {
-                            return EvalOutcome {
-                                flow: EvalFlow::Return(value),
-                                last_status,
-                            };
+                        if outcome.flow != EvalFlow::Continue {
+                            return outcome;
                         }
                     }
                 }
@@ -1111,6 +1138,12 @@ impl Evaluator {
                             last_status = STATUS_SIGINT;
                             break;
                         }
+                        if outcome.flow == EvalFlow::LoopBreak {
+                            break;
+                        }
+                        if outcome.flow == EvalFlow::LoopContinue {
+                            continue;
+                        }
                         if let EvalFlow::Return(value) = outcome.flow {
                             return EvalOutcome {
                                 flow: EvalFlow::Return(value),
@@ -1118,6 +1151,106 @@ impl Evaluator {
                             };
                         }
                     }
+                }
+                Statement::For {
+                    variable,
+                    iterable,
+                    body,
+                } => {
+                    let iter_val = self.evaluate_expr(iterable, true, scope_indices);
+                    let items: Vec<Value> = match iter_val {
+                        Value::Array(arr) => {
+                            let guard = match arr.read() {
+                                Ok(g) => g,
+                                Err(p) => p.into_inner(),
+                            };
+                            guard.clone()
+                        }
+                        Value::Object(ref map) => {
+                            let guard = match map.read() {
+                                Ok(g) => g,
+                                Err(p) => p.into_inner(),
+                            };
+                            if guard.contains_key("code")
+                                && guard.contains_key("out")
+                                && guard.contains_key("err")
+                            {
+                                let out = match guard.get("out") {
+                                    Some(Value::String(s)) => s.clone(),
+                                    _ => String::new(),
+                                };
+                                let trimmed = out.trim_end_matches(['\r', '\n']);
+                                if trimmed.is_empty() {
+                                    Vec::new()
+                                } else {
+                                    trimmed
+                                        .split('\n')
+                                        .map(|l| {
+                                            Value::String(
+                                                l.strip_suffix('\r').unwrap_or(l).to_string(),
+                                            )
+                                        })
+                                        .collect()
+                                }
+                            } else {
+                                let mut keys: Vec<String> = guard.keys().cloned().collect();
+                                keys.sort();
+                                keys.into_iter().map(Value::String).collect()
+                            }
+                        }
+                        Value::String(s) => {
+                            s.chars().map(|c| Value::String(c.to_string())).collect()
+                        }
+                        Value::Null => Vec::new(),
+                        other => vec![other],
+                    };
+
+                    for item in items {
+                        if self.interrupted.swap(false, Ordering::Relaxed) {
+                            self.last_status = STATUS_SIGINT;
+                            last_status = STATUS_SIGINT;
+                            break;
+                        }
+
+                        let outcome = self.evaluate_in_new_scope_with_var(
+                            body,
+                            variable,
+                            item,
+                            scope_indices,
+                        );
+                        last_status = outcome.last_status;
+                        if outcome.last_status == STATUS_SIGINT
+                            || self.interrupted.swap(false, Ordering::Relaxed)
+                        {
+                            self.last_status = STATUS_SIGINT;
+                            last_status = STATUS_SIGINT;
+                            break;
+                        }
+                        if outcome.flow == EvalFlow::LoopBreak {
+                            break;
+                        }
+                        if outcome.flow == EvalFlow::LoopContinue {
+                            continue;
+                        }
+                        if let EvalFlow::Return(value) = outcome.flow {
+                            return EvalOutcome {
+                                flow: EvalFlow::Return(value),
+                                last_status,
+                            };
+                        }
+                    }
+                }
+                Statement::Break => {
+                    return EvalOutcome {
+                        flow: EvalFlow::LoopBreak,
+                        last_status,
+                    };
+                }
+                Statement::Continue => {
+                    return EvalOutcome {
+                        flow: EvalFlow::LoopContinue,
+                        last_status,
+                    };
                 }
                 Statement::FunctionDeclaration {
                     target,
@@ -1144,11 +1277,8 @@ impl Evaluator {
                 Statement::Block(block) => {
                     let outcome = self.evaluate_in_new_scope(block, scope_indices);
                     last_status = outcome.last_status;
-                    if let EvalFlow::Return(value) = outcome.flow {
-                        return EvalOutcome {
-                            flow: EvalFlow::Return(value),
-                            last_status,
-                        };
+                    if outcome.flow != EvalFlow::Continue {
+                        return outcome;
                     }
                 }
             }
@@ -2439,7 +2569,7 @@ impl Evaluator {
         }
 
         match outcome.flow {
-            EvalFlow::Continue => Value::Null,
+            EvalFlow::Continue | EvalFlow::LoopBreak | EvalFlow::LoopContinue => Value::Null,
             EvalFlow::Return(value) => value,
         }
     }
@@ -4165,5 +4295,132 @@ mod tests {
         } else {
             panic!("Expected empty_lines to be an array");
         }
+    }
+
+    #[test]
+    fn test_for_loops_and_break_continue() {
+        let (mut eval, _) = eval_with_evaluator("");
+        let script = r#"
+        let sum = 0
+        for item in [1, 2, 3, 4] {
+            $sum = $sum + $item
+        }
+
+        let paren_sum = 0
+        for (x in [10, 20]) {
+            $paren_sum = $paren_sum + $x
+        }
+
+        let break_sum = 0
+        for n in [1, 2, 3, 4, 5] {
+            if $n == 3 {
+                break
+            }
+            $break_sum = $break_sum + $n
+        }
+
+        let continue_sum = 0
+        for n in [1, 2, 3, 4] {
+            if $n == 2 {
+                continue
+            }
+            $continue_sum = $continue_sum + $n
+        }
+
+        let str_chars = []
+        for ch in "abc" {
+            $str_chars.push($ch)
+        }
+
+        let cmd_lines = []
+        for line in $(printf "foo\nbar\n") {
+            $cmd_lines.push($line)
+        }
+
+        fn find_first_even(list) {
+            for x in list {
+                if $x == 4 {
+                    return $x
+                }
+            }
+            return 0
+        }
+        let even = find_first_even([1, 3, 4, 5])
+        "#;
+        let prog = Parser::new(0, lexer::lex_input(0, script).unwrap()).parse_program().unwrap();
+        let status = eval.evaluate(prog);
+        assert_eq!(status, 0);
+
+        assert_eq!(eval.get_var(0, "sum").unwrap(), &Value::Number(10.0));
+        assert_eq!(eval.get_var(0, "paren_sum").unwrap(), &Value::Number(30.0));
+        assert_eq!(eval.get_var(0, "break_sum").unwrap(), &Value::Number(3.0));
+        assert_eq!(eval.get_var(0, "continue_sum").unwrap(), &Value::Number(8.0));
+        assert_eq!(eval.get_var(0, "even").unwrap(), &Value::Number(4.0));
+
+        if let Value::Array(ch_arr) = eval.get_var(0, "str_chars").unwrap() {
+            let guard = ch_arr.read().unwrap();
+            assert_eq!(guard.len(), 3);
+            assert_eq!(guard[0].to_string(), "a");
+            assert_eq!(guard[1].to_string(), "b");
+            assert_eq!(guard[2].to_string(), "c");
+        } else {
+            panic!("Expected str_chars to be array");
+        }
+
+        if let Value::Array(cmd_arr) = eval.get_var(0, "cmd_lines").unwrap() {
+            let guard = cmd_arr.read().unwrap();
+            assert_eq!(guard.len(), 2);
+            assert_eq!(guard[0].to_string(), "foo");
+            assert_eq!(guard[1].to_string(), "bar");
+        } else {
+            panic!("Expected cmd_lines to be array");
+        }
+    }
+
+    #[test]
+    fn test_while_loops_and_break_continue_return() {
+        let (mut eval, _) = eval_with_evaluator("");
+        let script = r#"
+        let count = 0
+        let break_count = 0
+        while $count < 10 {
+            $count = $count + 1
+            if $count == 5 {
+                break
+            }
+            $break_count = $break_count + 1
+        }
+
+        let i = 0
+        let continue_sum = 0
+        while $i < 5 {
+            $i = $i + 1
+            if $i == 3 {
+                continue
+            }
+            $continue_sum = $continue_sum + $i
+        }
+
+        fn find_while_threshold() {
+            let n = 0
+            while true {
+                $n = $n + 1
+                if $n == 7 {
+                    return $n * 10
+                }
+            }
+            return -1
+        }
+        let early_ret = find_while_threshold()
+        "#;
+        let prog = Parser::new(0, lexer::lex_input(0, script).unwrap()).parse_program().unwrap();
+        let status = eval.evaluate(prog);
+        assert_eq!(status, 0);
+
+        assert_eq!(eval.get_var(0, "count").unwrap(), &Value::Number(5.0));
+        assert_eq!(eval.get_var(0, "break_count").unwrap(), &Value::Number(4.0));
+        // i goes 1, 2, 3 (skipped), 4, 5 => continue_sum = 1 + 2 + 4 + 5 = 12
+        assert_eq!(eval.get_var(0, "continue_sum").unwrap(), &Value::Number(12.0));
+        assert_eq!(eval.get_var(0, "early_ret").unwrap(), &Value::Number(70.0));
     }
 }

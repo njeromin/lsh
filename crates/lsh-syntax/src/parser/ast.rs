@@ -94,6 +94,13 @@ pub enum Statement {
         condition: Expr,
         body: Vec<Statement>,
     },
+    For {
+        variable: String,
+        iterable: Expr,
+        body: Vec<Statement>,
+    },
+    Break,
+    Continue,
     FunctionDeclaration {
         target: Expr,
         params: Vec<String>,

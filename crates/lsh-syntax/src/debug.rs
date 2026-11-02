@@ -91,6 +91,25 @@ fn print_parser_statement(stmt: &Statement) {
             });
             println!("---- End while ----");
         }
+        Statement::For {
+            variable,
+            iterable,
+            body,
+        } => {
+            println!("---- Start for ----");
+            println!("Variable: {variable}");
+            print_parser_expr(iterable);
+            body.iter().for_each(|s| {
+                print_parser_statement(s);
+            });
+            println!("---- End for ----");
+        }
+        Statement::Break => {
+            println!("Break");
+        }
+        Statement::Continue => {
+            println!("Continue");
+        }
         Statement::FunctionDeclaration { target, params, .. } => {
             print!("Fn: ");
             print_parser_expr(target);

@@ -47,6 +47,17 @@ impl Parser {
             TokenKind::Let => self.parse_let(),
             TokenKind::If => self.parse_if(),
             TokenKind::While => self.parse_while(),
+            TokenKind::For => self.parse_for(),
+            TokenKind::Break => {
+                self.advance();
+                self.match_token(&[TokenKind::Semicolon]);
+                Ok(Statement::Break)
+            }
+            TokenKind::Continue => {
+                self.advance();
+                self.match_token(&[TokenKind::Semicolon]);
+                Ok(Statement::Continue)
+            }
             TokenKind::Fn => self.parse_function(),
             TokenKind::Return => self.parse_return(),
             TokenKind::LeftCurly => {
@@ -449,6 +460,47 @@ impl Parser {
         };
 
         Ok(Statement::While { condition, body })
+    }
+
+    fn parse_for(&mut self) -> Result<Statement, Diagnostic> {
+        self.advance(); // Skip 'for'.
+
+        let has_paren = self.match_token(&[TokenKind::LeftParen]);
+
+        let variable = match &self.current().kind {
+            TokenKind::String(name) => {
+                let name = name.clone();
+                self.advance();
+                name
+            }
+            TokenKind::Variable(name) => {
+                let name = name.clone();
+                self.advance();
+                name
+            }
+            _ => {
+                return self.error_here("Expected variable name after 'for'.");
+            }
+        };
+
+        self.consume(&TokenKind::In, "Expected 'in' after loop variable.")?;
+
+        let iterable = self.parse_expr()?;
+
+        if has_paren {
+            self.consume(&TokenKind::RightParen, "Expected ')' after for condition.")?;
+        }
+
+        let body = match self.parse_statement()? {
+            Statement::Block(stmts) => stmts,
+            stmt => vec![stmt],
+        };
+
+        Ok(Statement::For {
+            variable,
+            iterable,
+            body,
+        })
     }
 
     fn parse_function(&mut self) -> Result<Statement, Diagnostic> {
@@ -1218,6 +1270,10 @@ impl Parser {
             TokenKind::QuotedString(s) => Some(Expr::QuotedString(s.clone())),
             TokenKind::Number(n) => Some(Expr::Number(*n)),
             TokenKind::Bool(b) => Some(Expr::Bool(*b)),
+            TokenKind::For => Some(Expr::String("for".to_string())),
+            TokenKind::In => Some(Expr::String("in".to_string())),
+            TokenKind::Break => Some(Expr::String("break".to_string())),
+            TokenKind::Continue => Some(Expr::String("continue".to_string())),
             // Treat punctuation/operator tokens as literal string arguments in command context.
             TokenKind::Comma => Some(Expr::String(",".to_string())),
             TokenKind::Dot => Some(Expr::String(".".to_string())),
@@ -1243,6 +1299,10 @@ impl Parser {
             TokenKind::String(s) | TokenKind::QuotedString(s) => Some(s.clone()),
             TokenKind::Number(n) => Some(n.to_string()),
             TokenKind::Bool(b) => Some(b.to_string()),
+            TokenKind::For => Some("for".to_string()),
+            TokenKind::In => Some("in".to_string()),
+            TokenKind::Break => Some("break".to_string()),
+            TokenKind::Continue => Some("continue".to_string()),
             TokenKind::LeftBracket => Some("[".to_string()),
             TokenKind::RightBracket => Some("]".to_string()),
             TokenKind::LeftCurly => Some("{".to_string()),
@@ -1491,6 +1551,10 @@ impl Parser {
             TokenKind::If => "'if'".to_string(),
             TokenKind::Else => "'else'".to_string(),
             TokenKind::While => "'while'".to_string(),
+            TokenKind::For => "'for'".to_string(),
+            TokenKind::In => "'in'".to_string(),
+            TokenKind::Break => "'break'".to_string(),
+            TokenKind::Continue => "'continue'".to_string(),
             TokenKind::Fn => "'fn'".to_string(),
             TokenKind::TypeOf => "'typeof'".to_string(),
             TokenKind::Return => "'return'".to_string(),
@@ -2687,5 +2751,33 @@ mod tests {
         assert_command_identifier(identifier, "echo");
         assert_eq!(args.len(), 1);
         assert!(matches!(&args[0], Expr::InterpolatedString(parts) if parts.len() == 2));
+    }
+
+    #[test]
+    fn parses_for_loop_and_break_continue() {
+        let body = parse_program("for item in [1, 2, 3] { if $item == 2 { break } else { continue } }");
+        let Statement::For { variable, iterable, body: loop_body } = &body[0] else {
+            panic!("Expected for loop statement");
+        };
+        assert_eq!(variable, "item");
+        assert!(matches!(iterable, Expr::Array(arr) if arr.len() == 3));
+        assert_eq!(loop_body.len(), 1);
+
+        let Statement::If { then_branch, else_branch, .. } = &loop_body[0] else {
+            panic!("Expected if statement in for body");
+        };
+        assert!(matches!(&then_branch[0], Statement::Break));
+        assert!(matches!(&else_branch.as_ref().unwrap()[0], Statement::Continue));
+    }
+
+    #[test]
+    fn parses_for_loop_with_parens_and_variable_sigil() {
+        let body = parse_program("for ($item in $items) { echo $item }");
+        let Statement::For { variable, iterable, body: loop_body } = &body[0] else {
+            panic!("Expected for loop statement");
+        };
+        assert_eq!(variable, "item");
+        assert!(matches!(iterable, Expr::Variable(v) if v == "items"));
+        assert_eq!(loop_body.len(), 1);
     }
 }

@@ -153,6 +153,10 @@ fn token_style(token: &Token, _span: &str, is_command_sub_close: bool) -> Option
         | TokenKind::If
         | TokenKind::Else
         | TokenKind::While
+        | TokenKind::For
+        | TokenKind::In
+        | TokenKind::Break
+        | TokenKind::Continue
         | TokenKind::Fn
         | TokenKind::TypeOf
         | TokenKind::Return => Some("\x1b[1;35m"),
