@@ -2078,6 +2078,51 @@ impl Evaluator {
         }
     }
 
+    fn resolve_command_result_method(guard: &HashMap<String, Value>, method: &str) -> Option<Value> {
+        if !guard.contains_key("code") || !guard.contains_key("out") || !guard.contains_key("err") {
+            return None;
+        }
+        match method {
+            "is_ok" | "ok" => {
+                let code = match guard.get("code") {
+                    Some(Value::Number(n)) => *n as i32,
+                    _ => -1,
+                };
+                Some(Value::function(FunctionValue::native("is_ok", move |_, _, _| {
+                    Value::Bool(code == 0)
+                })))
+            }
+            "is_err" | "err" => {
+                let code = match guard.get("code") {
+                    Some(Value::Number(n)) => *n as i32,
+                    _ => -1,
+                };
+                Some(Value::function(FunctionValue::native("is_err", move |_, _, _| {
+                    Value::Bool(code != 0)
+                })))
+            }
+            "lines" => {
+                let out = match guard.get("out") {
+                    Some(Value::String(s)) => s.clone(),
+                    _ => String::new(),
+                };
+                Some(Value::function(FunctionValue::native("lines", move |_, _, _| {
+                    let trimmed = out.trim_end_matches(['\r', '\n']);
+                    let lines: Vec<Value> = if trimmed.is_empty() {
+                        Vec::new()
+                    } else {
+                        trimmed
+                            .split('\n')
+                            .map(|line| Value::String(line.strip_suffix('\r').unwrap_or(line).to_string()))
+                            .collect()
+                    };
+                    Value::array(lines)
+                })))
+            }
+            _ => None,
+        }
+    }
+
     fn resolve_member_or_method(receiver: &Value, key: &str) -> Value {
         match receiver {
             Value::Object(map) => {
@@ -2085,7 +2130,13 @@ impl Evaluator {
                     Ok(g) => g,
                     Err(p) => p.into_inner(),
                 };
-                guard.get(key).cloned().unwrap_or(Value::Null)
+                if let Some(val) = guard.get(key).cloned() {
+                    val
+                } else if let Some(method_val) = Self::resolve_command_result_method(&guard, key) {
+                    method_val
+                } else {
+                    Value::Null
+                }
             }
             Value::Array(arr) => Self::resolve_array_method(arr, key),
             Value::String(s) => Self::resolve_string_method(s, key),
@@ -2100,7 +2151,13 @@ impl Evaluator {
                     Ok(g) => g,
                     Err(p) => p.into_inner(),
                 };
-                guard.get(key).cloned().unwrap_or(Value::Null)
+                if let Some(val) = guard.get(key).cloned() {
+                    val
+                } else if let Some(method_val) = Self::resolve_command_result_method(&guard, key) {
+                    method_val
+                } else {
+                    Value::Null
+                }
             }
             Value::Array(arr) => {
                 if let Ok(idx) = key.parse::<isize>() {
@@ -2789,10 +2846,32 @@ impl Evaluator {
                             String::from_utf8(io.err).unwrap_or_default(),
                         )
                     }
+                    Expr::Bool(b) => {
+                        let word = if *b { "true" } else { "false" };
+                        let (res_cmd, all_args) = self.resolve_command(word.to_owned());
+                        let all_args = expand::expand_args(all_args, ExpandCtx::default());
+
+                        let mut io = IoCtx {
+                            input: io::empty(),
+                            out: Vec::<u8>::new(),
+                            err: Vec::<u8>::new(),
+                            input_mode: IoStreamMode::Pipe,
+                            out_mode: IoStreamMode::Pipe,
+                            err_mode: IoStreamMode::Pipe,
+                        };
+
+                        let exit_status = cmds::exec_cmd(self, &res_cmd, all_args, &[], &mut io);
+
+                        Self::make_command_result(
+                            exit_status,
+                            String::from_utf8(io.out).unwrap_or_default(),
+                            String::from_utf8(io.err).unwrap_or_default(),
+                        )
+                    }
                     other => {
                         // Fallback: allow non-command expressions inside $(...)
                         let value = self.evaluate_expr(other, true, scope_indices);
-                        Value::String(value.to_string())
+                        Self::make_command_result(0, value.to_string(), String::new())
                     }
                 }
             }
@@ -4037,6 +4116,54 @@ mod tests {
             assert_eq!(guard[1].to_string(), "world");
         } else {
             panic!("Expected parts to be an array");
+        }
+    }
+
+    #[test]
+    fn test_command_result_methods() {
+        let (mut eval, _) = eval_with_evaluator("");
+        let script = r#"
+        let ok_direct = $(true).is_ok()
+        let err_direct = $(true).is_err()
+        let false_ok = $(false).is_ok()
+        let false_err = $(false).is_err()
+
+        let res = $(echo "  world  ")
+        let res_ok = $res.is_ok()
+        let res_err = $res.is_err()
+        let res_trimmed = $res.out.trim()
+
+        let lines = $(printf "alpha\nbeta\ngamma\n").lines()
+        let empty_lines = $(echo -n "").lines()
+        "#;
+        let prog = Parser::new(0, lexer::lex_input(0, script).unwrap()).parse_program().unwrap();
+        let status = eval.evaluate(prog);
+        assert_eq!(status, 0);
+
+        assert_eq!(eval.get_var(0, "ok_direct").unwrap(), &Value::Bool(true));
+        assert_eq!(eval.get_var(0, "err_direct").unwrap(), &Value::Bool(false));
+        assert_eq!(eval.get_var(0, "false_ok").unwrap(), &Value::Bool(false));
+        assert_eq!(eval.get_var(0, "false_err").unwrap(), &Value::Bool(true));
+
+        assert_eq!(eval.get_var(0, "res_ok").unwrap(), &Value::Bool(true));
+        assert_eq!(eval.get_var(0, "res_err").unwrap(), &Value::Bool(false));
+        assert_eq!(eval.get_var(0, "res_trimmed").unwrap().to_string(), "world");
+
+        if let Value::Array(lines_arr) = eval.get_var(0, "lines").unwrap() {
+            let guard = lines_arr.read().unwrap();
+            assert_eq!(guard.len(), 3);
+            assert_eq!(guard[0].to_string(), "alpha");
+            assert_eq!(guard[1].to_string(), "beta");
+            assert_eq!(guard[2].to_string(), "gamma");
+        } else {
+            panic!("Expected lines to be an array");
+        }
+
+        if let Value::Array(empty_arr) = eval.get_var(0, "empty_lines").unwrap() {
+            let guard = empty_arr.read().unwrap();
+            assert_eq!(guard.len(), 0);
+        } else {
+            panic!("Expected empty_lines to be an array");
         }
     }
 }

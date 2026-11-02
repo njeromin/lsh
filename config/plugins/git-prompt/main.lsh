@@ -4,8 +4,8 @@ return {
         show_changes = true
     },
     segment = () => {
-        if $(git rev-parse --is-inside-work-tree).code == 0 {
-            let branch = $(git branch --show-current | tr -d '\n').out
+        if $(git rev-parse --is-inside-work-tree).is_ok() {
+            let branch = $(git branch --show-current).out.trim()
             let git_info = $palette.reset + $palette.green + $branch
 
             if $this.options.show_ahead {

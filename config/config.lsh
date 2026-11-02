@@ -1,5 +1,5 @@
 # If we have eza, set up ls aliases.
-if $(which eza).code == 0 {
+if $(which eza).is_ok() {
     alias set ls "eza --icons"
     alias set la "eza --icons --all"
     alias set ll "eza --icons --long"
@@ -31,8 +31,3 @@ $prompt.segments = [
 # Separator placed between adjacent segments on the same line:
 $prompt.separator = " "
 
-# Custom segments can also be functions:
-let time_segment = () => {
-    return $palette.dim + $(date +%H:%M).out.trim()
-}
-$prompt.segments.push(time_segment)
