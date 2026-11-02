@@ -54,6 +54,19 @@ impl PluginManager {
             _ => return Err("Plugin manifest must contain a non-empty 'name' string.".to_string()),
         };
 
+        self.register_with_default_name(&name, manifest)
+    }
+
+    pub fn register_with_default_name(
+        &mut self,
+        default_name: &str,
+        manifest: Value,
+    ) -> Result<String, String> {
+        let name = match manifest.get_property("name") {
+            Some(Value::String(s)) if !s.trim().is_empty() => s.trim().to_string(),
+            _ => default_name.to_string(),
+        };
+
         let version = manifest.get_property("version").and_then(|v| match v {
             Value::String(s) => Some(s),
             Value::Number(n) => Some(n.to_string()),
@@ -204,6 +217,9 @@ impl PluginManager {
             {
                 return Some((f, plugin.manifest.clone()));
             }
+            if let Some(Value::Function(f)) = plugin.manifest.get_property(segment_name) {
+                return Some((f, plugin.manifest.clone()));
+            }
         }
         None
     }
@@ -220,17 +236,30 @@ impl PluginManager {
 
     pub fn list_prompt_segments_for(&self, plugin_name: &str) -> Vec<String> {
         let mut segments = Vec::new();
-        if let Some(plugin) = self.plugins.get(plugin_name)
-            && let Some(segments_val) = plugin
+        if let Some(plugin) = self.plugins.get(plugin_name) {
+            if let Some(segments_val) = plugin
                 .manifest
                 .get_property("prompt_segments")
                 .or_else(|| plugin.manifest.get_property("segments"))
-            && let Value::Object(ref map) = segments_val
-        {
-            let guard = map.read().unwrap_or_else(|p| p.into_inner());
-            for (name, val) in guard.iter() {
-                if matches!(val, Value::Function(_)) {
-                    segments.push(name.clone());
+                && let Value::Object(ref map) = segments_val
+            {
+                let guard = map.read().unwrap_or_else(|p| p.into_inner());
+                for (name, val) in guard.iter() {
+                    if matches!(val, Value::Function(_)) {
+                        segments.push(name.clone());
+                    }
+                }
+            }
+            if let Value::Object(ref map) = plugin.manifest {
+                let guard = map.read().unwrap_or_else(|p| p.into_inner());
+                for (name, val) in guard.iter() {
+                    if matches!(val, Value::Function(_))
+                        && name != "render"
+                        && !name.starts_with("on_")
+                        && !segments.contains(name)
+                    {
+                        segments.push(name.clone());
+                    }
                 }
             }
         }

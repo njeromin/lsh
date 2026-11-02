@@ -620,14 +620,13 @@ impl Evaluator {
                 "Plugin '{name_or_path}' must return an object manifest (e.g. 'return {{ name = \"...\", ... }}')."
             ));
         };
-        let name = match manifest_val.get_property("name") {
-            Some(Value::String(s)) if !s.trim().is_empty() => s.trim().to_string(),
-            _ => {
-                return Err(format!(
-                    "Plugin '{name_or_path}' must return an object manifest (e.g. 'return {{ name = \"...\", ... }}')."
-                ));
-            }
-        };
+        let default_name = std::path::Path::new(name_or_path)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or(name_or_path);
+        let name = self
+            .plugin_manager
+            .register_with_default_name(default_name, manifest_val)?;
         Ok(name)
     }
 
