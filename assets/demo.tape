@@ -6,7 +6,7 @@ Set Shell "bash"
 Set FontFamily "JetBrainsMono Nerd Font"
 Set FontSize 16
 Set Width 900
-Set Height 560
+Set Height 600
 Set Padding 20
 Set Theme "Catppuccin Mocha"
 Set WindowBar Colorful
@@ -35,19 +35,33 @@ Sleep 400ms
 Enter
 Sleep 1s
 
-# 2. Structured command substitution (.out property)
-Type "echo $(greet 'lsh').out"
+# 2. Structured command substitution & string methods (.out.trim())
+Type "echo $(greet 'lsh').out.trim()"
+Sleep 400ms
+Enter
+Sleep 1.2s
+
+# 3. Ergonomic command status checking (.is_ok())
+Type "if $(which cargo).is_ok() { echo 'cargo detected!' }"
+Sleep 400ms
+Enter
+Sleep 1.2s
+
+# 4. Native array methods and for loop
+Type "let crates = ['lsh-eval', 'lsh-syntax']"
+Sleep 400ms
+Enter
+Sleep 500ms
+Type "$crates.push('lsh-terminal')"
+Sleep 400ms
+Enter
+Sleep 500ms
+Type `for c in $crates { echo "checking $c..." }`
 Sleep 400ms
 Enter
 Sleep 1.5s
 
-# 3. Object-based command status checking (.code property)
-Type "if $(which cargo).code == 0 { echo 'cargo detected!' }"
-Sleep 400ms
-Enter
-Sleep 1.5s
-
-# 4. Interactive completion menu with live filtering & badges
+# 5. Interactive completion menu with live filtering & badges
 Type "git "
 Sleep 500ms
 Tab
@@ -70,19 +84,19 @@ Sleep 1.5s
 Ctrl+C
 Sleep 800ms
 
-# 5. Arrow redirection syntax
+# 6. Arrow redirection syntax
 Type "echo 'structured non-posix shell' -> demo.txt"
 Sleep 400ms
 Enter
 Sleep 1.2s
 
-# 6. Unix pipeline chaining
+# 7. Unix pipeline chaining
 Type "cat demo.txt | tr 'a-z' 'A-Z'"
 Sleep 400ms
 Enter
 Sleep 1.5s
 
-# 7. Scoped environment variable
+# 8. Scoped environment variable
 Type "ENV_VAR=scoped echo $ENV_VAR"
 Sleep 400ms
 Enter
