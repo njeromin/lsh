@@ -150,7 +150,9 @@ impl Evaluator {
             };
             Value::String(formatted)
         }));
-        scope.vars.insert(String::from("fmt_cwd"), fmt_cwd_fn.clone());
+        scope
+            .vars
+            .insert(String::from("fmt_cwd"), fmt_cwd_fn.clone());
 
         let render_fn = Value::function(FunctionValue::native("render", |eval, args, receiver| {
             let order_arg = args.first().and_then(|v| match v {
@@ -182,22 +184,23 @@ impl Evaluator {
             .vars
             .insert(String::from("prompt"), Value::object(prompt_map));
 
-        let import_fn = Value::function(FunctionValue::native("import", |eval, args, _receiver| {
-            let Some(target) = args.first() else {
-                return Value::Null;
-            };
-            let target_str = match target {
-                Value::String(s) => s.clone(),
-                _ => target.to_string(),
-            };
-            match eval.import_module(&target_str) {
-                Ok(val) => val,
-                Err(err) => {
-                    eprintln!("import error: {err}");
-                    Value::Null
+        let import_fn =
+            Value::function(FunctionValue::native("import", |eval, args, _receiver| {
+                let Some(target) = args.first() else {
+                    return Value::Null;
+                };
+                let target_str = match target {
+                    Value::String(s) => s.clone(),
+                    _ => target.to_string(),
+                };
+                match eval.import_module(&target_str) {
+                    Ok(val) => val,
+                    Err(err) => {
+                        eprintln!("import error: {err}");
+                        Value::Null
+                    }
                 }
-            }
-        }));
+            }));
         scope.vars.insert(String::from("import"), import_fn);
 
         let hooks_registry = Arc::clone(&self.hook_registry);
@@ -475,7 +478,12 @@ impl Evaluator {
         let registry_hooks = self.hook_registry.read().unwrap().get_hooks("pre_prompt");
         for func in registry_hooks {
             let mut scope_indices = vec![0];
-            self.call_user_function_with_values_and_receiver(&func, vec![], None, &mut scope_indices);
+            self.call_user_function_with_values_and_receiver(
+                &func,
+                vec![],
+                None,
+                &mut scope_indices,
+            );
         }
     }
 
@@ -528,7 +536,9 @@ impl Evaluator {
         let path = self
             .plugin_manager
             .find_plugin_file(name_or_path)
-            .ok_or_else(|| format!("Module or plugin '{name_or_path}' not found in search paths."))?;
+            .ok_or_else(|| {
+                format!("Module or plugin '{name_or_path}' not found in search paths.")
+            })?;
 
         let canonical_path = path.canonicalize().unwrap_or_else(|_| path.clone());
 
@@ -580,10 +590,14 @@ impl Evaluator {
             }
 
             let top_level_hook_candidates = [
-                "on_chpwd", "chpwd",
-                "on_pre_prompt", "pre_prompt",
-                "on_pre_exec", "pre_exec",
-                "on_post_exec", "post_exec",
+                "on_chpwd",
+                "chpwd",
+                "on_pre_prompt",
+                "pre_prompt",
+                "on_pre_exec",
+                "pre_exec",
+                "on_post_exec",
+                "post_exec",
             ];
             for hook_name in top_level_hook_candidates {
                 if let Some(Value::Function(f)) = export_val.get_property(hook_name) {
@@ -2198,17 +2212,18 @@ impl Evaluator {
                     Value::Bool(s_string.ends_with(&pat))
                 }))
             }
-            "contains" => {
-                Value::function(FunctionValue::native("contains", move |_, args, _| {
-                    let pat = args.first().map(|v| v.to_string()).unwrap_or_default();
-                    Value::Bool(s_string.contains(&pat))
-                }))
-            }
+            "contains" => Value::function(FunctionValue::native("contains", move |_, args, _| {
+                let pat = args.first().map(|v| v.to_string()).unwrap_or_default();
+                Value::Bool(s_string.contains(&pat))
+            })),
             _ => Value::Null,
         }
     }
 
-    fn resolve_command_result_method(guard: &HashMap<String, Value>, method: &str) -> Option<Value> {
+    fn resolve_command_result_method(
+        guard: &HashMap<String, Value>,
+        method: &str,
+    ) -> Option<Value> {
         if !guard.contains_key("code") || !guard.contains_key("out") || !guard.contains_key("err") {
             return None;
         }
@@ -2218,36 +2233,45 @@ impl Evaluator {
                     Some(Value::Number(n)) => *n as i32,
                     _ => -1,
                 };
-                Some(Value::function(FunctionValue::native("is_ok", move |_, _, _| {
-                    Value::Bool(code == 0)
-                })))
+                Some(Value::function(FunctionValue::native(
+                    "is_ok",
+                    move |_, _, _| Value::Bool(code == 0),
+                )))
             }
             "is_err" | "err" => {
                 let code = match guard.get("code") {
                     Some(Value::Number(n)) => *n as i32,
                     _ => -1,
                 };
-                Some(Value::function(FunctionValue::native("is_err", move |_, _, _| {
-                    Value::Bool(code != 0)
-                })))
+                Some(Value::function(FunctionValue::native(
+                    "is_err",
+                    move |_, _, _| Value::Bool(code != 0),
+                )))
             }
             "lines" => {
                 let out = match guard.get("out") {
                     Some(Value::String(s)) => s.clone(),
                     _ => String::new(),
                 };
-                Some(Value::function(FunctionValue::native("lines", move |_, _, _| {
-                    let trimmed = out.trim_end_matches(['\r', '\n']);
-                    let lines: Vec<Value> = if trimmed.is_empty() {
-                        Vec::new()
-                    } else {
-                        trimmed
-                            .split('\n')
-                            .map(|line| Value::String(line.strip_suffix('\r').unwrap_or(line).to_string()))
-                            .collect()
-                    };
-                    Value::array(lines)
-                })))
+                Some(Value::function(FunctionValue::native(
+                    "lines",
+                    move |_, _, _| {
+                        let trimmed = out.trim_end_matches(['\r', '\n']);
+                        let lines: Vec<Value> = if trimmed.is_empty() {
+                            Vec::new()
+                        } else {
+                            trimmed
+                                .split('\n')
+                                .map(|line| {
+                                    Value::String(
+                                        line.strip_suffix('\r').unwrap_or(line).to_string(),
+                                    )
+                                })
+                                .collect()
+                        };
+                        Value::array(lines)
+                    },
+                )))
             }
             _ => None,
         }
@@ -2509,9 +2533,9 @@ impl Evaluator {
         scope_indices: &mut Vec<usize>,
     ) -> Value {
         let effective_receiver = receiver.clone().or_else(|| {
-            func.bound_this.as_ref().map(|this_val| {
-                (Expr::Variable("this".to_string()), this_val.clone())
-            })
+            func.bound_this
+                .as_ref()
+                .map(|this_val| (Expr::Variable("this".to_string()), this_val.clone()))
         });
 
         if let crate::eval::value::FunctionKind::Native { ref func, .. } = func.kind {
@@ -3657,7 +3681,10 @@ mod tests {
             .unwrap();
         let res = script_eval.evaluate_statements(&statements.body, &mut vec![0]);
         assert_eq!(res.flow, crate::eval::EvalFlow::Continue);
-        let out = script_eval.get_var(0, "out").expect("out exists").to_string();
+        let out = script_eval
+            .get_var(0, "out")
+            .expect("out exists")
+            .to_string();
         assert!(out.contains("❯ "));
     }
 
@@ -3698,7 +3725,9 @@ mod tests {
         eval.evaluate_statements(&statements.body, &mut vec![0]);
 
         let prompt_obj = eval.get_var(0, "prompt").expect("prompt exists");
-        let segments = prompt_obj.get_property("segments").expect("segments exists");
+        let segments = prompt_obj
+            .get_property("segments")
+            .expect("segments exists");
         if let Value::Array(arr) = segments {
             let guard = arr.read().unwrap();
             // Default 4 segments + 2 explicitly added = 6
@@ -3887,7 +3916,9 @@ mod tests {
             .parse_program()
             .unwrap();
         eval.evaluate_statements(&stmts_direct.body, &mut vec![0]);
-        let rendered_direct = eval.get_var(0, "rendered_direct").expect("rendered_direct exists");
+        let rendered_direct = eval
+            .get_var(0, "rendered_direct")
+            .expect("rendered_direct exists");
         assert!(rendered_direct.to_string().ends_with("❯ "));
     }
 
@@ -3912,7 +3943,11 @@ mod tests {
         let path = eval.get_var(0, "path").expect("path exists");
         assert!(!path.to_string().is_empty());
         let rendered = eval.get_var(0, "rendered").expect("rendered exists");
-        assert!(rendered.to_string().contains(&format!("[{}]", path.to_string())));
+        assert!(
+            rendered
+                .to_string()
+                .contains(&format!("[{}]", path.to_string()))
+        );
         assert!(rendered.to_string().ends_with("❯ "));
     }
 
@@ -4134,7 +4169,9 @@ mod tests {
         }
 
         // Second import: returns cached instance with mutated property
-        let val2 = eval.import_module(path_str).expect("second import succeeds");
+        let val2 = eval
+            .import_module(path_str)
+            .expect("second import succeeds");
         assert_eq!(val2.get_property("mutated"), Some(Value::Bool(true)));
 
         let _ = std::fs::remove_dir_all(&temp_dir);
@@ -4173,12 +4210,16 @@ mod tests {
         }
         $prompt.segments.push(time_segment)
         "#;
-        let prog = Parser::new(0, lexer::lex_input(0, script).unwrap()).parse_program().unwrap();
+        let prog = Parser::new(0, lexer::lex_input(0, script).unwrap())
+            .parse_program()
+            .unwrap();
         let status = eval.evaluate(prog);
         assert_eq!(status, 0);
 
         let prompt_obj = eval.get_var(0, "prompt").expect("prompt exists");
-        let segments = prompt_obj.get_property("segments").expect("segments exists");
+        let segments = prompt_obj
+            .get_property("segments")
+            .expect("segments exists");
         if let Value::Array(arr) = segments {
             let guard = arr.read().unwrap();
             assert_eq!(guard.len(), 5);
@@ -4217,16 +4258,24 @@ mod tests {
         let has_two = $arr.contains(2)
         let has_nine = $arr.contains(9)
         "#;
-        let prog = Parser::new(0, lexer::lex_input(0, script).unwrap()).parse_program().unwrap();
+        let prog = Parser::new(0, lexer::lex_input(0, script).unwrap())
+            .parse_program()
+            .unwrap();
         let status = eval.evaluate(prog);
         assert_eq!(status, 0);
 
-        assert_eq!(eval.get_var(0, "trimmed").unwrap().to_string(), "hello world");
+        assert_eq!(
+            eval.get_var(0, "trimmed").unwrap().to_string(),
+            "hello world"
+        );
         assert_eq!(eval.get_var(0, "upper").unwrap().to_string(), "HELLO WORLD");
         assert_eq!(eval.get_var(0, "lower").unwrap().to_string(), "hello world");
         assert_eq!(eval.get_var(0, "s_len").unwrap(), &Value::Number(11.0));
         assert_eq!(eval.get_var(0, "s_prop_len").unwrap(), &Value::Number(11.0));
-        assert_eq!(eval.get_var(0, "replaced").unwrap().to_string(), "hello there");
+        assert_eq!(
+            eval.get_var(0, "replaced").unwrap().to_string(),
+            "hello there"
+        );
         assert_eq!(eval.get_var(0, "starts").unwrap(), &Value::Bool(true));
         assert_eq!(eval.get_var(0, "ends").unwrap(), &Value::Bool(true));
         assert_eq!(eval.get_var(0, "has_sub").unwrap(), &Value::Bool(true));
@@ -4234,7 +4283,10 @@ mod tests {
 
         assert_eq!(eval.get_var(0, "popped").unwrap(), &Value::Number(3.0));
         assert_eq!(eval.get_var(0, "arr_len").unwrap(), &Value::Number(2.0));
-        assert_eq!(eval.get_var(0, "arr_prop_len").unwrap(), &Value::Number(2.0));
+        assert_eq!(
+            eval.get_var(0, "arr_prop_len").unwrap(),
+            &Value::Number(2.0)
+        );
         assert_eq!(eval.get_var(0, "joined").unwrap().to_string(), "1-2");
         assert_eq!(eval.get_var(0, "has_two").unwrap(), &Value::Bool(true));
         assert_eq!(eval.get_var(0, "has_nine").unwrap(), &Value::Bool(false));
@@ -4266,7 +4318,9 @@ mod tests {
         let lines = $(printf "alpha\nbeta\ngamma\n").lines()
         let empty_lines = $(echo -n "").lines()
         "#;
-        let prog = Parser::new(0, lexer::lex_input(0, script).unwrap()).parse_program().unwrap();
+        let prog = Parser::new(0, lexer::lex_input(0, script).unwrap())
+            .parse_program()
+            .unwrap();
         let status = eval.evaluate(prog);
         assert_eq!(status, 0);
 
@@ -4347,14 +4401,19 @@ mod tests {
         }
         let even = find_first_even([1, 3, 4, 5])
         "#;
-        let prog = Parser::new(0, lexer::lex_input(0, script).unwrap()).parse_program().unwrap();
+        let prog = Parser::new(0, lexer::lex_input(0, script).unwrap())
+            .parse_program()
+            .unwrap();
         let status = eval.evaluate(prog);
         assert_eq!(status, 0);
 
         assert_eq!(eval.get_var(0, "sum").unwrap(), &Value::Number(10.0));
         assert_eq!(eval.get_var(0, "paren_sum").unwrap(), &Value::Number(30.0));
         assert_eq!(eval.get_var(0, "break_sum").unwrap(), &Value::Number(3.0));
-        assert_eq!(eval.get_var(0, "continue_sum").unwrap(), &Value::Number(8.0));
+        assert_eq!(
+            eval.get_var(0, "continue_sum").unwrap(),
+            &Value::Number(8.0)
+        );
         assert_eq!(eval.get_var(0, "even").unwrap(), &Value::Number(4.0));
 
         if let Value::Array(ch_arr) = eval.get_var(0, "str_chars").unwrap() {
@@ -4413,14 +4472,19 @@ mod tests {
         }
         let early_ret = find_while_threshold()
         "#;
-        let prog = Parser::new(0, lexer::lex_input(0, script).unwrap()).parse_program().unwrap();
+        let prog = Parser::new(0, lexer::lex_input(0, script).unwrap())
+            .parse_program()
+            .unwrap();
         let status = eval.evaluate(prog);
         assert_eq!(status, 0);
 
         assert_eq!(eval.get_var(0, "count").unwrap(), &Value::Number(5.0));
         assert_eq!(eval.get_var(0, "break_count").unwrap(), &Value::Number(4.0));
         // i goes 1, 2, 3 (skipped), 4, 5 => continue_sum = 1 + 2 + 4 + 5 = 12
-        assert_eq!(eval.get_var(0, "continue_sum").unwrap(), &Value::Number(12.0));
+        assert_eq!(
+            eval.get_var(0, "continue_sum").unwrap(),
+            &Value::Number(12.0)
+        );
         assert_eq!(eval.get_var(0, "early_ret").unwrap(), &Value::Number(70.0));
     }
 }

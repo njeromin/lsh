@@ -2755,25 +2755,44 @@ mod tests {
 
     #[test]
     fn parses_for_loop_and_break_continue() {
-        let body = parse_program("for item in [1, 2, 3] { if $item == 2 { break } else { continue } }");
-        let Statement::For { variable, iterable, body: loop_body } = &body[0] else {
+        let body =
+            parse_program("for item in [1, 2, 3] { if $item == 2 { break } else { continue } }");
+        let Statement::For {
+            variable,
+            iterable,
+            body: loop_body,
+        } = &body[0]
+        else {
             panic!("Expected for loop statement");
         };
         assert_eq!(variable, "item");
         assert!(matches!(iterable, Expr::Array(arr) if arr.len() == 3));
         assert_eq!(loop_body.len(), 1);
 
-        let Statement::If { then_branch, else_branch, .. } = &loop_body[0] else {
+        let Statement::If {
+            then_branch,
+            else_branch,
+            ..
+        } = &loop_body[0]
+        else {
             panic!("Expected if statement in for body");
         };
         assert!(matches!(&then_branch[0], Statement::Break));
-        assert!(matches!(&else_branch.as_ref().unwrap()[0], Statement::Continue));
+        assert!(matches!(
+            &else_branch.as_ref().unwrap()[0],
+            Statement::Continue
+        ));
     }
 
     #[test]
     fn parses_for_loop_with_parens_and_variable_sigil() {
         let body = parse_program("for ($item in $items) { echo $item }");
-        let Statement::For { variable, iterable, body: loop_body } = &body[0] else {
+        let Statement::For {
+            variable,
+            iterable,
+            body: loop_body,
+        } = &body[0]
+        else {
             panic!("Expected for loop statement");
         };
         assert_eq!(variable, "item");

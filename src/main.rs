@@ -13,8 +13,8 @@ use lsh_syntax::{
 use lsh_sys::signals::{init_interactive_terminal, reset_interrupted};
 use lsh_terminal::{LineEditorHelper, Options, osc};
 use rustyline::{
-    Cmd, CompletionType, Config, Editor, KeyEvent, Movement, config::Configurer, error::ReadlineError,
-    history::DefaultHistory,
+    Cmd, CompletionType, Config, Editor, KeyEvent, Movement, config::Configurer,
+    error::ReadlineError, history::DefaultHistory,
 };
 
 const DEFAULT_PROMPT: &str = "\x1b[35m›\x1b[0m ";
@@ -37,7 +37,11 @@ fn get_prompt(eval: &mut Evaluator) -> String {
 
     if let (Some(before_fn), Some(prompt_obj)) = (before, prompt_val.as_ref()) {
         let prompt_expr = lsh_syntax::ast::Expr::Variable("prompt".to_string());
-        eval.exec_function_with_receiver(&before_fn, vec![], Some((prompt_expr, prompt_obj.clone())));
+        eval.exec_function_with_receiver(
+            &before_fn,
+            vec![],
+            Some((prompt_expr, prompt_obj.clone())),
+        );
     }
 
     let rendered = match prompt_val {
@@ -84,10 +88,7 @@ fn interactive_session(
         .completion_type(CompletionType::List)
         .build();
     let mut editor = Editor::<LineEditorHelper, DefaultHistory>::with_config(config)?;
-    editor.bind_sequence(
-        KeyEvent::ctrl('c'),
-        Cmd::Kill(Movement::WholeBuffer),
-    );
+    editor.bind_sequence(KeyEvent::ctrl('c'), Cmd::Kill(Movement::WholeBuffer));
     let mut helper = LineEditorHelper::new();
     helper.set_completion_registry(std::sync::Arc::clone(&eval.completion_registry));
     editor.set_helper(Some(helper));
