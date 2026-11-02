@@ -28,6 +28,7 @@
 ## Variables & Scoping
 
 ### Declaration (`let`)
+
 Variables are declared using the `let` keyword:
 
 ```lsh
@@ -37,15 +38,15 @@ let is_ready = true
 ```
 
 ### Assignment
-Variables can be assigned with or without a leading `$`:
+
+Variables can be assigned to using a leading `$`:
 
 ```lsh
-name = "new_value"
-# or
 $name = "new_value"
 ```
 
 ### Scoping
+
 `lsh` uses lexical block scoping. Variables declared inside blocks (`{ ... }`), functions, or loops are local to that block and shadow outer variables:
 
 ```lsh
@@ -64,12 +65,14 @@ echo $x        # 10
 ## Operators
 
 ### Arithmetic
+
 - `+` — Addition or string concatenation
 - `-` — Subtraction
 - `*` — Multiplication
 - `/` — Division (division by zero returns `null`)
 
 ### Comparison
+
 - `==` — Equal to
 - `!=` — Not equal to
 - `<` — Less than
@@ -78,6 +81,7 @@ echo $x        # 10
 - `>=` — Greater than or equal to
 
 ### Logical
+
 - `&&` — Logical AND
 - `||` — Logical OR
 - `!` — Logical NOT
@@ -89,6 +93,7 @@ echo $x        # 10
 ### Strings
 
 #### Double-Quoted Strings (Interpolated)
+
 Double-quoted strings support variable interpolation (`$var`), command substitutions (`$(cmd)`), and escape characters:
 
 ```lsh
@@ -98,6 +103,7 @@ echo "Current directory: $(pwd).out"
 ```
 
 Supported escape sequences:
+
 - `\n` — newline
 - `\t` — tab
 - `\r` — carriage return
@@ -107,6 +113,7 @@ Supported escape sequences:
 - `\e` or `\x1b` — ANSI escape code
 
 #### Single-Quoted Strings (Literal)
+
 Single-quoted strings are literal and do not perform variable or command expansion:
 
 ```lsh
@@ -114,6 +121,7 @@ echo 'Literal $user and $(command)'
 ```
 
 #### String Indexing & Methods
+
 Strings support negative indexing (`[-1]` is the last character) and built-in helper methods:
 
 ```lsh
@@ -146,6 +154,7 @@ let parts = $s.trim().split(", ")     # ["Hello", "World!"]
 ---
 
 ### Numbers
+
 Numbers in `lsh` are 64-bit floating point numbers (`f64`).
 
 ```lsh
@@ -160,6 +169,7 @@ let quot = $a / 2        # 5
 ---
 
 ### Booleans
+
 Booleans are `true` or `false`:
 
 ```lsh
@@ -174,6 +184,7 @@ if $is_valid && !$is_done {
 ---
 
 ### Arrays
+
 Arrays are defined with square brackets `[...]` and can hold mixed types:
 
 ```lsh
@@ -194,6 +205,7 @@ echo $fruits.contains("apple") # true
 ---
 
 ### Objects & Maps
+
 Objects are key-value maps defined with curly braces `{ ... }`:
 
 ```lsh
@@ -215,6 +227,7 @@ $user["status"] = "online"
 ---
 
 ### Null
+
 `null` represents an absent or uninitialised value:
 
 ```lsh
@@ -224,6 +237,7 @@ let empty = null
 ---
 
 ### Type Checking (`typeof`)
+
 The `typeof` operator returns the type name as a string:
 
 ```lsh
