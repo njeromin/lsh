@@ -3167,7 +3167,7 @@ mod tests {
         ));
         let plugin_dir = temp_dir.join(plugin_name);
         let _ = std::fs::create_dir_all(&plugin_dir);
-        let plugin_file = plugin_dir.join("plugin.lsh");
+        let plugin_file = plugin_dir.join("main.lsh");
         std::fs::write(&plugin_file, content).unwrap();
         (temp_dir, plugin_file)
     }
