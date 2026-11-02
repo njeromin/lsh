@@ -107,6 +107,12 @@ impl CompletionItem {
         if name_lower == "license" || name_lower.starts_with("license.") {
             return ("\u{e60a}", "\x1b[33m");
         }
+        if name_lower == "dockerfile" || name_lower.starts_with("dockerfile.") {
+            return ("\u{f308}", "\x1b[34m");
+        }
+        if name_lower.starts_with(".env") {
+            return ("\u{f462}", "\x1b[33m");
+        }
 
         if let Some(ext) = name_lower.rsplit('.').next() {
             match ext {
@@ -114,13 +120,23 @@ impl CompletionItem {
                 "toml" | "yaml" | "yml" | "json" | "ini" | "conf" => ("\u{e615}", "\x1b[33m"),
                 "md" | "markdown" => ("\u{f48a}", "\x1b[36m"),
                 "sh" | "bash" | "zsh" | "lsh" => ("\u{f489}", "\x1b[32m"),
+                "nix" => ("\u{f313}", "\x1b[34m"),
                 "lock" => ("\u{f023}", "\x1b[38;5;245m"),
                 "py" => ("\u{e606}", "\x1b[34m"),
                 "js" | "mjs" | "cjs" => ("\u{e60c}", "\x1b[33m"),
                 "ts" => ("\u{e628}", "\x1b[34m"),
+                "tsx" | "jsx" => ("\u{e628}", "\x1b[36m"),
                 "html" | "css" | "scss" => ("\u{e60e}", "\x1b[35m"),
                 "c" | "h" | "cpp" | "hpp" | "cc" => ("\u{e61d}", "\x1b[34m"),
                 "go" => ("\u{e627}", "\x1b[36m"),
+                "java" | "kt" | "scala" => ("\u{e738}", "\x1b[31m"),
+                "rb" | "ruby" => ("\u{e21e}", "\x1b[31m"),
+                "php" => ("\u{e73d}", "\x1b[35m"),
+                "swift" => ("\u{e755}", "\x1b[38;5;208m"),
+                "sql" => ("\u{e706}", "\x1b[33m"),
+                "lua" => ("\u{e620}", "\x1b[34m"),
+                "diff" | "patch" => ("\u{f440}", "\x1b[32m"),
+                "pdf" => ("\u{f1c1}", "\x1b[31m"),
                 "png" | "jpg" | "jpeg" | "gif" | "svg" | "webp" | "ico" => ("\u{f1c5}", "\x1b[35m"),
                 "mp3" | "wav" | "ogg" | "mp4" | "mkv" | "avi" => ("\u{f1c7}", "\x1b[35m"),
                 "zip" | "tar" | "gz" | "xz" | "7z" | "bz2" => ("\u{f1c6}", "\x1b[31m"),
@@ -187,6 +203,7 @@ impl CandidateSpec {
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct CompletionRule {
+    pub description: Option<String>,
     pub candidates: Vec<CandidateSpec>,
     pub subcommands: HashMap<String, CompletionRule>,
     pub exec: Option<String>,
@@ -197,6 +214,11 @@ pub struct CompletionRule {
 impl CompletionRule {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn with_description(mut self, desc: impl Into<String>) -> Self {
+        self.description = Some(desc.into());
+        self
     }
 }
 

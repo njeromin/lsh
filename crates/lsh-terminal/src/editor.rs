@@ -1049,16 +1049,64 @@ mod tests {
             .get_candidates("cargo ", 6, &ctx)
             .expect("completion failed");
         assert_eq!(start, 6);
-        assert!(
-            items
-                .iter()
-                .any(|it| it.replacement == "build" && it.kind == CompletionKind::Subcommand)
-        );
-        assert!(
-            items
-                .iter()
-                .any(|it| it.replacement == "test" && it.kind == CompletionKind::Subcommand)
-        );
+        assert!(items.iter().any(|it| it.replacement == "build"
+            && it.kind == CompletionKind::Subcommand
+            && it.description.is_some()));
+        assert!(items.iter().any(|it| it.replacement == "test"
+            && it.kind == CompletionKind::Subcommand
+            && it.description.is_some()));
+    }
+
+    #[test]
+    fn completes_nested_subcommands_and_subcommand_flags() {
+        use rustyline::history::DefaultHistory;
+
+        let helper = LineEditorHelper::new();
+        let history = DefaultHistory::new();
+        let ctx = Context::new(&history);
+
+        // "git remote " -> subcommands
+        let (start, items) = helper
+            .get_candidates("git remote ", 11, &ctx)
+            .expect("completion failed");
+        assert_eq!(start, 11);
+        assert!(items.iter().any(|it| it.replacement == "add"));
+        assert!(items.iter().any(|it| it.replacement == "remove"));
+
+        // "git stash " -> subcommands
+        let (start, items) = helper
+            .get_candidates("git stash ", 10, &ctx)
+            .expect("completion failed");
+        assert_eq!(start, 10);
+        assert!(items.iter().any(|it| it.replacement == "pop"));
+        assert!(items.iter().any(|it| it.replacement == "apply"));
+        assert!(items.iter().any(|it| it.replacement == "drop"));
+
+        // "cargo test -" -> test flags
+        let (start, items) = helper
+            .get_candidates("cargo test -", 12, &ctx)
+            .expect("completion failed");
+        assert_eq!(start, 11);
+        assert!(items.iter().any(|it| it.replacement == "--nocapture"));
+        assert!(items.iter().any(|it| it.replacement == "--no-run"));
+
+        // "complete set -" -> complete set flags
+        let (start, items) = helper
+            .get_candidates("complete set -", 14, &ctx)
+            .expect("completion failed");
+        assert_eq!(start, 13);
+        assert!(items.iter().any(|it| it.replacement == "--dirs"));
+        assert!(items.iter().any(|it| it.replacement == "--exec"));
+        assert!(items.iter().any(|it| it.replacement == "--ext"));
+
+        // "plugin " -> plugin subcommands
+        let (start, items) = helper
+            .get_candidates("plugin ", 7, &ctx)
+            .expect("completion failed");
+        assert_eq!(start, 7);
+        assert!(items.iter().any(|it| it.replacement == "list"));
+        assert!(items.iter().any(|it| it.replacement == "load"));
+        assert!(items.iter().any(|it| it.replacement == "unload"));
     }
 
     #[test]

@@ -104,6 +104,20 @@ pub fn fuzzy_match(candidate: &str, query: &str) -> Option<FuzzyMatch> {
     Some(FuzzyMatch { score, indices })
 }
 
+fn match_description_word(desc: &str, query: &str) -> Option<i64> {
+    let mut best_score = None;
+    for word in desc.split_whitespace() {
+        let clean = word.trim_matches(|c: char| !c.is_alphanumeric());
+        if clean.is_empty() {
+            continue;
+        }
+        if let Some(m) = fuzzy_match(clean, query) {
+            best_score = Some(best_score.map_or(m.score, |s: i64| s.max(m.score)));
+        }
+    }
+    best_score
+}
+
 pub fn filter_completion_items(items: &[CompletionItem], query: &str) -> Vec<CompletionItem> {
     if query.is_empty() {
         return items
@@ -128,11 +142,11 @@ pub fn filter_completion_items(items: &[CompletionItem], query: &str) -> Vec<Com
                 item.match_indices = Vec::new();
                 Some((item, m.score))
             } else if let Some(desc) = &it.description
-                && let Some(m) = fuzzy_match(desc, query)
+                && let Some(score) = match_description_word(desc, query)
             {
                 let mut item = it.clone();
                 item.match_indices = Vec::new();
-                Some((item, m.score.saturating_sub(10)))
+                Some((item, score.saturating_sub(10)))
             } else {
                 None
             }

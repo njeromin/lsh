@@ -81,7 +81,10 @@ impl CompletionRegistry {
             acc: &mut Vec<(String, &'a CompletionRule)>,
         ) {
             acc.push((path.to_string(), rule));
-            for (sub, child) in &rule.subcommands {
+            let mut sub_keys: Vec<_> = rule.subcommands.keys().collect();
+            sub_keys.sort();
+            for sub in sub_keys {
+                let child = &rule.subcommands[sub];
                 let sub_path = format!("{path} {sub}");
                 collect_rules(&sub_path, child, acc);
             }
@@ -141,10 +144,22 @@ impl CompletionRegistry {
         for key in subcmd_keys {
             let child = &current.subcommands[key];
             let desc = child
-                .candidates
-                .iter()
-                .find(|c| c.kind == CompletionKind::Subcommand && &c.replacement == key)
-                .and_then(|c| c.description.clone());
+                .description
+                .clone()
+                .or_else(|| {
+                    current
+                        .candidates
+                        .iter()
+                        .find(|c| c.kind == CompletionKind::Subcommand && &c.replacement == key)
+                        .and_then(|c| c.description.clone())
+                })
+                .or_else(|| {
+                    child
+                        .candidates
+                        .iter()
+                        .find(|c| c.kind == CompletionKind::Subcommand && &c.replacement == key)
+                        .and_then(|c| c.description.clone())
+                });
             let mut item = CompletionItem::new(key, key, CompletionKind::Subcommand);
             item.description = desc;
             items.push(item);
@@ -152,14 +167,32 @@ impl CompletionRegistry {
 
         // 2. Static candidates (flags, values, etc.)
         for spec in &current.candidates {
-            items.push(spec.to_completion_item());
+            if let Some(existing) = items
+                .iter_mut()
+                .find(|it| it.replacement == spec.replacement)
+            {
+                if existing.description.is_none() && spec.description.is_some() {
+                    existing.description = spec.description.clone();
+                }
+            } else {
+                items.push(spec.to_completion_item());
+            }
         }
 
         // 3. Dynamic exec
         if let Some(cmd_str) = &current.exec {
             let dynamic = run_exec_command(cmd_str);
             for spec in dynamic {
-                items.push(spec.to_completion_item());
+                if let Some(existing) = items
+                    .iter_mut()
+                    .find(|it| it.replacement == spec.replacement)
+                {
+                    if existing.description.is_none() && spec.description.is_some() {
+                        existing.description = spec.description.clone();
+                    }
+                } else {
+                    items.push(spec.to_completion_item());
+                }
             }
         }
 
@@ -192,7 +225,7 @@ fn run_exec_command(cmd_str: &str) -> Vec<CandidateSpec> {
     {
         let text = String::from_utf8_lossy(&out.stdout);
         text.lines()
-            .map(|l| l.trim().trim_start_matches('*').trim())
+            .map(|l| l.trim().trim_start_matches(['*', '+', ' ']).trim())
             .filter(|l| !l.is_empty())
             .map(|l| CandidateSpec::from_raw(l, CompletionKind::Value))
             .collect()
@@ -366,6 +399,127 @@ mod tests {
                 assert!(items.iter().any(|it| it.replacement == "-C"));
             }
             _ => panic!("Expected Items resolution for make -"),
+        }
+    }
+
+    #[test]
+    fn subcommands_have_descriptions_and_no_duplicates() {
+        let reg = CompletionRegistry::with_defaults();
+
+        // git subcommands have descriptions
+        let res_git = reg.resolve("git", &[], "").expect("resolve git failed");
+        match res_git {
+            CompletionResolution::Items(items) => {
+                assert!(items.iter().all(|it| it.description.is_some()));
+                assert!(items.iter().any(|it| it.replacement == "commit"));
+                assert!(items.iter().any(|it| it.replacement == "restore"));
+                assert!(items.iter().any(|it| it.replacement == "stash"));
+            }
+            _ => panic!("Expected Items resolution for git"),
+        }
+
+        // cargo subcommands have descriptions
+        let res_cargo = reg.resolve("cargo", &[], "").expect("resolve cargo failed");
+        match res_cargo {
+            CompletionResolution::Items(items) => {
+                assert!(items.iter().all(|it| it.description.is_some()));
+                assert!(items.iter().any(|it| it.replacement == "build"));
+                assert!(items.iter().any(|it| it.replacement == "clippy"));
+                assert!(items.iter().any(|it| it.replacement == "tree"));
+            }
+            _ => panic!("Expected Items resolution for cargo"),
+        }
+
+        // npm subcommands have descriptions and no duplicates
+        let res_npm = reg.resolve("npm", &[], "").expect("resolve npm failed");
+        match res_npm {
+            CompletionResolution::Items(items) => {
+                assert!(items.iter().all(|it| it.description.is_some()));
+                let run_count = items.iter().filter(|it| it.replacement == "run").count();
+                assert_eq!(run_count, 1);
+            }
+            _ => panic!("Expected Items resolution for npm"),
+        }
+    }
+
+    #[test]
+    fn resolves_nested_subcommands_and_builtins() {
+        let reg = CompletionRegistry::with_defaults();
+
+        // git stash subcommands
+        let res_stash = reg
+            .resolve("git", &["stash".to_string()], "")
+            .expect("resolve git stash failed");
+        match res_stash {
+            CompletionResolution::Items(items) => {
+                assert!(items.iter().any(|it| it.replacement == "pop"));
+                assert!(items.iter().any(|it| it.replacement == "apply"));
+                assert!(items.iter().any(|it| it.replacement == "list"));
+                assert!(items.iter().any(|it| it.replacement == "drop"));
+            }
+            _ => panic!("Expected Items resolution for git stash"),
+        }
+
+        // git remote subcommands
+        let res_remote = reg
+            .resolve("git", &["remote".to_string()], "")
+            .expect("resolve git remote failed");
+        match res_remote {
+            CompletionResolution::Items(items) => {
+                assert!(items.iter().any(|it| it.replacement == "add"));
+                assert!(items.iter().any(|it| it.replacement == "remove"));
+                assert!(items.iter().any(|it| it.replacement == "rename"));
+            }
+            _ => panic!("Expected Items resolution for git remote"),
+        }
+
+        // complete set flags
+        let res_complete_set = reg
+            .resolve("complete", &["set".to_string()], "-")
+            .expect("resolve complete set - failed");
+        match res_complete_set {
+            CompletionResolution::Items(items) => {
+                assert!(items.iter().any(|it| it.replacement == "--dirs"));
+                assert!(items.iter().any(|it| it.replacement == "--exec"));
+                assert!(items.iter().any(|it| it.replacement == "--ext"));
+            }
+            _ => panic!("Expected Items resolution for complete set -"),
+        }
+
+        // alias subcommands
+        let res_alias = reg.resolve("alias", &[], "").expect("resolve alias failed");
+        match res_alias {
+            CompletionResolution::Items(items) => {
+                assert!(items.iter().any(|it| it.replacement == "set"));
+                assert!(items.iter().any(|it| it.replacement == "list"));
+            }
+            _ => panic!("Expected Items resolution for alias"),
+        }
+
+        // plugin subcommands
+        let res_plugin = reg
+            .resolve("plugin", &[], "")
+            .expect("resolve plugin failed");
+        match res_plugin {
+            CompletionResolution::Items(items) => {
+                assert!(items.iter().any(|it| it.replacement == "list"));
+                assert!(items.iter().any(|it| it.replacement == "info"));
+                assert!(items.iter().any(|it| it.replacement == "load"));
+                assert!(items.iter().any(|it| it.replacement == "unload"));
+            }
+            _ => panic!("Expected Items resolution for plugin"),
+        }
+
+        // source file extensions
+        let res_source = reg
+            .resolve("source", &[], "")
+            .expect("resolve source failed");
+        match res_source {
+            CompletionResolution::FileExtensions(exts) => {
+                assert!(exts.contains(&"lsh".to_string()));
+                assert!(exts.contains(&"sh".to_string()));
+            }
+            _ => panic!("Expected FileExtensions resolution for source"),
         }
     }
 }

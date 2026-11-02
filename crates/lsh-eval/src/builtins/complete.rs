@@ -33,7 +33,9 @@ pub fn complete<R: io::Read, W: io::Write, WE: io::Write>(
                 if let Some(cmd) = &rule.exec {
                     parts.push(format!("[exec: {cmd}]"));
                 }
-                for sub in rule.subcommands.keys() {
+                let mut sub_keys: Vec<_> = rule.subcommands.keys().collect();
+                sub_keys.sort();
+                for sub in sub_keys {
                     parts.push(sub.clone());
                 }
                 for cand in &rule.candidates {

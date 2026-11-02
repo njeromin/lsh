@@ -51,5 +51,8 @@ mod tests {
         assert!(rules.contains_key("pnpm"));
         assert!(rules.contains_key("ssh"));
         assert!(rules.contains_key("make"));
+        assert!(rules.contains_key("plugin"));
+        assert!(rules.contains_key("source"));
+        assert!(rules.contains_key("exit"));
     }
 }
