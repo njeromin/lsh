@@ -3,7 +3,7 @@ return {
         show_ahead = true,
         show_changes = true
     },
-    git = () => {
+    segment = () => {
         if $(git rev-parse --is-inside-work-tree).code == 0 {
             let branch = $(git branch --show-current | tr -d '\n').out
             let git_info = $palette.reset + $palette.green + $branch

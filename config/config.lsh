@@ -23,7 +23,7 @@ let git_prompt = import("git-prompt")
 $prompt.segments = [
     "\n",
     () => { return $palette.bright_blue + fmt_cwd() + $palette.reset },
-    $git_prompt.git,
+    $git_prompt.segment,
     "\n",
     $palette.bright_magenta + "❯ " + $palette.reset
 ]
@@ -32,7 +32,7 @@ $prompt.segments = [
 $prompt.separator = " "
 
 # Custom segments can also be functions:
-# let time_segment = () => {
-#     return $palette.dim + $(date +%H:%M).out.trim()
-# }
-# $prompt.segments.push(time_segment)
+let time_segment = () => {
+    return $palette.dim + $(date +%H:%M).out.trim()
+}
+$prompt.segments.push(time_segment)
