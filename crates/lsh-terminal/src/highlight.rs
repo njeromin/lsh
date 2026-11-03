@@ -1,13 +1,10 @@
-use std::borrow::Cow;
-
-use rustyline::highlight::{CmdKind, Highlighter};
+use nu_ansi_term::{Color, Style};
+use reedline::{Highlighter, StyledText};
 
 use lsh_syntax::lexer::{
     self,
     token::{Token, TokenKind},
 };
-
-const COMMAND_SUB_STYLE: &str = "\x1b[38;5;208m";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Delimiter {
@@ -25,19 +22,21 @@ impl SyntaxHighlighter {
         Self
     }
 
-    fn highlight_line<'a>(&self, line: &'a str) -> Cow<'a, str> {
+    pub fn highlight_line(&self, line: &str) -> StyledText {
+        let mut styled = StyledText::new();
         let Ok(tokens) = lexer::lex_input(0, line) else {
-            return Cow::Borrowed(line);
+            styled.push((Style::default(), line.to_string()));
+            return styled;
         };
 
         if tokens
             .iter()
             .all(|token| matches!(token.kind, TokenKind::EOF))
         {
-            return Cow::Borrowed(line);
+            styled.push((Style::default(), line.to_string()));
+            return styled;
         }
 
-        let mut highlighted = String::with_capacity(line.len() + tokens.len() * 12);
         let mut cursor = 0;
         let mut delim_stack = Vec::new();
 
@@ -91,32 +90,28 @@ impl SyntaxHighlighter {
                 _ => {}
             }
 
-            highlighted.push_str(&line[cursor..start]);
+            if start > cursor {
+                styled.push((Style::default(), line[cursor..start].to_string()));
+            }
 
             let span = &line[start..end];
-            if let Some(style) = token_style(token, span, is_command_sub_close) {
-                highlighted.push_str(style);
-                highlighted.push_str(span);
-                highlighted.push_str("\x1b[0m");
-            } else {
-                highlighted.push_str(span);
-            }
+            let style = token_style(token, span, is_command_sub_close).unwrap_or_default();
+            styled.push((style, span.to_string()));
 
             cursor = end;
         }
 
-        highlighted.push_str(&line[cursor..]);
-        Cow::Owned(highlighted)
+        if cursor < line.len() {
+            styled.push((Style::default(), line[cursor..].to_string()));
+        }
+
+        styled
     }
 }
 
 impl Highlighter for SyntaxHighlighter {
-    fn highlight<'l>(&self, line: &'l str, _pos: usize) -> Cow<'l, str> {
+    fn highlight(&self, line: &str, _cursor: usize) -> StyledText {
         self.highlight_line(line)
-    }
-
-    fn highlight_char(&self, _line: &str, _pos: usize, _kind: CmdKind) -> bool {
-        true
     }
 }
 
@@ -143,9 +138,9 @@ fn token_end(line: &str, tokens: &[Token], index: usize) -> usize {
     end
 }
 
-fn token_style(token: &Token, _span: &str, is_command_sub_close: bool) -> Option<&'static str> {
+fn token_style(token: &Token, _span: &str, is_command_sub_close: bool) -> Option<Style> {
     if matches!(token.kind, TokenKind::RightParen) && is_command_sub_close {
-        return Some(COMMAND_SUB_STYLE);
+        return Some(Style::new().fg(Color::Fixed(208)));
     }
 
     match token.kind {
@@ -159,16 +154,18 @@ fn token_style(token: &Token, _span: &str, is_command_sub_close: bool) -> Option
         | TokenKind::Continue
         | TokenKind::Fn
         | TokenKind::TypeOf
-        | TokenKind::Return => Some("\x1b[1;35m"),
-        TokenKind::Variable(_) => Some("\x1b[36m"),
-        TokenKind::Number(_) | TokenKind::Bool(_) => Some("\x1b[33m"),
-        TokenKind::QuotedString(_) | TokenKind::DoubleQuotedString(_) => Some("\x1b[32m"),
+        | TokenKind::Return => Some(Style::new().bold().fg(Color::Magenta)),
+        TokenKind::Variable(_) => Some(Style::new().fg(Color::Cyan)),
+        TokenKind::Number(_) | TokenKind::Bool(_) => Some(Style::new().fg(Color::Yellow)),
+        TokenKind::QuotedString(_) | TokenKind::DoubleQuotedString(_) => {
+            Some(Style::new().fg(Color::Green))
+        }
         TokenKind::Pipe
         | TokenKind::And
         | TokenKind::Or
         | TokenKind::DollarLeftParen
         | TokenKind::FatArrow
-        | TokenKind::ThinArrow => Some(COMMAND_SUB_STYLE),
+        | TokenKind::ThinArrow => Some(Style::new().fg(Color::Fixed(208))),
         TokenKind::Plus
         | TokenKind::Minus
         | TokenKind::PlusEquals
@@ -185,7 +182,7 @@ fn token_style(token: &Token, _span: &str, is_command_sub_close: bool) -> Option
         | TokenKind::LessThan
         | TokenKind::LtEquals
         | TokenKind::Not
-        | TokenKind::NotEquals => Some("\x1b[37m"),
+        | TokenKind::NotEquals => Some(Style::new().fg(Color::White)),
         TokenKind::LeftCurly
         | TokenKind::RightCurly
         | TokenKind::LeftParen
@@ -194,7 +191,7 @@ fn token_style(token: &Token, _span: &str, is_command_sub_close: bool) -> Option
         | TokenKind::RightBracket
         | TokenKind::Comma
         | TokenKind::Dot
-        | TokenKind::Semicolon => Some("\x1b[2m"),
+        | TokenKind::Semicolon => Some(Style::new().dimmed()),
         TokenKind::String(_) | TokenKind::NewLine | TokenKind::EOF => None,
     }
 }
@@ -209,8 +206,9 @@ mod tests {
         let input = "echo $(greet \"text\")";
         let output = highlighter.highlight(input, 0);
 
-        assert!(output.contains(&format!("{COMMAND_SUB_STYLE}$(\x1b[0m")));
-        assert!(output.contains(&format!("{COMMAND_SUB_STYLE})\x1b[0m")));
+        let sub_style = Style::new().fg(Color::Fixed(208));
+        assert!(output.buffer.contains(&(sub_style, "$(".to_string())));
+        assert!(output.buffer.contains(&(sub_style, ")".to_string())));
     }
 
     #[test]
@@ -219,9 +217,11 @@ mod tests {
         let input = "fn greet(who) {}";
         let output = highlighter.highlight(input, 0);
 
-        assert!(output.contains("\x1b[2m(\x1b[0m"));
-        assert!(output.contains("\x1b[2m)\x1b[0m"));
-        assert!(!output.contains(&format!("{COMMAND_SUB_STYLE})")));
+        let dim_style = Style::new().dimmed();
+        let sub_style = Style::new().fg(Color::Fixed(208));
+        assert!(output.buffer.contains(&(dim_style, "(".to_string())));
+        assert!(output.buffer.contains(&(dim_style, ")".to_string())));
+        assert!(!output.buffer.contains(&(sub_style, ")".to_string())));
     }
 
     #[test]
@@ -230,8 +230,11 @@ mod tests {
         let input = "echo $(cat $(get-path))";
         let output = highlighter.highlight(input, 0);
 
+        let sub_style = Style::new().fg(Color::Fixed(208));
         let occurrences = output
-            .matches(&format!("{COMMAND_SUB_STYLE})\x1b[0m"))
+            .buffer
+            .iter()
+            .filter(|(s, t)| *s == sub_style && t == ")")
             .count();
         assert_eq!(occurrences, 2);
     }

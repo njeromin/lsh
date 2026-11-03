@@ -11,11 +11,13 @@ use crossterm::{cursor, queue, style, terminal};
 
 pub mod fuzzy;
 pub mod layout;
+pub mod reedline_menu;
 pub mod render;
 pub mod types;
 
 pub use fuzzy::*;
 pub use layout::*;
+pub use reedline_menu::LshMenu;
 pub use render::*;
 pub use types::*;
 

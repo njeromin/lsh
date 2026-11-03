@@ -10,11 +10,10 @@ use lsh_syntax::{
     SourceMap, debug, diagnostics::print_diagnostic, lexer, parser::Parser, print_error,
 };
 use lsh_sys::signals::{init_interactive_terminal, reset_interrupted};
-use lsh_terminal::{LineEditorHelper, Options, osc};
-use rustyline::{
-    At, Cmd, CompletionType, Config, Editor, KeyCode, KeyEvent, Modifiers, Movement, Word,
-    config::Configurer, error::ReadlineError, history::DefaultHistory,
+use lsh_terminal::{
+    CompletionType, EditMode, LshCompleter, LshHinter, LshPrompt, Options, SyntaxHighlighter, osc,
 };
+use reedline::{DefaultValidator, FileBackedHistory, Reedline, Signal};
 
 const DEFAULT_PROMPT: &str = "\x1b[35m›\x1b[0m ";
 
@@ -60,7 +59,7 @@ fn interactive_session(
     eval: &mut Evaluator,
     src_map: &mut SourceMap,
     config_dir: &Path,
-) -> rustyline::Result<()> {
+) -> Result<(), Box<dyn std::error::Error>> {
     init_interactive_terminal();
 
     let mut cerr = io::stderr();
@@ -69,32 +68,28 @@ fn interactive_session(
         print_error(&mut cerr, e.to_string().as_str());
     }
 
-    let config = Config::builder()
-        .check_cursor_position(true)
-        .completion_type(CompletionType::List)
-        .build();
-    let mut editor = Editor::<LineEditorHelper, DefaultHistory>::with_config(config)?;
-    editor.bind_sequence(KeyEvent::ctrl('c'), Cmd::Kill(Movement::WholeBuffer));
-    editor.bind_sequence(
-        KeyEvent(KeyCode::Left, Modifiers::CTRL),
-        Cmd::Move(Movement::BackwardWord(1, Word::Emacs)),
-    );
-    editor.bind_sequence(
-        KeyEvent(KeyCode::Right, Modifiers::CTRL),
-        Cmd::Move(Movement::ForwardWord(1, At::AfterEnd, Word::Emacs)),
-    );
-    editor.bind_sequence(
-        KeyEvent(KeyCode::Backspace, Modifiers::CTRL),
-        Cmd::Kill(Movement::BackwardWord(1, Word::Emacs)),
-    );
-    editor.bind_sequence(
-        KeyEvent(KeyCode::Delete, Modifiers::CTRL),
-        Cmd::Kill(Movement::ForwardWord(1, At::AfterEnd, Word::Emacs)),
-    );
-    let mut helper = LineEditorHelper::new();
-    helper.set_completion_registry(std::sync::Arc::clone(&eval.completion_registry));
-    editor.set_helper(Some(helper));
-    let _ = editor.load_history(&config_dir.join("history.txt"));
+    let history_path = config_dir.join("history.txt");
+    let history = Box::new(FileBackedHistory::with_file(1000, history_path)?);
+
+    let mut completer = LshCompleter::new();
+    completer.set_completion_registry(std::sync::Arc::clone(&eval.completion_registry));
+
+    let hinter = Box::new(LshHinter::new(completer.clone()));
+    let validator = Box::new(DefaultValidator);
+    let highlighter = Box::new(SyntaxHighlighter::new());
+    let initial_menu = CompletionType::Menu.create_reedline_menu(&completer);
+
+    let mut line_editor = Reedline::create()
+        .use_kitty_keyboard_enhancement(true)
+        .with_quick_completions(true)
+        .with_history(history)
+        .with_highlighter(highlighter)
+        .with_completer(Box::new(completer.clone()))
+        .with_hinter(hinter)
+        .with_validator(validator)
+        .with_menu(initial_menu)
+        .with_edit_mode(EditMode::Default.create_reedline_edit_mode());
+
     let mut last_applied_options: Option<Options> = None;
 
     loop {
@@ -104,31 +99,28 @@ fn interactive_session(
             let opts = Options::from(opts);
 
             if last_applied_options.as_ref() != Some(&opts) {
-                editor.set_tab_stop(opts.tab_stop);
-                editor.set_edit_mode(opts.edit_mode.into());
-                editor.set_completion_type(opts.completion_type.into());
-                if let Some(helper) = editor.helper_mut() {
-                    helper.set_completion_type(opts.completion_type);
-                    helper.set_nerd_icons(opts.nerd_icons);
-                }
+                line_editor = line_editor
+                    .with_edit_mode(opts.edit_mode.create_reedline_edit_mode())
+                    .clear_menus()
+                    .with_menu(opts.completion_type.create_reedline_menu(&completer));
+                completer.set_completion_type(opts.completion_type);
+                completer.set_nerd_icons(opts.nerd_icons);
                 last_applied_options = Some(opts);
             }
         }
 
-        if let Some(helper) = editor.helper_mut() {
-            helper.reset_prompt_marks();
-            let mut commands = eval.get_aliases().keys().cloned().collect::<Vec<_>>();
-            commands.extend(eval.plugin_manager.list_commands());
-            helper.set_aliases(commands);
-            helper.set_vars(eval.get_var_names());
-            helper.refresh_binaries_if_path_changed();
-        }
+        completer.reset_prompt_marks();
+        let mut commands = eval.get_aliases().keys().cloned().collect::<Vec<_>>();
+        commands.extend(eval.plugin_manager.list_commands());
+        completer.set_aliases(commands);
+        completer.set_vars(eval.get_var_names());
+        completer.refresh_binaries_if_path_changed();
 
-        let prompt = get_prompt(eval);
-        let input = match editor.readline(&prompt) {
-            Ok(line) => {
-                editor.add_history_entry(&line)?;
+        let prompt_str = get_prompt(eval);
+        let prompt = LshPrompt::new(prompt_str);
 
+        let input = match line_editor.read_line(&prompt) {
+            Ok(Signal::Success(line)) => {
                 let line = line.trim();
                 if line.is_empty() {
                     continue;
@@ -136,12 +128,16 @@ fn interactive_session(
 
                 line.to_owned()
             }
-            Err(ReadlineError::Interrupted) => {
+            Ok(Signal::CtrlC) => {
                 reset_interrupted();
                 continue;
             }
-            Err(ReadlineError::Eof) => {
+            Ok(Signal::CtrlD) => {
+                println!();
                 break Ok(());
+            }
+            Ok(_) => {
+                continue;
             }
             Err(e) => {
                 print_error(&mut cerr, e.to_string().as_str());

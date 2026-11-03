@@ -22,4 +22,5 @@ lsh-terminal = { path = "crates/lsh-terminal" }
 lsh-sys = { path = "crates/lsh-sys" }
 crossterm = "0.29.0"
 dirs = "6.0.0"
-rustyline = { version = "17.0.2", features = ["derive"] }
+reedline = "0.52.1"
+nu-ansi-term = "0.50.1"

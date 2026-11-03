@@ -5,8 +5,6 @@ use std::{
     path::Path,
 };
 
-use rustyline::highlight::Highlighter;
-
 pub struct Osc133PromptHighlighter {
     enabled: bool,
 }
@@ -18,7 +16,7 @@ impl Osc133PromptHighlighter {
 
     pub fn reset_prompt_marks(&self) {}
 
-    fn format_prompt<'a>(&self, prompt: &'a str) -> Cow<'a, str> {
+    pub fn format_prompt<'a>(&self, prompt: &'a str) -> Cow<'a, str> {
         if !self.enabled {
             return Cow::Borrowed(prompt);
         }
@@ -38,16 +36,6 @@ impl Osc133PromptHighlighter {
                 "{leading_newlines}\x1b]133;A\x07{rest}\x1b]133;B\x07"
             ))
         }
-    }
-}
-
-impl Highlighter for Osc133PromptHighlighter {
-    fn highlight_prompt<'b, 's: 'b, 'p: 'b>(
-        &'s self,
-        prompt: &'p str,
-        _default: bool,
-    ) -> Cow<'b, str> {
-        self.format_prompt(prompt)
     }
 }
 
@@ -87,7 +75,7 @@ mod tests {
     fn single_line_prompt_wrapped_with_osc133_marks() {
         let highlighter = Osc133PromptHighlighter::new(true);
         let prompt = "❯ ";
-        let formatted = highlighter.highlight_prompt(prompt, false);
+        let formatted = highlighter.format_prompt(prompt);
         assert_eq!(formatted, "\x1b]133;A\x07❯ \x1b]133;B\x07");
     }
 
@@ -95,7 +83,7 @@ mod tests {
     fn leading_newlines_emitted_before_osc133_a_mark() {
         let highlighter = Osc133PromptHighlighter::new(true);
         let prompt = "\n/path/to/cwd\n❯ ";
-        let formatted = highlighter.highlight_prompt(prompt, false);
+        let formatted = highlighter.format_prompt(prompt);
         assert_eq!(
             formatted,
             "\n\x1b]133;A\x07/path/to/cwd\n\x1b]133;A;k=s\x07❯ \x1b]133;B\x07"
@@ -106,7 +94,7 @@ mod tests {
     fn disabled_highlighter_returns_borrowed_prompt_unchanged() {
         let highlighter = Osc133PromptHighlighter::new(false);
         let prompt = "\n❯ ";
-        let formatted = highlighter.highlight_prompt(prompt, false);
+        let formatted = highlighter.format_prompt(prompt);
         assert_eq!(formatted, prompt);
     }
 }

@@ -5,17 +5,21 @@ use crossterm::{cursor, queue, style, terminal};
 use super::layout::calculate_viewport;
 use super::types::{CompletionItem, MenuLayout};
 
-pub fn draw_menu<W: Write>(
-    writer: &mut W,
+pub fn format_menu_lines(
     items: &[CompletionItem],
     selected: usize,
-    layout: MenuLayout,
-) -> io::Result<()> {
-    let (start_idx, end_idx) = calculate_viewport(items.len(), selected, layout.height);
+    width: usize,
+    height: usize,
+    nerd_icons: bool,
+    left_pad: usize,
+) -> Vec<String> {
+    if items.is_empty() {
+        return Vec::new();
+    }
 
-    let top_row = layout.cursor_row + 1;
-    let item_start_row = layout.cursor_row + 2;
-    let bottom_row = layout.cursor_row + 2 + layout.height as u16;
+    let (start_idx, end_idx) = calculate_viewport(items.len(), selected, height);
+    let indent = " ".repeat(left_pad);
+    let mut lines = Vec::with_capacity((end_idx - start_idx) + 2);
 
     // Top border
     let border_title = if start_idx > 0 {
@@ -23,20 +27,14 @@ pub fn draw_menu<W: Write>(
     } else {
         String::new()
     };
-    let border_fill = layout
-        .width
-        .saturating_sub(border_title.chars().count() + 2);
-    queue!(
-        writer,
-        cursor::MoveTo(layout.menu_col, top_row),
-        style::Print(format!(
-            "\x1b[38;5;240m┌{border_title}{}┐\x1b[0m",
-            "─".repeat(border_fill)
-        )),
-    )?;
+    let border_fill = width.saturating_sub(border_title.chars().count() + 2);
+    lines.push(format!(
+        "{indent}\x1b[38;5;240m┌{border_title}{}┐\x1b[0m",
+        "─".repeat(border_fill)
+    ));
 
     // Item rows
-    let inner_space = layout.width.saturating_sub(2);
+    let inner_space = width.saturating_sub(2);
     for (r, item) in items[start_idx..end_idx].iter().enumerate() {
         let item_idx = start_idx + r;
         let is_selected = item_idx == selected;
@@ -45,7 +43,7 @@ pub fn draw_menu<W: Write>(
         let name = &item.display;
         let badge = item.kind.badge();
 
-        let (icon_glyph, icon_color) = if layout.nerd_icons {
+        let (icon_glyph, icon_color) = if nerd_icons {
             item.nerd_icon()
         } else {
             ("", "")
@@ -145,18 +143,10 @@ pub fn draw_menu<W: Write>(
             }
         }
 
-        queue!(
-            writer,
-            cursor::MoveTo(layout.menu_col, item_start_row + r as u16)
-        )?;
-
         if is_selected {
-            queue!(
-                writer,
-                style::Print(format!(
-                    "\x1b[38;5;240m│\x1b[0m\x1b[7m {marker}{icon_str}{name_formatted}{desc_str}{pad}{badge} \x1b[0m\x1b[38;5;240m│\x1b[0m"
-                ))
-            )?;
+            lines.push(format!(
+                "{indent}\x1b[38;5;240m│\x1b[0m\x1b[7m {marker}{icon_str}{name_formatted}{desc_str}{pad}{badge} \x1b[0m\x1b[38;5;240m│\x1b[0m"
+            ));
         } else {
             let badge_colored = format!("{}{badge}\x1b[0m", item.kind.color());
             let icon_colored = if icon_str.is_empty() {
@@ -169,12 +159,9 @@ pub fn draw_menu<W: Write>(
             } else {
                 format!("\x1b[38;5;244m{desc_str}\x1b[0m")
             };
-            queue!(
-                writer,
-                style::Print(format!(
-                    "\x1b[38;5;240m│\x1b[0m {marker}{icon_colored}{name_formatted}{desc_colored}{pad}{badge_colored} \x1b[38;5;240m│\x1b[0m"
-                ))
-            )?;
+            lines.push(format!(
+                "{indent}\x1b[38;5;240m│\x1b[0m {marker}{icon_colored}{name_formatted}{desc_colored}{pad}{badge_colored} \x1b[38;5;240m│\x1b[0m"
+            ));
         }
     }
 
@@ -184,18 +171,65 @@ pub fn draw_menu<W: Write>(
     } else {
         String::new()
     };
-    let footer_fill = layout
-        .width
-        .saturating_sub(footer_title.chars().count() + 2);
-    queue!(
-        writer,
-        cursor::MoveTo(layout.menu_col, bottom_row),
-        style::Print(format!(
-            "\x1b[38;5;240m└{footer_title}{}┘\x1b[0m",
-            "─".repeat(footer_fill)
-        )),
-        cursor::MoveTo(layout.cursor_col, layout.cursor_row),
-    )?;
+    let footer_fill = width.saturating_sub(footer_title.chars().count() + 2);
+    lines.push(format!(
+        "{indent}\x1b[38;5;240m└{footer_title}{}┘\x1b[0m",
+        "─".repeat(footer_fill)
+    ));
+
+    lines
+}
+
+pub fn strip_ansi(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            if let Some(&'[') = chars.peek() {
+                chars.next();
+                while let Some(&next) = chars.peek() {
+                    chars.next();
+                    if ('@'..='~').contains(&next) {
+                        break;
+                    }
+                }
+            } else if let Some(&next) = chars.peek()
+                && next.is_ascii_alphabetic()
+            {
+                chars.next();
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+pub fn draw_menu<W: Write>(
+    writer: &mut W,
+    items: &[CompletionItem],
+    selected: usize,
+    layout: MenuLayout,
+) -> io::Result<()> {
+    let top_row = layout.cursor_row + 1;
+    let lines = format_menu_lines(
+        items,
+        selected,
+        layout.width,
+        layout.height,
+        layout.nerd_icons,
+        0,
+    );
+
+    for (r, line) in lines.iter().enumerate() {
+        queue!(
+            writer,
+            cursor::MoveTo(layout.menu_col, top_row + r as u16),
+            style::Print(line)
+        )?;
+    }
+
+    queue!(writer, cursor::MoveTo(layout.cursor_col, layout.cursor_row),)?;
 
     writer.flush()
 }
@@ -389,5 +423,27 @@ mod tests {
 
         // Unselected item (item 1, cat) has bold cyan (\x1b[1;36m) for "ca" and dim grey (\x1b[38;5;244m) for "t"
         assert!(rendered.contains("\x1b[1;36mc\x1b[0m\x1b[1;36ma\x1b[0m\x1b[38;5;244mt\x1b[0m"));
+    }
+
+    #[test]
+    fn format_menu_lines_returns_boxed_lines_with_indent() {
+        let items = vec![
+            CompletionItem::new("cargo", "cargo", CompletionKind::Binary),
+            CompletionItem::new("cd", "cd", CompletionKind::Builtin),
+        ];
+
+        let lines = format_menu_lines(&items, 0, 30, 2, false, 4);
+        assert_eq!(lines.len(), 4); // top border + 2 items + bottom border
+        assert!(lines[0].starts_with("    "));
+        assert!(strip_ansi(&lines[0]).ends_with("┌────────────────────────────┐"));
+        assert!(strip_ansi(&lines[1]).contains("▶ cargo"));
+        assert!(strip_ansi(&lines[2]).contains("  cd"));
+        assert!(strip_ansi(&lines[3]).ends_with("└────────────────────────────┘"));
+    }
+
+    #[test]
+    fn strip_ansi_removes_escape_codes() {
+        let input = "\x1b[1;36mhello\x1b[0m \x1b[38;5;240mworld\x1b[0m";
+        assert_eq!(strip_ansi(input), "hello world");
     }
 }
