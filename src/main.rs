@@ -82,6 +82,7 @@ fn interactive_session(
     let mut line_editor = Reedline::create()
         .use_kitty_keyboard_enhancement(true)
         .with_quick_completions(true)
+        .with_partial_completions(true)
         .with_history(history)
         .with_highlighter(highlighter)
         .with_completer(Box::new(completer.clone()))
