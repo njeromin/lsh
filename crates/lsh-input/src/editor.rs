@@ -12,6 +12,7 @@ use crate::buffer::LineBuffer;
 use crate::formatter::{StyledText, TextFormatter};
 use crate::keymap::{EditorAction, Keymap};
 use crate::prompt::Prompt;
+use crate::validator::{ValidationResult, Validator};
 
 /// RAII guard to ensure terminal raw mode is disabled when exiting `read_line`,
 /// even in the case of errors or panics.
@@ -51,6 +52,8 @@ pub struct Editor<W: Write = BufWriter<Stdout>> {
     writer: W,
     keymap: Keymap,
     formatter: Option<Box<dyn TextFormatter>>,
+    validator: Option<Box<dyn Validator>>,
+    indent_size: usize,
 }
 
 impl Editor<BufWriter<Stdout>> {
@@ -60,6 +63,8 @@ impl Editor<BufWriter<Stdout>> {
             writer: BufWriter::new(io::stdout()),
             keymap: Keymap::default(),
             formatter: None,
+            validator: None,
+            indent_size: 4,
         }
     }
 }
@@ -71,7 +76,25 @@ impl<W: Write> Editor<W> {
             writer,
             keymap: Keymap::default(),
             formatter: None,
+            validator: None,
+            indent_size: 4,
         }
+    }
+
+    /// Set indentation size in spaces for auto-indent and smart dedent (defaults to 4).
+    pub fn with_indent_size(mut self, size: usize) -> Self {
+        self.indent_size = size;
+        self
+    }
+
+    /// Get the current indentation size in spaces.
+    pub fn indent_size(&self) -> usize {
+        self.indent_size
+    }
+
+    /// Set the indentation size dynamically.
+    pub fn set_indent_size(&mut self, size: usize) {
+        self.indent_size = size;
     }
 
     /// Set a custom keymap.
@@ -96,6 +119,22 @@ impl<W: Write> Editor<W> {
         self.formatter.as_deref()
     }
 
+    /// Set a custom syntax/multiline validator.
+    pub fn with_validator(mut self, validator: impl Validator + 'static) -> Self {
+        self.validator = Some(Box::new(validator));
+        self
+    }
+
+    /// Dynamically set or clear the validator.
+    pub fn set_validator(&mut self, validator: Option<Box<dyn Validator>>) {
+        self.validator = validator;
+    }
+
+    /// Immutably borrow the active validator, if any.
+    pub fn validator(&self) -> Option<&dyn Validator> {
+        self.validator.as_deref()
+    }
+
     /// Immutably borrow the active keymap.
     pub fn keymap(&self) -> &Keymap {
         &self.keymap
@@ -108,15 +147,13 @@ impl<W: Write> Editor<W> {
 
     /// Read a line of input with the given prompt.
     pub fn read_line(&mut self, prompt: impl Prompt) -> io::Result<Signal> {
-        let prompt_text = prompt.render();
-        let prompt_width = crate::prompt::printable_width(&prompt_text);
-
         let mut line_buffer = LineBuffer::new();
+        let mut previous_cursor_row = 0;
 
         let _guard = RawModeGuard::new(&mut self.writer)?;
 
         // Initial render
-        self.render_line(&prompt_text, prompt_width, &line_buffer)?;
+        self.render_line(&prompt, &line_buffer, &mut previous_cursor_row)?;
 
         loop {
             let event = event::read()?;
@@ -138,11 +175,60 @@ impl<W: Write> Editor<W> {
                     if let Some(action) = self.keymap.get(code, modifiers) {
                         match action {
                             EditorAction::Submit => {
-                                queue!(self.writer, Print("\r\n"))?;
-                                self.writer.flush()?;
-                                return Ok(Signal::Success(line_buffer.into_string()));
+                                let is_complete = match &self.validator {
+                                    Some(v) => matches!(
+                                        v.validate(line_buffer.as_str()),
+                                        ValidationResult::Complete
+                                    ),
+                                    None => true,
+                                };
+
+                                if is_complete {
+                                    // Move cursor past the last rendered row before submitting
+                                    let total_rows =
+                                        line_buffer.line_count().saturating_sub(1);
+                                    let rows_to_move_down =
+                                        total_rows.saturating_sub(previous_cursor_row);
+                                    if rows_to_move_down > 0 {
+                                        queue!(
+                                            self.writer,
+                                            cursor::MoveDown(rows_to_move_down as u16)
+                                        )?;
+                                    }
+                                    queue!(self.writer, Print("\r\n"))?;
+                                    self.writer.flush()?;
+                                    return Ok(Signal::Success(line_buffer.into_string()));
+                                } else {
+                                    // Incomplete input -> query validator if we should indent
+                                    let should_indent = self
+                                        .validator
+                                        .as_ref()
+                                        .map_or(false, |v| v.should_indent(line_buffer.current_line_prefix()));
+                                    line_buffer
+                                        .insert_newline_preserve_indent(should_indent, self.indent_size);
+                                    changed = true;
+                                }
+                            }
+                            EditorAction::InsertNewline => {
+                                let should_indent = self
+                                    .validator
+                                    .as_ref()
+                                    .map_or(false, |v| v.should_indent(line_buffer.current_line_prefix()));
+                                line_buffer
+                                    .insert_newline_preserve_indent(should_indent, self.indent_size);
+                                changed = true;
                             }
                             EditorAction::Interrupt => {
+                                let total_rows =
+                                    line_buffer.line_count().saturating_sub(1);
+                                let rows_to_move_down =
+                                    total_rows.saturating_sub(previous_cursor_row);
+                                if rows_to_move_down > 0 {
+                                    queue!(
+                                        self.writer,
+                                        cursor::MoveDown(rows_to_move_down as u16)
+                                    )?;
+                                }
                                 queue!(self.writer, Print("^C\r\n"))?;
                                 self.writer.flush()?;
                                 return Ok(Signal::CtrlC);
@@ -154,6 +240,8 @@ impl<W: Write> Editor<W> {
                             }
                             EditorAction::MoveLeft => changed = line_buffer.move_left(),
                             EditorAction::MoveRight => changed = line_buffer.move_right(),
+                            EditorAction::MoveUp => changed = line_buffer.move_up(),
+                            EditorAction::MoveDown => changed = line_buffer.move_down(),
                             EditorAction::MoveWordLeft => {
                                 changed = line_buffer.move_word_left()
                             }
@@ -163,7 +251,8 @@ impl<W: Write> Editor<W> {
                             EditorAction::MoveHome => changed = line_buffer.move_home(),
                             EditorAction::MoveEnd => changed = line_buffer.move_end(),
                             EditorAction::Backspace => {
-                                changed = line_buffer.delete_prev_grapheme()
+                                changed = line_buffer
+                                    .delete_prev_grapheme_or_dedent(self.indent_size);
                             }
                             EditorAction::Delete => {
                                 changed = line_buffer.delete_next_grapheme()
@@ -185,6 +274,13 @@ impl<W: Write> Editor<W> {
                         // Unbound printable characters are inserted into the buffer
                         match (code, modifiers) {
                             (KeyCode::Char(c), KeyModifiers::NONE | KeyModifiers::SHIFT) => {
+                                let should_dedent = self
+                                    .validator
+                                    .as_ref()
+                                    .map_or(false, |v| v.should_dedent_on_char(c));
+                                if should_dedent {
+                                    line_buffer.dedent_line(self.indent_size);
+                                }
                                 line_buffer.insert_char(c);
                                 changed = true;
                             }
@@ -194,13 +290,13 @@ impl<W: Write> Editor<W> {
 
                     // Only redraw if the line buffer or cursor actually changed
                     if changed {
-                        self.render_line(&prompt_text, prompt_width, &line_buffer)?;
+                        self.render_line(&prompt, &line_buffer, &mut previous_cursor_row)?;
                     }
                 }
 
                 // Terminal resize -> re-render line to adjust layout
                 Event::Resize(..) => {
-                    self.render_line(&prompt_text, prompt_width, &line_buffer)?;
+                    self.render_line(&prompt, &line_buffer, &mut previous_cursor_row)?;
                 }
 
                 _ => {}
@@ -208,41 +304,85 @@ impl<W: Write> Editor<W> {
         }
     }
 
-    /// Redraws the prompt, buffer, and positions the cursor.
+    /// Redraws the prompt, buffer (including multiline rows), and positions the cursor.
     pub fn render_line(
         &mut self,
-        prompt_text: &str,
-        prompt_width: usize,
+        prompt: &impl Prompt,
         line_buffer: &LineBuffer,
+        previous_cursor_row: &mut usize,
     ) -> io::Result<()> {
+        let prompt_text = prompt.render();
+        let prompt_width = crate::prompt::printable_width(&prompt_text);
+        let indicator_text = prompt.render_multiline_indicator();
+        let indicator_width = crate::prompt::printable_width(&indicator_text);
+
+        // 1. Move up to row 0 if we were previously on a lower row
+        if *previous_cursor_row > 0 {
+            queue!(self.writer, cursor::MoveUp(*previous_cursor_row as u16))?;
+        }
+
+        // 2. Clear from row 0 downwards and print the prompt
+        queue!(
+            self.writer,
+            cursor::Hide,
+            MoveToColumn(0),
+            Clear(ClearType::FromCursorDown),
+            Print(&prompt_text),
+        )?;
+
         let styled_text = match &self.formatter {
             Some(f) => f.format(line_buffer.as_str()),
             None => StyledText::plain(line_buffer.as_str()),
         };
 
-        queue!(
-            self.writer,
-            cursor::Hide,
-            MoveToColumn(0),
-            Clear(ClearType::CurrentLine),
-            Print(prompt_text),
-        )?;
-
+        // 3. Render spans, inserting indicator on newlines
         for (style, text) in &styled_text {
-            queue!(
-                self.writer,
-                crossterm::style::PrintStyledContent(style.apply(text))
-            )?;
+            let mut parts = text.split('\n').peekable();
+            while let Some(part) = parts.next() {
+                if !part.is_empty() {
+                    queue!(
+                        self.writer,
+                        crossterm::style::PrintStyledContent(style.apply(part))
+                    )?;
+                }
+                if parts.peek().is_some() {
+                    queue!(
+                        self.writer,
+                        crossterm::style::ResetColor,
+                        Print("\r\n"),
+                        Print(&indicator_text),
+                    )?;
+                }
+            }
         }
         queue!(self.writer, crossterm::style::ResetColor)?;
 
+        // 4. Calculate target cursor row and column
+        let pos = line_buffer.cursor_position();
+        let target_row = pos.line_index;
+        let target_col = if target_row == 0 {
+            prompt_width + pos.col_visual_width
+        } else {
+            indicator_width + pos.col_visual_width
+        };
+
+        // 5. Position cursor: we are currently on the last rendered line
+        let total_rendered_rows = line_buffer.line_count().saturating_sub(1);
+        let rows_to_move_up = total_rendered_rows.saturating_sub(target_row);
+
+        if rows_to_move_up > 0 {
+            queue!(self.writer, cursor::MoveUp(rows_to_move_up as u16))?;
+        }
+
         queue!(
             self.writer,
-            // Position cursor: prompt visual width + visual width of buffer up to cursor
-            MoveToColumn((prompt_width + line_buffer.cursor_visual_width()) as u16),
+            MoveToColumn(target_col as u16),
             cursor::Show,
         )?;
-        self.writer.flush()
+        self.writer.flush()?;
+
+        *previous_cursor_row = target_row;
+        Ok(())
     }
 
     /// Immutably borrow the underlying writer.
@@ -318,7 +458,8 @@ mod tests {
         let buffer = Vec::new();
         let mut editor = Editor::with_writer(buffer);
         let line_buf = LineBuffer::with_content("echo 1".to_string());
-        editor.render_line("> ", 2, &line_buf).unwrap();
+        let mut prev_row = 0;
+        editor.render_line(&"> ", &line_buf, &mut prev_row).unwrap();
         let out = editor.into_writer();
         assert!(!out.is_empty());
     }
@@ -329,8 +470,22 @@ mod tests {
         let mut editor =
             Editor::with_writer(buffer).with_formatter(|s: &str| format!("***{}***", s));
         let line_buf = LineBuffer::with_content("secret".to_string());
-        editor.render_line("> ", 2, &line_buf).unwrap();
+        let mut prev_row = 0;
+        editor.render_line(&"> ", &line_buf, &mut prev_row).unwrap();
         let out = String::from_utf8(editor.into_writer()).unwrap();
         assert!(out.contains("***secret***"));
+    }
+
+    #[test]
+    fn test_render_multiline() {
+        let buffer = Vec::new();
+        let mut editor = Editor::with_writer(buffer);
+        let line_buf = LineBuffer::with_content("first\nsecond".to_string());
+        let mut prev_row = 0;
+        editor.render_line(&"> ", &line_buf, &mut prev_row).unwrap();
+        let out = String::from_utf8(editor.into_writer()).unwrap();
+        // Should contain continuation indicator "… "
+        assert!(out.contains("… "));
+        assert_eq!(prev_row, 1);
     }
 }

@@ -1,7 +1,13 @@
 use std::borrow::Cow;
 
 pub trait Prompt {
+    /// Renders the primary left prompt.
     fn render(&self) -> Cow<'_, str>;
+
+    /// Renders the continuation indicator for subsequent lines in multiline input.
+    fn render_multiline_indicator(&self) -> Cow<'_, str> {
+        Cow::Borrowed("… ")
+    }
 }
 
 impl Prompt for &str {
@@ -19,6 +25,10 @@ impl Prompt for String {
 impl<T: Prompt + ?Sized> Prompt for &T {
     fn render(&self) -> Cow<'_, str> {
         (**self).render()
+    }
+
+    fn render_multiline_indicator(&self) -> Cow<'_, str> {
+        (**self).render_multiline_indicator()
     }
 }
 

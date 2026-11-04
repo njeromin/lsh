@@ -60,6 +60,8 @@ impl From<(KeyCode, KeyModifiers)> for KeyCombo {
 pub enum EditorAction {
     /// Submit the current line (typically Enter).
     Submit,
+    /// Insert a newline into the buffer without submitting (typically Alt+Enter).
+    InsertNewline,
     /// Cancel current input and discard line (typically Ctrl+C).
     Interrupt,
     /// Signal EOF on empty line to exit (typically Ctrl+D).
@@ -68,6 +70,10 @@ pub enum EditorAction {
     MoveLeft,
     /// Move cursor one character to the right.
     MoveRight,
+    /// Move cursor one line up in multiline input.
+    MoveUp,
+    /// Move cursor one line down in multiline input.
+    MoveDown,
     /// Move cursor one word to the left.
     MoveWordLeft,
     /// Move cursor one word to the right.
@@ -114,12 +120,28 @@ impl Keymap {
 
         // Control & submission
         km.bind(KeyCode::Enter, EditorAction::Submit);
+        km.bind(
+            (KeyCode::Enter, KeyModifiers::SHIFT),
+            EditorAction::InsertNewline,
+        );
+        km.bind(
+            (KeyCode::Enter, KeyModifiers::ALT),
+            EditorAction::InsertNewline,
+        );
+        km.bind(
+            (KeyCode::Char('j'), KeyModifiers::CONTROL),
+            EditorAction::InsertNewline,
+        );
         km.bind(KeyCombo::ctrl('c'), EditorAction::Interrupt);
         km.bind(KeyCombo::ctrl('d'), EditorAction::Eof);
 
         // Basic navigation
         km.bind(KeyCode::Left, EditorAction::MoveLeft);
         km.bind(KeyCode::Right, EditorAction::MoveRight);
+        km.bind(KeyCode::Up, EditorAction::MoveUp);
+        km.bind(KeyCode::Down, EditorAction::MoveDown);
+        km.bind(KeyCombo::ctrl('p'), EditorAction::MoveUp);
+        km.bind(KeyCombo::ctrl('n'), EditorAction::MoveDown);
         km.bind(KeyCode::Home, EditorAction::MoveHome);
         km.bind(KeyCombo::ctrl('a'), EditorAction::MoveHome);
         km.bind(KeyCode::End, EditorAction::MoveEnd);
@@ -223,6 +245,14 @@ mod tests {
         assert_eq!(
             km.get(KeyCode::Enter, KeyModifiers::NONE),
             Some(&EditorAction::Submit)
+        );
+        assert_eq!(
+            km.get(KeyCode::Enter, KeyModifiers::SHIFT),
+            Some(&EditorAction::InsertNewline)
+        );
+        assert_eq!(
+            km.get(KeyCode::Enter, KeyModifiers::ALT),
+            Some(&EditorAction::InsertNewline)
         );
         assert_eq!(
             km.get(KeyCode::Char('c'), KeyModifiers::CONTROL),
