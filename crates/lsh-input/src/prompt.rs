@@ -32,8 +32,9 @@ impl<T: Prompt + ?Sized> Prompt for &T {
     }
 }
 
-pub fn printable_width(s: &str) -> usize {
-    let mut width = 0;
+/// Strips ANSI CSI and OSC escape sequences from a string.
+pub fn strip_ansi(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
     let mut chars = s.chars().peekable();
 
     while let Some(c) = chars.next() {
@@ -58,10 +59,14 @@ pub fn printable_width(s: &str) -> usize {
                 _ => {}
             }
         } else {
-            // Not sure if its a good idea to just unwrap or 1.
-            width += unicode_width::UnicodeWidthChar::width(c).unwrap_or(1)
+            result.push(c);
         }
     }
 
-    width
+    result
+}
+
+/// Computes the visual printable width on screen of a string, ignoring ANSI escape codes.
+pub fn printable_width(s: &str) -> usize {
+    unicode_width::UnicodeWidthStr::width(strip_ansi(s).as_str())
 }

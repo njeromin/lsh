@@ -2,17 +2,176 @@ use std::io::{self, BufWriter, Stdout, Write};
 
 use crossterm::{
     cursor::{self, MoveToColumn},
-    event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
+    event::{
+        self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEvent, KeyEventKind,
+        KeyModifiers,
+    },
     queue,
     style::Print,
     terminal::{self, Clear, ClearType},
 };
+use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthStr;
 
 use crate::buffer::LineBuffer;
 use crate::formatter::{StyledText, TextFormatter};
 use crate::keymap::{EditorAction, Keymap};
 use crate::prompt::Prompt;
 use crate::validator::{ValidationResult, Validator};
+
+/// Screen layout coordinates for the cursor and the rendered text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScreenLayout {
+    /// Visual row of the cursor relative to the first row of the prompt (0-indexed).
+    pub cursor_row: usize,
+    /// Visual column of the cursor (0-indexed).
+    pub cursor_col: usize,
+    /// Visual row where rendered text ends (relative to the first row of the prompt).
+    pub end_row: usize,
+    /// Visual column where rendered text ends.
+    pub end_col: usize,
+}
+
+fn resolve_cursor_wrap(
+    (col, row): (usize, usize),
+    is_at_buffer_end: bool,
+    term_cols: usize,
+) -> (usize, usize) {
+    if col >= term_cols {
+        if is_at_buffer_end {
+            (term_cols.saturating_sub(1), row)
+        } else {
+            (0, row + 1)
+        }
+    } else {
+        (col, row)
+    }
+}
+
+/// Computes the visual screen layout (soft-wrapped rows and cursor coordinates)
+/// given the prompt, multiline indicator, line buffer, and terminal column width.
+pub fn compute_screen_layout(
+    prompt_stripped: &str,
+    indicator_stripped: &str,
+    line_buffer: &LineBuffer,
+    term_cols: usize,
+) -> ScreenLayout {
+    let term_cols = term_cols.max(1);
+    let mut current_row: usize = 0;
+    let mut current_col: usize = 0;
+    let mut cursor_screen: Option<(usize, usize)> = None;
+
+    let target_cursor_byte = line_buffer.cursor();
+    let mut current_byte_offset: usize = 0;
+
+    let lines: Vec<&str> = line_buffer.as_str().split('\n').collect();
+
+    for (line_idx, line) in lines.iter().enumerate() {
+        if line_idx > 0 {
+            current_row += 1;
+            current_col = 0;
+        }
+
+        let prefix = if line_idx == 0 {
+            prompt_stripped
+        } else {
+            indicator_stripped
+        };
+
+        // Advance through prefix graphemes
+        for grapheme in prefix.graphemes(true) {
+            let w = UnicodeWidthStr::width(grapheme);
+            if current_col >= term_cols {
+                current_row += 1;
+                current_col = 0;
+            }
+            if current_col > 0 && current_col + w > term_cols {
+                current_row += 1;
+                current_col = 0;
+            }
+            current_col += w;
+        }
+
+        // Check if cursor sits at the beginning of this line's content
+        if cursor_screen.is_none() && current_byte_offset == target_cursor_byte {
+            let is_at_end = current_byte_offset == line_buffer.len();
+            cursor_screen = Some(resolve_cursor_wrap(
+                (current_col, current_row),
+                is_at_end,
+                term_cols,
+            ));
+        }
+
+        // Advance through line content graphemes
+        for grapheme in line.graphemes(true) {
+            let w = UnicodeWidthStr::width(grapheme);
+            if current_col >= term_cols {
+                current_row += 1;
+                current_col = 0;
+            }
+            if current_col > 0 && current_col + w > term_cols {
+                current_row += 1;
+                current_col = 0;
+            }
+            current_col += w;
+            current_byte_offset += grapheme.len();
+
+            if cursor_screen.is_none() && current_byte_offset == target_cursor_byte {
+                let is_at_end = current_byte_offset == line_buffer.len();
+                cursor_screen = Some(resolve_cursor_wrap(
+                    (current_col, current_row),
+                    is_at_end,
+                    term_cols,
+                ));
+            }
+        }
+
+        // Account for '\n' byte between lines
+        if line_idx + 1 < lines.len() {
+            current_byte_offset += 1; // for '\n'
+        }
+    }
+
+    let end_col = if current_col >= term_cols {
+        term_cols.saturating_sub(1)
+    } else {
+        current_col
+    };
+    let end_row = current_row;
+
+    let (cursor_col, cursor_row) = cursor_screen.unwrap_or((end_col, end_row));
+
+    ScreenLayout {
+        cursor_row,
+        cursor_col,
+        end_row,
+        end_col,
+    }
+}
+
+/// Normalises pasted text by converting CRLF and CR line endings to standard LF (`\n`),
+/// preserving valid whitespace (`\n`, `\t`) and printable Unicode characters,
+/// and stripping non-printable control characters to prevent escape sequence injection.
+pub fn normalise_paste(text: &str) -> String {
+    let mut result = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        match c {
+            '\r' => {
+                if chars.peek() == Some(&'\n') {
+                    chars.next();
+                }
+                result.push('\n');
+            }
+            '\n' | '\t' => result.push(c),
+            c if c.is_control() => {} // Strip control characters / escape injections
+            c => result.push(c),
+        }
+    }
+
+    result
+}
 
 /// RAII guard to ensure terminal raw mode is disabled when exiting `read_line`,
 /// even in the case of errors or panics.
@@ -23,6 +182,7 @@ struct RawModeGuard {
 impl RawModeGuard {
     fn new<W: Write>(writer: &mut W) -> io::Result<Self> {
         terminal::enable_raw_mode()?;
+        let _ = queue!(writer, EnableBracketedPaste);
         let enhanced_keyboard = matches!(terminal::supports_keyboard_enhancement(), Ok(true));
         if enhanced_keyboard {
             let _ = queue!(
@@ -31,19 +191,20 @@ impl RawModeGuard {
                     event::KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
                 )
             );
-            let _ = writer.flush();
         }
+        let _ = writer.flush();
         Ok(Self { enhanced_keyboard })
     }
 }
 
 impl Drop for RawModeGuard {
     fn drop(&mut self) {
+        let mut stdout = io::stdout();
+        let _ = queue!(stdout, DisableBracketedPaste);
         if self.enhanced_keyboard {
-            let mut stdout = io::stdout();
             let _ = queue!(stdout, event::PopKeyboardEnhancementFlags);
-            let _ = stdout.flush();
         }
+        let _ = stdout.flush();
         let _ = terminal::disable_raw_mode();
     }
 }
@@ -54,6 +215,7 @@ pub struct Editor<W: Write = BufWriter<Stdout>> {
     formatter: Option<Box<dyn TextFormatter>>,
     validator: Option<Box<dyn Validator>>,
     indent_size: usize,
+    terminal_width: Option<usize>,
 }
 
 impl Editor<BufWriter<Stdout>> {
@@ -65,6 +227,7 @@ impl Editor<BufWriter<Stdout>> {
             formatter: None,
             validator: None,
             indent_size: 4,
+            terminal_width: None,
         }
     }
 }
@@ -78,7 +241,26 @@ impl<W: Write> Editor<W> {
             formatter: None,
             validator: None,
             indent_size: 4,
+            terminal_width: None,
         }
+    }
+
+    /// Set an explicit terminal column width override (useful for testing or fixed-width rendering).
+    pub fn with_terminal_width(mut self, width: usize) -> Self {
+        self.terminal_width = Some(width);
+        self
+    }
+
+    /// Dynamically set or clear the terminal width override.
+    pub fn set_terminal_width(&mut self, width: Option<usize>) {
+        self.terminal_width = width;
+    }
+
+    /// Returns the effective terminal column width (queries crossterm if not overridden).
+    pub fn terminal_width(&self) -> usize {
+        self.terminal_width
+            .unwrap_or_else(|| terminal::size().map(|(w, _)| w as usize).unwrap_or(80))
+            .max(1)
     }
 
     /// Set indentation size in spaces for auto-indent and smart dedent (defaults to 4).
@@ -148,12 +330,13 @@ impl<W: Write> Editor<W> {
     /// Read a line of input with the given prompt.
     pub fn read_line(&mut self, prompt: impl Prompt) -> io::Result<Signal> {
         let mut line_buffer = LineBuffer::new();
-        let mut previous_cursor_row = 0;
 
         let _guard = RawModeGuard::new(&mut self.writer)?;
 
         // Initial render
-        self.render_line(&prompt, &line_buffer, &mut previous_cursor_row)?;
+        let layout = self.render_line(&prompt, &line_buffer, 0)?;
+        let mut previous_cursor_row = layout.cursor_row;
+        let mut last_end_row = layout.end_row;
 
         loop {
             let event = event::read()?;
@@ -185,10 +368,8 @@ impl<W: Write> Editor<W> {
 
                                 if is_complete {
                                     // Move cursor past the last rendered row before submitting
-                                    let total_rows =
-                                        line_buffer.line_count().saturating_sub(1);
                                     let rows_to_move_down =
-                                        total_rows.saturating_sub(previous_cursor_row);
+                                        last_end_row.saturating_sub(previous_cursor_row);
                                     if rows_to_move_down > 0 {
                                         queue!(
                                             self.writer,
@@ -219,10 +400,8 @@ impl<W: Write> Editor<W> {
                                 changed = true;
                             }
                             EditorAction::Interrupt => {
-                                let total_rows =
-                                    line_buffer.line_count().saturating_sub(1);
                                 let rows_to_move_down =
-                                    total_rows.saturating_sub(previous_cursor_row);
+                                    last_end_row.saturating_sub(previous_cursor_row);
                                 if rows_to_move_down > 0 {
                                     queue!(
                                         self.writer,
@@ -290,13 +469,31 @@ impl<W: Write> Editor<W> {
 
                     // Only redraw if the line buffer or cursor actually changed
                     if changed {
-                        self.render_line(&prompt, &line_buffer, &mut previous_cursor_row)?;
+                        let layout =
+                            self.render_line(&prompt, &line_buffer, previous_cursor_row)?;
+                        previous_cursor_row = layout.cursor_row;
+                        last_end_row = layout.end_row;
+                    }
+                }
+
+                // Bracketed paste event
+                Event::Paste(text) => {
+                    let normalised = normalise_paste(&text);
+                    if !normalised.is_empty() {
+                        line_buffer.insert_str(&normalised);
+                        let layout =
+                            self.render_line(&prompt, &line_buffer, previous_cursor_row)?;
+                        previous_cursor_row = layout.cursor_row;
+                        last_end_row = layout.end_row;
                     }
                 }
 
                 // Terminal resize -> re-render line to adjust layout
                 Event::Resize(..) => {
-                    self.render_line(&prompt, &line_buffer, &mut previous_cursor_row)?;
+                    let layout =
+                        self.render_line(&prompt, &line_buffer, previous_cursor_row)?;
+                    previous_cursor_row = layout.cursor_row;
+                    last_end_row = layout.end_row;
                 }
 
                 _ => {}
@@ -304,21 +501,29 @@ impl<W: Write> Editor<W> {
         }
     }
 
-    /// Redraws the prompt, buffer (including multiline rows), and positions the cursor.
+    /// Redraws the prompt, buffer (including soft-wrapped and multiline rows), and positions the cursor.
     pub fn render_line(
         &mut self,
         prompt: &impl Prompt,
         line_buffer: &LineBuffer,
-        previous_cursor_row: &mut usize,
-    ) -> io::Result<()> {
+        previous_cursor_row: usize,
+    ) -> io::Result<ScreenLayout> {
+        let term_cols = self.terminal_width();
         let prompt_text = prompt.render();
-        let prompt_width = crate::prompt::printable_width(&prompt_text);
+        let prompt_stripped = crate::prompt::strip_ansi(&prompt_text);
         let indicator_text = prompt.render_multiline_indicator();
-        let indicator_width = crate::prompt::printable_width(&indicator_text);
+        let indicator_stripped = crate::prompt::strip_ansi(&indicator_text);
+
+        let layout = compute_screen_layout(
+            &prompt_stripped,
+            &indicator_stripped,
+            line_buffer,
+            term_cols,
+        );
 
         // 1. Move up to row 0 if we were previously on a lower row
-        if *previous_cursor_row > 0 {
-            queue!(self.writer, cursor::MoveUp(*previous_cursor_row as u16))?;
+        if previous_cursor_row > 0 {
+            queue!(self.writer, cursor::MoveUp(previous_cursor_row as u16))?;
         }
 
         // 2. Clear from row 0 downwards and print the prompt
@@ -357,32 +562,21 @@ impl<W: Write> Editor<W> {
         }
         queue!(self.writer, crossterm::style::ResetColor)?;
 
-        // 4. Calculate target cursor row and column
-        let pos = line_buffer.cursor_position();
-        let target_row = pos.line_index;
-        let target_col = if target_row == 0 {
-            prompt_width + pos.col_visual_width
-        } else {
-            indicator_width + pos.col_visual_width
-        };
-
-        // 5. Position cursor: we are currently on the last rendered line
-        let total_rendered_rows = line_buffer.line_count().saturating_sub(1);
-        let rows_to_move_up = total_rendered_rows.saturating_sub(target_row);
-
+        // 4. Move cursor from the end of the rendered content back to layout.cursor_row
+        let rows_to_move_up = layout.end_row.saturating_sub(layout.cursor_row);
         if rows_to_move_up > 0 {
             queue!(self.writer, cursor::MoveUp(rows_to_move_up as u16))?;
         }
 
+        // 5. Position cursor horizontally at layout.cursor_col
         queue!(
             self.writer,
-            MoveToColumn(target_col as u16),
+            MoveToColumn(layout.cursor_col as u16),
             cursor::Show,
         )?;
         self.writer.flush()?;
 
-        *previous_cursor_row = target_row;
-        Ok(())
+        Ok(layout)
     }
 
     /// Immutably borrow the underlying writer.
@@ -458,8 +652,9 @@ mod tests {
         let buffer = Vec::new();
         let mut editor = Editor::with_writer(buffer);
         let line_buf = LineBuffer::with_content("echo 1".to_string());
-        let mut prev_row = 0;
-        editor.render_line(&"> ", &line_buf, &mut prev_row).unwrap();
+        let layout = editor.render_line(&"> ", &line_buf, 0).unwrap();
+        assert_eq!(layout.cursor_row, 0);
+        assert_eq!(layout.cursor_col, 8); // "> " (2) + "echo 1" (6)
         let out = editor.into_writer();
         assert!(!out.is_empty());
     }
@@ -470,8 +665,8 @@ mod tests {
         let mut editor =
             Editor::with_writer(buffer).with_formatter(|s: &str| format!("***{}***", s));
         let line_buf = LineBuffer::with_content("secret".to_string());
-        let mut prev_row = 0;
-        editor.render_line(&"> ", &line_buf, &mut prev_row).unwrap();
+        let layout = editor.render_line(&"> ", &line_buf, 0).unwrap();
+        assert_eq!(layout.cursor_row, 0);
         let out = String::from_utf8(editor.into_writer()).unwrap();
         assert!(out.contains("***secret***"));
     }
@@ -481,11 +676,98 @@ mod tests {
         let buffer = Vec::new();
         let mut editor = Editor::with_writer(buffer);
         let line_buf = LineBuffer::with_content("first\nsecond".to_string());
-        let mut prev_row = 0;
-        editor.render_line(&"> ", &line_buf, &mut prev_row).unwrap();
+        let layout = editor.render_line(&"> ", &line_buf, 0).unwrap();
         let out = String::from_utf8(editor.into_writer()).unwrap();
         // Should contain continuation indicator "… "
         assert!(out.contains("… "));
-        assert_eq!(prev_row, 1);
+        assert_eq!(layout.cursor_row, 1);
+        assert_eq!(layout.end_row, 1);
+    }
+
+    #[test]
+    fn test_compute_screen_layout_soft_wrap() {
+        // Terminal of width 10 columns
+        let mut line_buf = LineBuffer::new();
+        line_buf.insert_str("12345678"); // 8 chars. Prompt is "> " (2 chars). Total = 10 chars.
+
+        // At end of row (10 chars in 10-col terminal)
+        let layout = compute_screen_layout("> ", "… ", &line_buf, 10);
+        assert_eq!(layout.cursor_row, 0);
+        assert_eq!(layout.cursor_col, 9); // sits at right margin
+        assert_eq!(layout.end_row, 0);
+        assert_eq!(layout.end_col, 9);
+
+        // Type 1 more character -> wraps to row 1, col 1
+        line_buf.insert_char('9');
+        let layout = compute_screen_layout("> ", "… ", &line_buf, 10);
+        assert_eq!(layout.cursor_row, 1);
+        assert_eq!(layout.cursor_col, 1);
+        assert_eq!(layout.end_row, 1);
+        assert_eq!(layout.end_col, 1);
+
+        // Move cursor back to beginning: cursor sits on row 0, col 2 (right after prompt)
+        line_buf.move_home();
+        let layout = compute_screen_layout("> ", "… ", &line_buf, 10);
+        assert_eq!(layout.cursor_row, 0);
+        assert_eq!(layout.cursor_col, 2);
+        assert_eq!(layout.end_row, 1);
+        assert_eq!(layout.end_col, 1);
+    }
+
+    #[test]
+    fn test_compute_screen_layout_wide_characters() {
+        // Terminal of width 10 columns
+        let mut line_buf = LineBuffer::new();
+        // Prompt is "> " (2 cols)
+        // Insert 7 single-width chars -> col reaches 9 (1 col left)
+        line_buf.insert_str("1234567");
+
+        let layout = compute_screen_layout("> ", "… ", &line_buf, 10);
+        assert_eq!(layout.cursor_row, 0);
+        assert_eq!(layout.cursor_col, 9);
+
+        // Insert double-width emoji 🦀 (width 2). It cannot fit in col 9, so it wraps to row 1!
+        line_buf.insert_str("🦀");
+        let layout = compute_screen_layout("> ", "… ", &line_buf, 10);
+        assert_eq!(layout.cursor_row, 1);
+        assert_eq!(layout.cursor_col, 2); // on row 1, occupies cols 0 and 1, cursor at 2
+        assert_eq!(layout.end_row, 1);
+        assert_eq!(layout.end_col, 2);
+    }
+
+    #[test]
+    fn test_render_line_with_soft_wrap_override() {
+        let buffer = Vec::new();
+        let mut editor = Editor::with_writer(buffer).with_terminal_width(10);
+        let mut line_buf = LineBuffer::new();
+        line_buf.insert_str("123456789"); // 2 + 9 = 11 cols in 10-col terminal
+
+        let layout = editor.render_line(&"> ", &line_buf, 0).unwrap();
+        assert_eq!(layout.cursor_row, 1);
+        assert_eq!(layout.cursor_col, 1);
+        assert_eq!(layout.end_row, 1);
+        assert_eq!(layout.end_col, 1);
+    }
+
+    #[test]
+    fn test_normalise_paste_crlf_and_cr() {
+        let input = "line1\r\nline2\rline3\nline4";
+        let normalised = normalise_paste(input);
+        assert_eq!(normalised, "line1\nline2\nline3\nline4");
+    }
+
+    #[test]
+    fn test_normalise_paste_preserves_tabs_and_strips_control_chars() {
+        let input = "hello\tworld\x00\x1b[31mred\x1b[0m\x08test";
+        let normalised = normalise_paste(input);
+        // \x00, \x1b, and \x08 are stripped; \t is retained
+        assert_eq!(normalised, "hello\tworld[31mred[0mtest");
+    }
+
+    #[test]
+    fn test_normalise_paste_multiline_code_block() {
+        let input = "def foo():\r\n    return 42\r\n";
+        let normalised = normalise_paste(input);
+        assert_eq!(normalised, "def foo():\n    return 42\n");
     }
 }
