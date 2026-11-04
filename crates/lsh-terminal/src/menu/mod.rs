@@ -1,548 +1,774 @@
-#[cfg(not(test))]
-use std::io::{self, IsTerminal, Write};
-
-#[cfg(not(test))]
-use crossterm::event::{self, Event, KeyEvent, KeyEventKind};
-use crossterm::event::{KeyCode, KeyModifiers};
-#[cfg(not(test))]
-use crossterm::execute;
-#[cfg(not(test))]
-use crossterm::{cursor, queue, style, terminal};
-
 pub mod fuzzy;
 pub mod layout;
-pub mod reedline_menu;
 pub mod render;
-pub mod types;
 
 pub use fuzzy::*;
 pub use layout::*;
-pub use reedline_menu::LshMenu;
+pub use lsh_completions::{CompletionItem, CompletionKind};
 pub use render::*;
-pub use types::*;
 
-pub fn handle_key_event(code: KeyCode, modifiers: KeyModifiers) -> MenuAction {
-    match (code, modifiers) {
-        // Next: Down, Ctrl-N
-        (KeyCode::Down, _) => MenuAction::Next,
-        (KeyCode::Char('n'), m) if m.contains(KeyModifiers::CONTROL) => MenuAction::Next,
+use crossterm::event::{KeyCode, KeyModifiers};
+use lsh_input::{LineBuffer, Menu, MenuOutcome};
 
-        // Previous: Up, BackTab, Shift-Tab, Ctrl-P
-        (KeyCode::Up, _) | (KeyCode::BackTab, _) => MenuAction::Previous,
-        (KeyCode::Tab, m) if m.contains(KeyModifiers::SHIFT) => MenuAction::Previous,
-        (KeyCode::Char('p'), m) if m.contains(KeyModifiers::CONTROL) => MenuAction::Previous,
+use crate::editor::LshCompleter;
 
-        // Tab & Right: descend into directory or accept candidate
-        (KeyCode::Tab, m) if !m.contains(KeyModifiers::SHIFT) => MenuAction::Tab,
-        (KeyCode::Right, _) => MenuAction::Tab,
+#[derive(Clone, Debug)]
+struct DescentLevel {
+    start: usize,
+    initial_query: String,
+    filter_suffix: String,
+    root_items: Vec<CompletionItem>,
+    original_text: String,
+}
 
-        // Slash: descend if directory candidate is selected, else regular filter char
-        (KeyCode::Char('/'), m)
-            if !m.contains(KeyModifiers::CONTROL) && !m.contains(KeyModifiers::ALT) =>
-        {
-            MenuAction::Slash
+/// An interactive dropdown completion menu for LSH with live filtering, Nerd Font, and category badge support.
+pub struct LshMenu {
+    active: bool,
+    selected: usize,
+    root_items: Vec<CompletionItem>,
+    items: Vec<CompletionItem>,
+    completer: LshCompleter,
+    max_height: usize,
+    start: usize,
+    original_text: String,
+    initial_query: String,
+    filter_suffix: String,
+    current_replacement_len: usize,
+    navigated: bool,
+    descent_stack: Vec<DescentLevel>,
+}
+
+impl LshMenu {
+    /// Create a new interactive completion menu using the given completer.
+    pub fn new(_name: impl Into<String>, completer: LshCompleter) -> Self {
+        Self {
+            active: false,
+            selected: 0,
+            root_items: Vec::new(),
+            items: Vec::new(),
+            completer,
+            max_height: 7,
+            start: 0,
+            original_text: String::new(),
+            initial_query: String::new(),
+            filter_suffix: String::new(),
+            current_replacement_len: 0,
+            navigated: false,
+            descent_stack: Vec::new(),
+        }
+    }
+
+    /// Set the maximum number of visible completion rows in the dropdown.
+    pub fn with_max_height(mut self, max_height: usize) -> Self {
+        self.max_height = max_height;
+        self
+    }
+
+    /// Returns the index of the currently highlighted candidate.
+    pub fn selected_index(&self) -> usize {
+        self.selected
+    }
+
+    /// Returns the slice of active completion candidates.
+    pub fn items(&self) -> &[CompletionItem] {
+        &self.items
+    }
+
+    fn revert_preview(&mut self, buffer: &mut LineBuffer) {
+        if self.navigated {
+            let start = self.start;
+            let end = (start + self.current_replacement_len).min(buffer.len());
+            let current_typed = format!("{}{}", self.initial_query, self.filter_suffix);
+            buffer.replace_range(start..end, &current_typed);
+            buffer.set_cursor(start + current_typed.len());
+            self.current_replacement_len = current_typed.len();
+            self.navigated = false;
+        }
+    }
+
+    fn update_buffer_preview(&mut self, buffer: &mut LineBuffer) {
+        if let Some(item) = self.items.get(self.selected) {
+            let replacement = item.replacement.clone();
+            let rep_len = replacement.len();
+            let start = self.start;
+            let end = (start + self.current_replacement_len).min(buffer.len());
+            buffer.replace_range(start..end, &replacement);
+            buffer.set_cursor(start + rep_len);
+            self.current_replacement_len = rep_len;
+        }
+    }
+
+    fn commit_selected(&mut self, buffer: &mut LineBuffer) {
+        if let Some(item) = self.items.get(self.selected) {
+            let is_dir = matches!(item.kind, CompletionKind::Directory)
+                || item.replacement.ends_with('/');
+            let mut replacement = item.replacement.clone();
+            if !is_dir && !replacement.ends_with(' ') {
+                replacement.push(' ');
+            }
+            let rep_len = replacement.len();
+            let start = self.start;
+            let end = (start + self.current_replacement_len).min(buffer.len());
+            buffer.replace_range(start..end, &replacement);
+            buffer.set_cursor(start + rep_len);
+            self.current_replacement_len = rep_len;
+        }
+    }
+
+    fn descend(&mut self, buffer: &mut LineBuffer) -> bool {
+        let Some(item) = self.items.get(self.selected).cloned() else {
+            return false;
+        };
+        let is_dir = matches!(item.kind, CompletionKind::Directory)
+            || item.replacement.ends_with('/');
+        if !is_dir {
+            return false;
         }
 
-        // Page scroll
-        (KeyCode::PageDown, _) => MenuAction::PageDown,
-        (KeyCode::PageUp, _) => MenuAction::PageUp,
-
-        // Top / Bottom
-        (KeyCode::Home, _) => MenuAction::First,
-        (KeyCode::End, _) => MenuAction::Last,
-
-        // Accept
-        (KeyCode::Enter, _) => MenuAction::Accept,
-
-        // Dismiss
-        (KeyCode::Esc | KeyCode::Left, _) => MenuAction::Dismiss,
-        (KeyCode::Char('c') | KeyCode::Char('g'), m) if m.contains(KeyModifiers::CONTROL) => {
-            MenuAction::Dismiss
+        let mut dir_rep = item.replacement.clone();
+        if !dir_rep.ends_with('/') {
+            dir_rep.push('/');
         }
 
-        // Backspace: delete character from filter, or ascend directory
-        (KeyCode::Backspace, _) => MenuAction::Backspace,
+        self.descent_stack.push(DescentLevel {
+            start: self.start,
+            initial_query: self.initial_query.clone(),
+            filter_suffix: self.filter_suffix.clone(),
+            root_items: self.root_items.clone(),
+            original_text: self.original_text.clone(),
+        });
 
-        // Typing: regular characters (letters, numbers, symbols) without Ctrl or Alt
-        (KeyCode::Char(c), m)
-            if !m.contains(KeyModifiers::CONTROL) && !m.contains(KeyModifiers::ALT) =>
-        {
-            MenuAction::Char(c)
-        }
+        let start = self.start;
+        let end = (start + self.current_replacement_len).min(buffer.len());
+        buffer.replace_range(start..end, &dir_rep);
+        buffer.set_cursor(start + dir_rep.len());
 
-        _ => MenuAction::Dismiss,
+        let (new_start, new_items) =
+            self.completer.get_candidates(buffer.as_str(), buffer.cursor());
+        self.start = new_start;
+        self.root_items = new_items.clone();
+        self.items = new_items;
+        self.initial_query = dir_rep.clone();
+        self.filter_suffix.clear();
+        self.original_text = dir_rep.clone();
+        self.current_replacement_len = dir_rep.len();
+        self.selected = 0;
+        self.navigated = false;
+        true
+    }
+
+    fn ascend(&mut self, buffer: &mut LineBuffer) -> bool {
+        let Some(parent) = self.descent_stack.pop() else {
+            return false;
+        };
+
+        let current_end = (self.start + self.current_replacement_len).min(buffer.len());
+        let parent_rep = format!("{}{}", parent.initial_query, parent.filter_suffix);
+        buffer.replace_range(self.start..current_end, &parent_rep);
+
+        self.start = parent.start;
+        self.initial_query = parent.initial_query;
+        self.filter_suffix = parent.filter_suffix;
+        self.root_items = parent.root_items;
+        self.original_text = parent.original_text;
+
+        let query = format!("{}{}", self.initial_query, self.filter_suffix);
+        self.items = filter_completion_items(&self.root_items, &query);
+        self.current_replacement_len = parent_rep.len();
+        buffer.set_cursor(self.start + parent_rep.len());
+        self.selected = 0;
+        self.navigated = false;
+        true
     }
 }
 
-pub fn show_completion_menu<F>(
-    base_prefix: &str,
-    items: &[CompletionItem],
-    max_visible: usize,
-    nerd_icons: bool,
-    #[allow(unused_mut)] mut on_descend: F,
-) -> MenuResult
-where
-    F: FnMut(&str) -> Vec<CompletionItem>,
-{
-    if items.is_empty() {
-        return MenuResult::Cancelled;
+impl Menu for LshMenu {
+    fn is_active(&self) -> bool {
+        self.active
     }
-    if items.len() == 1 {
-        return MenuResult::Selected(items[0].clone());
-    }
-    #[cfg(test)]
-    {
-        let _ = (max_visible, base_prefix, nerd_icons, on_descend);
-        MenuResult::Selected(items[0].clone())
-    }
-    #[cfg(not(test))]
-    {
-        if !io::stdout().is_terminal() || !io::stdin().is_terminal() {
-            return MenuResult::Selected(items[0].clone());
+
+    fn activate(
+        &mut self,
+        buffer: &mut LineBuffer,
+        _completer: Option<&dyn lsh_input::Completer>,
+    ) {
+        let (start, items) = self
+            .completer
+            .get_candidates(buffer.as_str(), buffer.cursor());
+        if items.is_empty() {
+            self.active = false;
+            return;
         }
 
-        let mut cout = io::stdout();
-
-        let (cursor_col, mut cursor_row) = cursor::position().unwrap_or((0, 0));
-        let (term_cols, term_rows) = terminal::size().unwrap_or((80, 24));
-
-        let start_col = cursor_col.saturating_sub(base_prefix.chars().count() as u16);
-        let mut current_prefix = base_prefix.to_string();
-        let mut filter_suffix = String::new();
-        let mut initial_query = base_prefix
-            .rsplit('/')
-            .next()
-            .unwrap_or(base_prefix)
-            .to_string();
-        let mut root_items = items.to_vec();
-        let mut active_items = items.to_vec();
-        let mut selected = 0;
-        let mut cur_col = cursor_col;
-
-        struct DescentLevel {
-            prefix: String,
-            items: Vec<CompletionItem>,
-            initial_query: String,
-        }
-        let mut descent_stack: Vec<DescentLevel> = Vec::new();
-
-        let (effective_max_visible, scroll_needed) =
-            calculate_max_visible_height(cursor_row, term_rows, max_visible, items.len());
-
-        if scroll_needed > 0 {
-            let _ = execute!(cout, terminal::ScrollUp(scroll_needed));
-            cursor_row = cursor_row.saturating_sub(scroll_needed);
-            let _ = queue!(cout, cursor::MoveTo(cur_col, cursor_row));
-        }
-
-        let make_layout = |active: &[CompletionItem], anchor_col: u16, f_len: usize| {
-            let (w, h) =
-                calculate_menu_dimensions(active, term_cols, effective_max_visible, nerd_icons);
-            let m_col = anchor_col.min(term_cols.saturating_sub(w as u16 + 2));
-            let col = anchor_col + f_len as u16;
-            (
-                MenuLayout {
-                    width: w,
-                    height: h,
-                    menu_col: m_col,
-                    cursor_row,
-                    cursor_col: col,
-                    nerd_icons,
-                },
-                h as u16 + 2,
-            )
+        self.start = start;
+        self.original_text = if buffer.cursor() >= start {
+            buffer.as_str()[start..buffer.cursor()].to_string()
+        } else {
+            String::new()
         };
+        self.initial_query = self.original_text.clone();
+        self.filter_suffix.clear();
+        self.current_replacement_len = self.original_text.len();
+        self.descent_stack.clear();
 
-        let (layout, needed_rows) = make_layout(&active_items, cur_col, 0);
-        let mut max_needed_rows = needed_rows;
-        let _ = execute!(cout, cursor::Hide);
-        let _ = draw_menu(&mut cout, &active_items, selected, layout);
+        // 1 item: accept immediately
+        if items.len() == 1 {
+            let item = &items[0];
+            let is_dir = matches!(item.kind, CompletionKind::Directory);
+            let mut rep = item.replacement.clone();
+            if !is_dir && !rep.ends_with(' ') {
+                rep.push(' ');
+            }
+            buffer.replace_range(start..buffer.cursor(), &rep);
+            buffer.set_cursor(start + rep.len());
+            self.active = false;
+            return;
+        }
 
-        let result = loop {
-            match event::read() {
-                Ok(Event::Key(KeyEvent {
-                    code,
-                    modifiers,
-                    kind,
-                    ..
-                })) if kind != KeyEventKind::Release => match handle_key_event(code, modifiers) {
-                    MenuAction::Next => {
-                        if !active_items.is_empty() {
-                            selected = (selected + 1) % active_items.len();
-                            let (l, _) =
-                                make_layout(&active_items, cur_col, filter_suffix.chars().count());
-                            let _ = draw_menu(&mut cout, &active_items, selected, l);
-                        }
+        // Multiple items: check longest common prefix
+        let first = &items[0].replacement;
+        let mut common_len = first.len();
+        for item in &items[1..] {
+            let len = first
+                .chars()
+                .zip(item.replacement.chars())
+                .take_while(|(a, b)| a == b)
+                .count();
+            common_len = common_len.min(len);
+        }
+        let common: String = first.chars().take(common_len).collect();
+        if common.len() > self.original_text.len() {
+            buffer.replace_range(start..buffer.cursor(), &common);
+            self.current_replacement_len = common.len();
+            self.original_text = common.clone();
+            self.initial_query = common.clone();
+            buffer.set_cursor(start + common.len());
+        }
+
+        self.root_items = items.clone();
+        self.items = items;
+        self.selected = 0;
+        self.navigated = false;
+        self.active = true;
+    }
+
+    fn handle_key(
+        &mut self,
+        code: KeyCode,
+        modifiers: KeyModifiers,
+        buffer: &mut LineBuffer,
+        _completer: Option<&dyn lsh_input::Completer>,
+    ) -> MenuOutcome {
+        match (code, modifiers) {
+            (KeyCode::Down, _) | (KeyCode::Char('n'), KeyModifiers::CONTROL) => {
+                if !self.items.is_empty() {
+                    if !self.navigated {
+                        self.selected = 0;
+                        self.navigated = true;
+                    } else {
+                        self.selected = (self.selected + 1) % self.items.len();
                     }
-                    MenuAction::Previous => {
-                        if !active_items.is_empty() {
-                            selected = if selected == 0 {
-                                active_items.len() - 1
-                            } else {
-                                selected - 1
-                            };
-                            let (l, _) =
-                                make_layout(&active_items, cur_col, filter_suffix.chars().count());
-                            let _ = draw_menu(&mut cout, &active_items, selected, l);
-                        }
-                    }
-                    MenuAction::PageDown => {
-                        if !active_items.is_empty() {
-                            selected = (selected + layout.height).min(active_items.len() - 1);
-                            let (l, _) =
-                                make_layout(&active_items, cur_col, filter_suffix.chars().count());
-                            let _ = draw_menu(&mut cout, &active_items, selected, l);
-                        }
-                    }
-                    MenuAction::PageUp => {
-                        if !active_items.is_empty() {
-                            selected = selected.saturating_sub(layout.height);
-                            let (l, _) =
-                                make_layout(&active_items, cur_col, filter_suffix.chars().count());
-                            let _ = draw_menu(&mut cout, &active_items, selected, l);
-                        }
-                    }
-                    MenuAction::First => {
-                        if !active_items.is_empty() {
-                            selected = 0;
-                            let (l, _) =
-                                make_layout(&active_items, cur_col, filter_suffix.chars().count());
-                            let _ = draw_menu(&mut cout, &active_items, selected, l);
-                        }
-                    }
-                    MenuAction::Last => {
-                        if !active_items.is_empty() {
-                            selected = active_items.len() - 1;
-                            let (l, _) =
-                                make_layout(&active_items, cur_col, filter_suffix.chars().count());
-                            let _ = draw_menu(&mut cout, &active_items, selected, l);
-                        }
-                    }
-                    MenuAction::Tab => {
-                        if active_items.is_empty() {
-                            break MenuResult::Cancelled;
-                        }
-                        let selected_item = &active_items[selected];
-                        if selected_item.is_dir() {
-                            let mut new_prefix = selected_item.replacement.clone();
-                            if !new_prefix.ends_with('/') {
-                                new_prefix.push('/');
-                            }
-
-                            descent_stack.push(DescentLevel {
-                                prefix: current_prefix.clone(),
-                                items: root_items.clone(),
-                                initial_query: initial_query.clone(),
-                            });
-
-                            let _ = erase_menu(
-                                &mut cout,
-                                max_needed_rows,
-                                cursor_row,
-                                cur_col + filter_suffix.chars().count() as u16,
-                            );
-
-                            let old_len =
-                                current_prefix.chars().count() + filter_suffix.chars().count();
-                            let new_len = new_prefix.chars().count();
-                            let pad = if old_len > new_len {
-                                " ".repeat(old_len - new_len)
-                            } else {
-                                String::new()
-                            };
-                            let _ = queue!(
-                                cout,
-                                cursor::MoveTo(start_col, cursor_row),
-                                style::Print(format!("{new_prefix}{pad}")),
-                                cursor::MoveTo(start_col + new_len as u16, cursor_row),
-                            );
-                            let _ = cout.flush();
-
-                            let next_items = on_descend(&new_prefix);
-                            current_prefix = new_prefix;
-                            cur_col = start_col + new_len as u16;
-                            filter_suffix.clear();
-                            initial_query.clear();
-                            root_items = next_items.clone();
-                            active_items = next_items;
-                            selected = 0;
-
-                            let (l, needed) = make_layout(&active_items, cur_col, 0);
-                            max_needed_rows = max_needed_rows.max(needed);
-                            let _ = draw_menu(&mut cout, &active_items, selected, l);
+                    self.update_buffer_preview(buffer);
+                }
+                MenuOutcome::Consumed
+            }
+            (KeyCode::Up, _)
+            | (KeyCode::BackTab, _)
+            | (KeyCode::Char('p'), KeyModifiers::CONTROL) => {
+                if !self.items.is_empty() {
+                    if !self.navigated {
+                        self.selected = self.items.len().saturating_sub(1);
+                        self.navigated = true;
+                    } else {
+                        self.selected = if self.selected == 0 {
+                            self.items.len().saturating_sub(1)
                         } else {
-                            break MenuResult::Selected(selected_item.clone());
-                        }
-                    }
-                    MenuAction::Accept => {
-                        break if !active_items.is_empty() {
-                            MenuResult::Selected(active_items[selected].clone())
-                        } else {
-                            MenuResult::Typed(format!("{current_prefix}{filter_suffix}"))
+                            self.selected - 1
                         };
                     }
-                    MenuAction::Slash => {
-                        filter_suffix.push('/');
-                        let query = format!("{initial_query}{filter_suffix}");
-                        let new_items = filter_completion_items(&root_items, &query);
-
-                        if new_items.is_empty() {
-                            break MenuResult::Typed(format!("{current_prefix}{filter_suffix}"));
-                        }
-
-                        let char_col = cur_col + (filter_suffix.chars().count() - 1) as u16;
-                        let _ = queue!(
-                            cout,
-                            cursor::MoveTo(char_col, cursor_row),
-                            style::Print('/')
-                        );
-
-                        let _ = erase_menu(
-                            &mut cout,
-                            max_needed_rows,
-                            cursor_row,
-                            cur_col + filter_suffix.chars().count() as u16,
-                        );
-
-                        active_items = new_items;
-                        selected = selected.min(active_items.len() - 1);
-
-                        let (l, needed) =
-                            make_layout(&active_items, cur_col, filter_suffix.chars().count());
-                        max_needed_rows = max_needed_rows.max(needed);
-                        let _ = draw_menu(&mut cout, &active_items, selected, l);
-                    }
-                    MenuAction::Dismiss => {
-                        break MenuResult::Cancelled;
-                    }
-                    MenuAction::Char(c) => {
-                        filter_suffix.push(c);
-                        let query = format!("{initial_query}{filter_suffix}");
-                        let new_items = filter_completion_items(&root_items, &query);
-
-                        if new_items.is_empty() {
-                            break MenuResult::Typed(format!("{current_prefix}{filter_suffix}"));
-                        }
-
-                        let char_col = cur_col + (filter_suffix.chars().count() - 1) as u16;
-                        let _ = queue!(cout, cursor::MoveTo(char_col, cursor_row), style::Print(c));
-
-                        let _ = erase_menu(
-                            &mut cout,
-                            max_needed_rows,
-                            cursor_row,
-                            cur_col + filter_suffix.chars().count() as u16,
-                        );
-
-                        active_items = new_items;
-                        selected = selected.min(active_items.len() - 1);
-
-                        let (l, needed) =
-                            make_layout(&active_items, cur_col, filter_suffix.chars().count());
-                        max_needed_rows = max_needed_rows.max(needed);
-                        let _ = draw_menu(&mut cout, &active_items, selected, l);
-                    }
-                    MenuAction::Backspace => {
-                        if !filter_suffix.is_empty() {
-                            let char_col = cur_col + filter_suffix.chars().count() as u16 - 1;
-                            let _ = queue!(
-                                cout,
-                                cursor::MoveTo(char_col, cursor_row),
-                                style::Print(' '),
-                                cursor::MoveTo(char_col, cursor_row),
-                            );
-
-                            filter_suffix.pop();
-                            let query = format!("{initial_query}{filter_suffix}");
-                            active_items = filter_completion_items(&root_items, &query);
-                            selected = selected.min(active_items.len().saturating_sub(1));
-
-                            let _ = erase_menu(
-                                &mut cout,
-                                max_needed_rows,
-                                cursor_row,
-                                cur_col + filter_suffix.chars().count() as u16,
-                            );
-
-                            let (l, needed) =
-                                make_layout(&active_items, cur_col, filter_suffix.chars().count());
-                            max_needed_rows = max_needed_rows.max(needed);
-                            let _ = draw_menu(&mut cout, &active_items, selected, l);
-                        } else if let Some(parent) = descent_stack.pop() {
-                            let _ = erase_menu(&mut cout, max_needed_rows, cursor_row, cur_col);
-
-                            let old_len = current_prefix.chars().count();
-                            let new_prefix = parent.prefix;
-                            let new_len = new_prefix.chars().count();
-                            let pad = if old_len > new_len {
-                                " ".repeat(old_len - new_len)
-                            } else {
-                                String::new()
-                            };
-                            let _ = queue!(
-                                cout,
-                                cursor::MoveTo(start_col, cursor_row),
-                                style::Print(format!("{new_prefix}{pad}")),
-                                cursor::MoveTo(start_col + new_len as u16, cursor_row),
-                            );
-                            let _ = cout.flush();
-
-                            current_prefix = new_prefix;
-                            cur_col = start_col + new_len as u16;
-                            filter_suffix.clear();
-                            initial_query = parent.initial_query;
-                            root_items = parent.items.clone();
-                            active_items = parent.items;
-                            selected = 0;
-
-                            let (l, needed) = make_layout(&active_items, cur_col, 0);
-                            max_needed_rows = max_needed_rows.max(needed);
-                            let _ = draw_menu(&mut cout, &active_items, selected, l);
-                        } else {
-                            let mut new_prefix = current_prefix.clone();
-                            if !new_prefix.is_empty() {
-                                new_prefix.pop();
-                                break MenuResult::Typed(new_prefix);
-                            } else {
-                                break MenuResult::Cancelled;
-                            }
-                        }
-                    }
-                },
-                Err(_) => break MenuResult::Cancelled,
-                _ => {}
+                    self.update_buffer_preview(buffer);
+                }
+                MenuOutcome::Consumed
             }
-        };
+            (KeyCode::Tab, m) if m.contains(KeyModifiers::SHIFT) => {
+                if !self.items.is_empty() {
+                    if !self.navigated {
+                        self.selected = self.items.len().saturating_sub(1);
+                        self.navigated = true;
+                    } else {
+                        self.selected = if self.selected == 0 {
+                            self.items.len().saturating_sub(1)
+                        } else {
+                            self.selected - 1
+                        };
+                    }
+                    self.update_buffer_preview(buffer);
+                }
+                MenuOutcome::Consumed
+            }
+            (KeyCode::PageDown, _) => {
+                if !self.items.is_empty() {
+                    self.selected =
+                        (self.selected + self.max_height).min(self.items.len().saturating_sub(1));
+                    self.navigated = true;
+                    self.update_buffer_preview(buffer);
+                }
+                MenuOutcome::Consumed
+            }
+            (KeyCode::PageUp, _) => {
+                if !self.items.is_empty() {
+                    self.selected = self.selected.saturating_sub(self.max_height);
+                    self.navigated = true;
+                    self.update_buffer_preview(buffer);
+                }
+                MenuOutcome::Consumed
+            }
+            (KeyCode::Home, _) => {
+                if !self.items.is_empty() {
+                    self.selected = 0;
+                    self.navigated = true;
+                    self.update_buffer_preview(buffer);
+                }
+                MenuOutcome::Consumed
+            }
+            (KeyCode::End, _) => {
+                if !self.items.is_empty() {
+                    self.selected = self.items.len().saturating_sub(1);
+                    self.navigated = true;
+                    self.update_buffer_preview(buffer);
+                }
+                MenuOutcome::Consumed
+            }
+            (KeyCode::Tab, KeyModifiers::NONE) => {
+                if !self.navigated {
+                    if self.items.len() == 1 {
+                        if self.descend(buffer) {
+                            MenuOutcome::Consumed
+                        } else {
+                            self.commit_selected(buffer);
+                            self.active = false;
+                            MenuOutcome::Accepted
+                        }
+                    } else {
+                        self.selected = 0;
+                        self.navigated = true;
+                        self.update_buffer_preview(buffer);
+                        MenuOutcome::Consumed
+                    }
+                } else if self.descend(buffer) {
+                    MenuOutcome::Consumed
+                } else {
+                    self.commit_selected(buffer);
+                    self.active = false;
+                    MenuOutcome::Accepted
+                }
+            }
+            (KeyCode::Right, KeyModifiers::NONE) if self.navigated => {
+                if self.descend(buffer) {
+                    MenuOutcome::Consumed
+                } else {
+                    self.commit_selected(buffer);
+                    self.active = false;
+                    MenuOutcome::Accepted
+                }
+            }
+            (KeyCode::Right, KeyModifiers::NONE) => {
+                self.dismiss(buffer);
+                MenuOutcome::PassThrough
+            }
+            (KeyCode::Char('/'), KeyModifiers::NONE) => {
+                if self.navigated && self.descend(buffer) {
+                    MenuOutcome::Consumed
+                } else {
+                    self.revert_preview(buffer);
+                    self.filter_suffix.push('/');
+                    buffer.insert_char('/');
+                    self.current_replacement_len += 1;
 
-        let final_col = cur_col + filter_suffix.chars().count() as u16;
-        let _ = erase_menu(&mut cout, max_needed_rows, cursor_row, final_col);
+                    let query = format!("{}{}", self.initial_query, self.filter_suffix);
+                    let filtered = filter_completion_items(&self.root_items, &query);
+                    if filtered.is_empty() {
+                        self.active = false;
+                        self.items.clear();
+                    } else {
+                        self.items = filtered;
+                        self.selected = 0;
+                    }
+                    MenuOutcome::Consumed
+                }
+            }
+            (KeyCode::Char(' '), KeyModifiers::NONE) => {
+                if self.navigated {
+                    self.commit_selected(buffer);
+                    self.active = false;
+                    MenuOutcome::Accepted
+                } else {
+                    self.active = false;
+                    self.items.clear();
+                    MenuOutcome::PassThrough
+                }
+            }
+            (KeyCode::Char(c), KeyModifiers::NONE | KeyModifiers::SHIFT) => {
+                self.revert_preview(buffer);
+                self.filter_suffix.push(c);
+                buffer.insert_char(c);
+                self.current_replacement_len += c.len_utf8();
 
-        if matches!(result, MenuResult::Cancelled) {
-            let current_len = current_prefix.chars().count() + filter_suffix.chars().count();
-            let base_len = base_prefix.chars().count();
-            let pad = if current_len > base_len {
-                " ".repeat(current_len - base_len)
-            } else {
-                String::new()
-            };
-            let _ = queue!(
-                cout,
-                cursor::MoveTo(start_col, cursor_row),
-                style::Print(format!("{base_prefix}{pad}")),
-                cursor::MoveTo(start_col + base_len as u16, cursor_row),
-            );
-            let _ = cout.flush();
+                let query = format!("{}{}", self.initial_query, self.filter_suffix);
+                let filtered = filter_completion_items(&self.root_items, &query);
+                if filtered.is_empty() {
+                    self.active = false;
+                    self.items.clear();
+                } else {
+                    self.items = filtered;
+                    self.selected = 0;
+                }
+                MenuOutcome::Consumed
+            }
+            (KeyCode::Backspace, KeyModifiers::NONE) => {
+                if self.navigated {
+                    self.revert_preview(buffer);
+                }
+
+                if !self.filter_suffix.is_empty() {
+                    self.filter_suffix.pop();
+                    buffer.delete_prev_grapheme();
+                    self.current_replacement_len = self.current_replacement_len.saturating_sub(1);
+
+                    let query = format!("{}{}", self.initial_query, self.filter_suffix);
+                    let filtered = filter_completion_items(&self.root_items, &query);
+                    if filtered.is_empty() {
+                        self.active = false;
+                        self.items.clear();
+                    } else {
+                        self.items = filtered;
+                        self.selected = 0;
+                    }
+                    MenuOutcome::Consumed
+                } else if !self.initial_query.is_empty() {
+                    self.initial_query.pop();
+                    buffer.delete_prev_grapheme();
+                    self.current_replacement_len = self.current_replacement_len.saturating_sub(1);
+
+                    let query = self.initial_query.clone();
+                    let filtered = filter_completion_items(&self.root_items, &query);
+                    if filtered.is_empty() {
+                        self.active = false;
+                        self.items.clear();
+                    } else {
+                        self.items = filtered;
+                        self.selected = 0;
+                    }
+                    MenuOutcome::Consumed
+                } else if self.ascend(buffer) {
+                    MenuOutcome::Consumed
+                } else {
+                    self.dismiss(buffer);
+                    MenuOutcome::PassThrough
+                }
+            }
+            (KeyCode::Enter, KeyModifiers::NONE) if self.navigated => {
+                if self.descend(buffer) {
+                    MenuOutcome::Consumed
+                } else {
+                    self.commit_selected(buffer);
+                    self.active = false;
+                    MenuOutcome::Accepted
+                }
+            }
+            (KeyCode::Enter, KeyModifiers::NONE) => {
+                self.active = false;
+                self.items.clear();
+                MenuOutcome::PassThrough
+            }
+            (KeyCode::Esc, _)
+            | (KeyCode::Left, _)
+            | (KeyCode::Char('g'), KeyModifiers::CONTROL) => {
+                self.dismiss(buffer);
+                MenuOutcome::Dismissed
+            }
+            (KeyCode::Char('c'), m) if m.contains(KeyModifiers::CONTROL) => {
+                self.dismiss(buffer);
+                MenuOutcome::PassThrough
+            }
+            _ => {
+                self.dismiss(buffer);
+                MenuOutcome::PassThrough
+            }
         }
-        result
+    }
+
+    fn render_lines(&self, terminal_width: usize, cursor_col: usize) -> Vec<String> {
+        if !self.active || self.items.is_empty() {
+            return Vec::new();
+        }
+
+        let nerd_icons = self.completer.nerd_icons();
+        let (width, visible_height) = calculate_menu_dimensions(
+            &self.items,
+            terminal_width as u16,
+            self.max_height,
+            nerd_icons,
+        );
+
+        let left_pad = cursor_col.min(terminal_width.saturating_sub(width));
+        format_menu_lines(
+            &self.items,
+            self.selected,
+            width,
+            visible_height,
+            nerd_icons,
+            left_pad,
+        )
+    }
+
+    fn dismiss(&mut self, buffer: &mut LineBuffer) {
+        if self.active {
+            if self.navigated {
+                let start = self.start;
+                let end = (start + self.current_replacement_len).min(buffer.len());
+                let typed = format!("{}{}", self.initial_query, self.filter_suffix);
+                let restore = if !typed.is_empty() {
+                    &typed
+                } else {
+                    &self.original_text
+                };
+                buffer.replace_range(start..end, restore);
+                buffer.set_cursor(start + restore.len());
+            } else if !self.descent_stack.is_empty() {
+                let first_level = &self.descent_stack[0];
+                let start = first_level.start;
+                let end = (start + self.current_replacement_len).min(buffer.len());
+                buffer.replace_range(start..end, &first_level.original_text);
+                buffer.set_cursor(start + first_level.original_text.len());
+            }
+        }
+        self.active = false;
+        self.items.clear();
+        self.root_items.clear();
+        self.selected = 0;
+        self.navigated = false;
+        self.filter_suffix.clear();
+        self.initial_query.clear();
+        self.original_text.clear();
+        self.current_replacement_len = 0;
+        self.descent_stack.clear();
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::editor::LineEditorHelper;
 
     #[test]
-    fn handles_navigation_key_events_correctly() {
-        // Next: Down, Ctrl-N
-        assert_eq!(
-            handle_key_event(KeyCode::Down, KeyModifiers::NONE),
-            MenuAction::Next
-        );
-        assert_eq!(
-            handle_key_event(KeyCode::Char('n'), KeyModifiers::CONTROL),
-            MenuAction::Next
-        );
+    fn new_menu_is_inactive_and_empty() {
+        let helper = LineEditorHelper::new();
+        let menu = LshMenu::new("completion_menu", helper);
 
-        // Tab & Right: descend into directory or accept candidate
-        assert_eq!(
-            handle_key_event(KeyCode::Tab, KeyModifiers::NONE),
-            MenuAction::Tab
-        );
-        assert_eq!(
-            handle_key_event(KeyCode::Right, KeyModifiers::NONE),
-            MenuAction::Tab
-        );
+        assert!(!menu.is_active());
+        assert_eq!(menu.selected_index(), 0);
+        assert!(menu.items().is_empty());
+    }
 
-        // Slash: descend if on directory, else filter
-        assert_eq!(
-            handle_key_event(KeyCode::Char('/'), KeyModifiers::NONE),
-            MenuAction::Slash
-        );
+    #[test]
+    fn activates_and_navigates_candidates() {
+        let helper = LineEditorHelper::new();
+        helper.set_binaries(vec!["git-clone".to_string(), "git-commit".to_string()]);
 
-        // Previous: Up, BackTab, Shift-Tab, Ctrl-P
-        assert_eq!(
-            handle_key_event(KeyCode::Up, KeyModifiers::NONE),
-            MenuAction::Previous
-        );
-        assert_eq!(
-            handle_key_event(KeyCode::BackTab, KeyModifiers::NONE),
-            MenuAction::Previous
-        );
-        assert_eq!(
-            handle_key_event(KeyCode::Tab, KeyModifiers::SHIFT),
-            MenuAction::Previous
-        );
-        assert_eq!(
-            handle_key_event(KeyCode::Char('p'), KeyModifiers::CONTROL),
-            MenuAction::Previous
-        );
+        let mut menu = LshMenu::new("completion_menu", helper);
+        let mut buffer = LineBuffer::new();
+        buffer.insert_str("git-");
 
-        // Page navigation
-        assert_eq!(
-            handle_key_event(KeyCode::PageDown, KeyModifiers::NONE),
-            MenuAction::PageDown
-        );
-        assert_eq!(
-            handle_key_event(KeyCode::PageUp, KeyModifiers::NONE),
-            MenuAction::PageUp
-        );
+        menu.activate(&mut buffer, None);
+        assert!(menu.is_active());
+        assert_eq!(menu.items().len(), 2);
+        // Common prefix "git-c" is automatically expanded
+        assert_eq!(buffer.as_str(), "git-c");
 
-        // First / Last
-        assert_eq!(
-            handle_key_event(KeyCode::Home, KeyModifiers::NONE),
-            MenuAction::First
-        );
-        assert_eq!(
-            handle_key_event(KeyCode::End, KeyModifiers::NONE),
-            MenuAction::Last
-        );
+        // Tab navigates to first candidate and previews
+        let outcome = menu.handle_key(KeyCode::Tab, KeyModifiers::NONE, &mut buffer, None);
+        assert_eq!(outcome, MenuOutcome::Consumed);
+        assert_eq!(menu.selected_index(), 0);
+        assert_eq!(buffer.as_str(), "git-clone");
 
-        // Accept
-        assert_eq!(
-            handle_key_event(KeyCode::Enter, KeyModifiers::NONE),
-            MenuAction::Accept
-        );
+        // Down navigates to next
+        let outcome = menu.handle_key(KeyCode::Down, KeyModifiers::NONE, &mut buffer, None);
+        assert_eq!(outcome, MenuOutcome::Consumed);
+        assert_eq!(menu.selected_index(), 1);
+        assert_eq!(buffer.as_str(), "git-commit");
 
-        // Dismiss
-        assert_eq!(
-            handle_key_event(KeyCode::Esc, KeyModifiers::NONE),
-            MenuAction::Dismiss
-        );
-        assert_eq!(
-            handle_key_event(KeyCode::Left, KeyModifiers::NONE),
-            MenuAction::Dismiss
-        );
-        assert_eq!(
-            handle_key_event(KeyCode::Char('c'), KeyModifiers::CONTROL),
-            MenuAction::Dismiss
-        );
-        assert_eq!(
-            handle_key_event(KeyCode::Char('g'), KeyModifiers::CONTROL),
-            MenuAction::Dismiss
-        );
+        // Up navigates back to first
+        let outcome = menu.handle_key(KeyCode::Up, KeyModifiers::NONE, &mut buffer, None);
+        assert_eq!(outcome, MenuOutcome::Consumed);
+        assert_eq!(menu.selected_index(), 0);
+        assert_eq!(buffer.as_str(), "git-clone");
 
-        // Typing and Backspace
-        assert_eq!(
-            handle_key_event(KeyCode::Char('a'), KeyModifiers::NONE),
-            MenuAction::Char('a')
-        );
-        assert_eq!(
-            handle_key_event(KeyCode::Char('A'), KeyModifiers::SHIFT),
-            MenuAction::Char('A')
-        );
-        assert_eq!(
-            handle_key_event(KeyCode::Backspace, KeyModifiers::NONE),
-            MenuAction::Backspace
-        );
+        // Enter accepts candidate with trailing space
+        let outcome = menu.handle_key(KeyCode::Enter, KeyModifiers::NONE, &mut buffer, None);
+        assert_eq!(outcome, MenuOutcome::Accepted);
+        assert!(!menu.is_active());
+        assert_eq!(buffer.as_str(), "git-clone ");
+    }
+
+    #[test]
+    fn dismiss_reverts_buffer_preview() {
+        let helper = LineEditorHelper::new();
+        helper.set_binaries(vec!["cargo-build".to_string(), "cargo-check".to_string()]);
+
+        let mut menu = LshMenu::new("completion_menu", helper);
+        let mut buffer = LineBuffer::new();
+        buffer.insert_str("cargo-");
+
+        menu.activate(&mut buffer, None);
+        menu.handle_key(KeyCode::Tab, KeyModifiers::NONE, &mut buffer, None);
+        assert_eq!(buffer.as_str(), "cargo-build");
+
+        // Esc dismisses and reverts buffer
+        let outcome = menu.handle_key(KeyCode::Esc, KeyModifiers::NONE, &mut buffer, None);
+        assert_eq!(outcome, MenuOutcome::Dismissed);
+        assert!(!menu.is_active());
+        assert_eq!(buffer.as_str(), "cargo-");
+    }
+
+    #[test]
+    fn single_candidate_accepted_immediately() {
+        let helper = LineEditorHelper::new();
+        helper.set_binaries(vec!["unique_cmd".to_string()]);
+
+        let mut menu = LshMenu::new("completion_menu", helper);
+        let mut buffer = LineBuffer::new();
+        buffer.insert_str("uniq");
+
+        menu.activate(&mut buffer, None);
+        assert!(!menu.is_active());
+        assert_eq!(buffer.as_str(), "unique_cmd ");
+    }
+
+    #[test]
+    fn live_typing_filters_and_highlights_candidates() {
+        let helper = LineEditorHelper::new();
+        helper.set_binaries(vec![
+            "cargo-build".to_string(),
+            "cargo-check".to_string(),
+            "cargo-clippy".to_string(),
+            "cat".to_string(),
+        ]);
+
+        let mut menu = LshMenu::new("completion_menu", helper);
+        let mut buffer = LineBuffer::new();
+        buffer.insert_str("ca");
+
+        menu.activate(&mut buffer, None);
+        assert!(menu.is_active());
+        assert_eq!(menu.items().len(), 4);
+
+        // Type 'r' -> buffer becomes "car", items filter to cargo-*
+        let outcome = menu.handle_key(KeyCode::Char('r'), KeyModifiers::NONE, &mut buffer, None);
+        assert_eq!(outcome, MenuOutcome::Consumed);
+        assert!(menu.is_active());
+        assert_eq!(buffer.as_str(), "car");
+        assert_eq!(menu.items().len(), 3);
+        assert!(menu.items().iter().all(|it| it.replacement.starts_with("cargo")));
+
+        // Type 'b' -> buffer becomes "carb", items filter to cargo-build via fuzzy match
+        let outcome = menu.handle_key(KeyCode::Char('b'), KeyModifiers::NONE, &mut buffer, None);
+        assert_eq!(outcome, MenuOutcome::Consumed);
+        assert!(menu.is_active());
+        assert_eq!(buffer.as_str(), "carb");
+        assert_eq!(menu.items().len(), 1);
+        assert_eq!(menu.items()[0].replacement, "cargo-build");
+
+        // Tab commits the single match
+        let outcome = menu.handle_key(KeyCode::Tab, KeyModifiers::NONE, &mut buffer, None);
+        assert_eq!(outcome, MenuOutcome::Accepted);
+        assert!(!menu.is_active());
+        assert_eq!(buffer.as_str(), "cargo-build ");
+    }
+
+    #[test]
+    fn live_backspace_widens_candidates() {
+        let helper = LineEditorHelper::new();
+        helper.set_binaries(vec![
+            "cargo".to_string(),
+            "cat".to_string(),
+            "cd".to_string(),
+        ]);
+
+        let mut menu = LshMenu::new("completion_menu", helper);
+        let mut buffer = LineBuffer::new();
+        buffer.insert_str("c");
+
+        menu.activate(&mut buffer, None);
+        assert!(menu.is_active());
+        let initial_len = menu.items().len();
+
+        // Type 'a' -> narrows to cargo and cat
+        menu.handle_key(KeyCode::Char('a'), KeyModifiers::NONE, &mut buffer, None);
+        assert_eq!(buffer.as_str(), "ca");
+        assert_eq!(menu.items().len(), 2);
+
+        // Type 'r' -> narrows to cargo
+        menu.handle_key(KeyCode::Char('r'), KeyModifiers::NONE, &mut buffer, None);
+        assert_eq!(buffer.as_str(), "car");
+        assert_eq!(menu.items().len(), 1);
+        assert_eq!(menu.items()[0].replacement, "cargo");
+
+        // Backspace -> widens back to 2 items
+        let outcome = menu.handle_key(KeyCode::Backspace, KeyModifiers::NONE, &mut buffer, None);
+        assert_eq!(outcome, MenuOutcome::Consumed);
+        assert!(menu.is_active());
+        assert_eq!(buffer.as_str(), "ca");
+        assert_eq!(menu.items().len(), 2);
+
+        // Backspace again -> widens to all initial items
+        let outcome = menu.handle_key(KeyCode::Backspace, KeyModifiers::NONE, &mut buffer, None);
+        assert_eq!(outcome, MenuOutcome::Consumed);
+        assert!(menu.is_active());
+        assert_eq!(buffer.as_str(), "c");
+        assert_eq!(menu.items().len(), initial_len);
+    }
+
+    #[test]
+    fn typing_no_match_dismisses_menu_preserving_buffer() {
+        let helper = LineEditorHelper::new();
+        helper.set_binaries(vec!["cargo".to_string(), "cat".to_string()]);
+
+        let mut menu = LshMenu::new("completion_menu", helper);
+        let mut buffer = LineBuffer::new();
+        buffer.insert_str("ca");
+
+        menu.activate(&mut buffer, None);
+        assert!(menu.is_active());
+
+        // Type 'z' -> no match for "caz"
+        let outcome = menu.handle_key(KeyCode::Char('z'), KeyModifiers::NONE, &mut buffer, None);
+        assert_eq!(outcome, MenuOutcome::Consumed);
+        assert!(!menu.is_active());
+        assert_eq!(buffer.as_str(), "caz");
+    }
+
+    #[test]
+    fn navigation_preview_reverts_when_typing_continues() {
+        let helper = LineEditorHelper::new();
+        helper.set_binaries(vec!["cargo".to_string(), "cat".to_string()]);
+
+        let mut menu = LshMenu::new("completion_menu", helper);
+        let mut buffer = LineBuffer::new();
+        buffer.insert_str("ca");
+
+        menu.activate(&mut buffer, None);
+
+        // Navigate with Down -> previews the first candidate ("cat")
+        menu.handle_key(KeyCode::Down, KeyModifiers::NONE, &mut buffer, None);
+        assert_eq!(buffer.as_str(), "cat");
+
+        // Type 'r' -> reverts preview of "cat", appends 'r' to "ca" -> "car"
+        let outcome = menu.handle_key(KeyCode::Char('r'), KeyModifiers::NONE, &mut buffer, None);
+        assert_eq!(outcome, MenuOutcome::Consumed);
+        assert!(menu.is_active());
+        assert_eq!(buffer.as_str(), "car");
+        assert_eq!(menu.items().len(), 1);
+        assert_eq!(menu.items()[0].replacement, "cargo");
     }
 }

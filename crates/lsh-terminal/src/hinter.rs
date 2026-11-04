@@ -1,12 +1,10 @@
-use nu_ansi_term::{Color, Style};
-use reedline::{Hinter, History, SearchQuery};
+use lsh_input::{Hinter, History};
 
 use crate::editor::LshCompleter;
 
 pub struct LshHinter {
     completer: LshCompleter,
-    style: Style,
-    current_hint: String,
+    history: Option<Box<dyn History>>,
     min_chars: usize,
 }
 
@@ -14,14 +12,13 @@ impl LshHinter {
     pub fn new(completer: LshCompleter) -> Self {
         Self {
             completer,
-            style: Style::new().fg(Color::Fixed(242)),
-            current_hint: String::new(),
+            history: None,
             min_chars: 1,
         }
     }
 
-    pub fn with_style(mut self, style: Style) -> Self {
-        self.style = style;
+    pub fn with_history(mut self, history: impl History + 'static) -> Self {
+        self.history = Some(Box::new(history));
         self
     }
 
@@ -32,98 +29,65 @@ impl LshHinter {
 }
 
 impl Hinter for LshHinter {
-    fn handle(
-        &mut self,
-        line: &str,
-        pos: usize,
-        history: &dyn History,
-        use_ansi_coloring: bool,
-        _cwd: &str,
-    ) -> String {
-        self.current_hint = String::new();
+    fn hint(&self, line: &str, cursor: usize) -> Option<String> {
+        if line.chars().count() < self.min_chars || cursor != line.len() {
+            return None;
+        }
 
-        if line.chars().count() >= self.min_chars {
-            // 1. Try history-based ghost text first (highest relevance)
-            let history_hint = history
-                .search(SearchQuery::last_with_prefix(
-                    line.to_string(),
-                    history.session(),
-                ))
-                .unwrap_or_default()
-                .first()
-                .and_then(|entry| {
-                    entry
-                        .command_line
-                        .get(line.len()..)
-                        .filter(|suffix| !suffix.is_empty())
-                        .map(|s| s.to_string())
-                });
-
-            if let Some(hint) = history_hint {
-                self.current_hint = hint;
-            } else if pos == line.len() && !line.is_empty() {
-                // 2. Fallback: single / top completion candidate when typing at the end of the line
-                let (start, items) = self.completer.get_candidates(line, pos);
-                if !items.is_empty() {
-                    let replacement = &items[0].replacement;
-                    let typed_prefix = &line[start..pos];
-                    if !typed_prefix.is_empty()
-                        && replacement.starts_with(typed_prefix)
-                        && replacement.len() > typed_prefix.len()
-                    {
-                        self.current_hint = replacement[typed_prefix.len()..].to_string();
-                    }
+        // 1. Check history for ghost text first (highest relevance)
+        if let Some(history) = &self.history {
+            for i in (0..history.len()).rev() {
+                if let Some(entry) = history.get(i)
+                    && entry.starts_with(line)
+                    && entry.len() > line.len()
+                {
+                    return Some(entry[line.len()..].to_string());
                 }
             }
         }
 
-        if use_ansi_coloring && !self.current_hint.is_empty() {
-            self.style.paint(&self.current_hint).to_string()
-        } else {
-            self.current_hint.clone()
-        }
-    }
-
-    fn complete_hint(&self) -> String {
-        self.current_hint.clone()
-    }
-
-    fn next_hint_token(&self) -> String {
-        let mut token = String::new();
-        for c in self.current_hint.chars() {
-            token.push(c);
-            if c.is_whitespace() {
-                break;
+        // 2. Fallback: single / top completion candidate
+        if !line.is_empty() {
+            let (start, items) = self.completer.get_candidates(line, cursor);
+            if !items.is_empty() {
+                let replacement = &items[0].replacement;
+                let typed_prefix = &line[start..cursor];
+                if !typed_prefix.is_empty()
+                    && replacement.starts_with(typed_prefix)
+                    && replacement.len() > typed_prefix.len()
+                {
+                    return Some(replacement[typed_prefix.len()..].to_string());
+                }
             }
         }
-        token
+
+        None
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use reedline::FileBackedHistory;
+    use lsh_input::DefaultHistory;
+
+    #[test]
+    fn hints_from_history() {
+        let completer = LshCompleter::new();
+        let mut history = DefaultHistory::new(10);
+        history.append("git commit -m 'initial'");
+
+        let hinter = LshHinter::new(completer).with_history(history);
+        let hint = hinter.hint("git com", 7);
+        assert_eq!(hint.as_deref(), Some("mit -m 'initial'"));
+    }
 
     #[test]
     fn hints_from_completion_fallback() {
         let completer = LshCompleter::new();
         completer.set_binaries(vec!["cargo".to_string()]);
-        let mut hinter = LshHinter::new(completer);
-        let history = FileBackedHistory::default();
-        let hint = hinter.handle("car", 3, &history, false, "");
-        assert_eq!(hint, "go");
-        assert_eq!(hinter.complete_hint(), "go");
-        assert_eq!(hinter.next_hint_token(), "go");
-    }
 
-    #[test]
-    fn hints_styled_with_dim_grey() {
-        let completer = LshCompleter::new();
-        completer.set_binaries(vec!["cargo".to_string()]);
-        let mut hinter = LshHinter::new(completer);
-        let history = FileBackedHistory::default();
-        let hint = hinter.handle("car", 3, &history, true, "");
-        assert_eq!(hint, "\x1b[38;5;242mgo\x1b[0m");
+        let hinter = LshHinter::new(completer);
+        let hint = hinter.hint("car", 3);
+        assert_eq!(hint.as_deref(), Some("go"));
     }
 }

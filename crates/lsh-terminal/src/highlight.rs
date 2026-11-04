@@ -1,5 +1,5 @@
-use nu_ansi_term::{Color, Style};
-use reedline::{Highlighter, StyledText};
+use crossterm::style::{Color, ContentStyle, Stylize};
+use lsh_input::{StyledText, TextFormatter};
 
 use lsh_syntax::lexer::{
     self,
@@ -22,10 +22,10 @@ impl SyntaxHighlighter {
         Self
     }
 
-    pub fn highlight_line(&self, line: &str) -> StyledText {
+    pub fn highlight_styled(&self, line: &str) -> StyledText {
         let mut styled = StyledText::new();
         let Ok(tokens) = lexer::lex_input(0, line) else {
-            styled.push((Style::default(), line.to_string()));
+            styled.push(ContentStyle::default(), line);
             return styled;
         };
 
@@ -33,7 +33,7 @@ impl SyntaxHighlighter {
             .iter()
             .all(|token| matches!(token.kind, TokenKind::EOF))
         {
-            styled.push((Style::default(), line.to_string()));
+            styled.push(ContentStyle::default(), line);
             return styled;
         }
 
@@ -91,27 +91,27 @@ impl SyntaxHighlighter {
             }
 
             if start > cursor {
-                styled.push((Style::default(), line[cursor..start].to_string()));
+                styled.push(ContentStyle::default(), &line[cursor..start]);
             }
 
             let span = &line[start..end];
-            let style = token_style(token, span, is_command_sub_close).unwrap_or_default();
-            styled.push((style, span.to_string()));
+            let style = token_content_style(token, span, is_command_sub_close).unwrap_or_default();
+            styled.push(style, span);
 
             cursor = end;
         }
 
         if cursor < line.len() {
-            styled.push((Style::default(), line[cursor..].to_string()));
+            styled.push(ContentStyle::default(), &line[cursor..]);
         }
 
         styled
     }
 }
 
-impl Highlighter for SyntaxHighlighter {
-    fn highlight(&self, line: &str, _cursor: usize) -> StyledText {
-        self.highlight_line(line)
+impl TextFormatter for SyntaxHighlighter {
+    fn format(&self, line: &str) -> StyledText {
+        self.highlight_styled(line)
     }
 }
 
@@ -138,9 +138,13 @@ fn token_end(line: &str, tokens: &[Token], index: usize) -> usize {
     end
 }
 
-fn token_style(token: &Token, _span: &str, is_command_sub_close: bool) -> Option<Style> {
+fn token_content_style(
+    token: &Token,
+    _span: &str,
+    is_command_sub_close: bool,
+) -> Option<ContentStyle> {
     if matches!(token.kind, TokenKind::RightParen) && is_command_sub_close {
-        return Some(Style::new().fg(Color::Fixed(208)));
+        return Some(ContentStyle::new().with(Color::AnsiValue(208)));
     }
 
     match token.kind {
@@ -154,18 +158,18 @@ fn token_style(token: &Token, _span: &str, is_command_sub_close: bool) -> Option
         | TokenKind::Continue
         | TokenKind::Fn
         | TokenKind::TypeOf
-        | TokenKind::Return => Some(Style::new().bold().fg(Color::Magenta)),
-        TokenKind::Variable(_) => Some(Style::new().fg(Color::Cyan)),
-        TokenKind::Number(_) | TokenKind::Bool(_) => Some(Style::new().fg(Color::Yellow)),
+        | TokenKind::Return => Some(ContentStyle::new().magenta().bold()),
+        TokenKind::Variable(_) => Some(ContentStyle::new().cyan()),
+        TokenKind::Number(_) | TokenKind::Bool(_) => Some(ContentStyle::new().yellow()),
         TokenKind::QuotedString(_) | TokenKind::DoubleQuotedString(_) => {
-            Some(Style::new().fg(Color::Green))
+            Some(ContentStyle::new().green())
         }
         TokenKind::Pipe
         | TokenKind::And
         | TokenKind::Or
         | TokenKind::DollarLeftParen
         | TokenKind::FatArrow
-        | TokenKind::ThinArrow => Some(Style::new().fg(Color::Fixed(208))),
+        | TokenKind::ThinArrow => Some(ContentStyle::new().with(Color::AnsiValue(208))),
         TokenKind::Plus
         | TokenKind::Minus
         | TokenKind::PlusEquals
@@ -182,7 +186,7 @@ fn token_style(token: &Token, _span: &str, is_command_sub_close: bool) -> Option
         | TokenKind::LessThan
         | TokenKind::LtEquals
         | TokenKind::Not
-        | TokenKind::NotEquals => Some(Style::new().fg(Color::White)),
+        | TokenKind::NotEquals => Some(ContentStyle::new().white()),
         TokenKind::LeftCurly
         | TokenKind::RightCurly
         | TokenKind::LeftParen
@@ -191,7 +195,7 @@ fn token_style(token: &Token, _span: &str, is_command_sub_close: bool) -> Option
         | TokenKind::RightBracket
         | TokenKind::Comma
         | TokenKind::Dot
-        | TokenKind::Semicolon => Some(Style::new().dimmed()),
+        | TokenKind::Semicolon => Some(ContentStyle::new().dim()),
         TokenKind::String(_) | TokenKind::NewLine | TokenKind::EOF => None,
     }
 }
@@ -204,35 +208,35 @@ mod tests {
     fn command_sub_closing_paren_matches_dollar_left_paren_style() {
         let highlighter = SyntaxHighlighter::new();
         let input = "echo $(greet \"text\")";
-        let output = highlighter.highlight(input, 0);
+        let output = highlighter.highlight_styled(input);
 
-        let sub_style = Style::new().fg(Color::Fixed(208));
-        assert!(output.buffer.contains(&(sub_style, "$(".to_string())));
-        assert!(output.buffer.contains(&(sub_style, ")".to_string())));
+        let sub_style = ContentStyle::new().with(Color::AnsiValue(208));
+        assert!(output.spans().contains(&(sub_style, "$(".to_string())));
+        assert!(output.spans().contains(&(sub_style, ")".to_string())));
     }
 
     #[test]
     fn regular_parens_retain_dim_punctuation_style() {
         let highlighter = SyntaxHighlighter::new();
         let input = "fn greet(who) {}";
-        let output = highlighter.highlight(input, 0);
+        let output = highlighter.highlight_styled(input);
 
-        let dim_style = Style::new().dimmed();
-        let sub_style = Style::new().fg(Color::Fixed(208));
-        assert!(output.buffer.contains(&(dim_style, "(".to_string())));
-        assert!(output.buffer.contains(&(dim_style, ")".to_string())));
-        assert!(!output.buffer.contains(&(sub_style, ")".to_string())));
+        let dim_style = ContentStyle::new().dim();
+        let sub_style = ContentStyle::new().with(Color::AnsiValue(208));
+        assert!(output.spans().contains(&(dim_style, "(".to_string())));
+        assert!(output.spans().contains(&(dim_style, ")".to_string())));
+        assert!(!output.spans().contains(&(sub_style, ")".to_string())));
     }
 
     #[test]
     fn nested_command_substitutions_match_correctly() {
         let highlighter = SyntaxHighlighter::new();
         let input = "echo $(cat $(get-path))";
-        let output = highlighter.highlight(input, 0);
+        let output = highlighter.highlight_styled(input);
 
-        let sub_style = Style::new().fg(Color::Fixed(208));
+        let sub_style = ContentStyle::new().with(Color::AnsiValue(208));
         let occurrences = output
-            .buffer
+            .spans()
             .iter()
             .filter(|(s, t)| *s == sub_style && t == ")")
             .count();

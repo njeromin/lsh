@@ -38,21 +38,14 @@ impl From<&str> for CompletionType {
 }
 
 impl CompletionType {
-    pub fn create_reedline_menu(
-        &self,
-        completer: &crate::editor::LshCompleter,
-    ) -> reedline::ReedlineMenu {
+    pub fn create_menu(&self, completer: &crate::editor::LshCompleter) -> Box<dyn lsh_input::Menu> {
         match self {
             CompletionType::Menu => {
                 let menu = crate::menu::LshMenu::new("completion_menu", completer.clone());
-                reedline::ReedlineMenu::EngineCompleter(Box::new(menu))
+                Box::new(menu)
             }
             CompletionType::List | CompletionType::Circular => {
-                use reedline::MenuBuilder;
-                let col = reedline::ColumnarMenu::default()
-                    .with_name("completion_menu")
-                    .with_marker("");
-                reedline::ReedlineMenu::EngineCompleter(Box::new(col))
+                Box::new(lsh_input::BasicMenu::default())
             }
         }
     }
@@ -79,111 +72,20 @@ impl From<&str> for EditMode {
     }
 }
 
+impl From<EditMode> for lsh_input::EditMode {
+    fn from(mode: EditMode) -> Self {
+        match mode {
+            EditMode::Default | EditMode::Emacs => lsh_input::EditMode::Emacs,
+            EditMode::Vi => lsh_input::EditMode::Vi,
+        }
+    }
+}
+
 impl EditMode {
-    pub fn create_reedline_edit_mode(&self) -> Box<dyn reedline::EditMode> {
+    pub fn create_keymap(&self) -> lsh_input::Keymap {
         match self {
-            EditMode::Default | EditMode::Emacs => {
-                let mut keybindings = reedline::default_emacs_keybindings();
-                keybindings.add_binding(
-                    reedline::KeyModifiers::NONE,
-                    reedline::KeyCode::Tab,
-                    reedline::ReedlineEvent::UntilFound(vec![
-                        reedline::ReedlineEvent::Menu("completion_menu".to_string()),
-                        reedline::ReedlineEvent::MenuNext,
-                    ]),
-                );
-                keybindings.add_binding(
-                    reedline::KeyModifiers::SHIFT,
-                    reedline::KeyCode::BackTab,
-                    reedline::ReedlineEvent::MenuPrevious,
-                );
-                keybindings.add_binding(
-                    reedline::KeyModifiers::CONTROL,
-                    reedline::KeyCode::Char('n'),
-                    reedline::ReedlineEvent::UntilFound(vec![
-                        reedline::ReedlineEvent::MenuDown,
-                        reedline::ReedlineEvent::Down,
-                    ]),
-                );
-                keybindings.add_binding(
-                    reedline::KeyModifiers::CONTROL,
-                    reedline::KeyCode::Char('p'),
-                    reedline::ReedlineEvent::UntilFound(vec![
-                        reedline::ReedlineEvent::MenuUp,
-                        reedline::ReedlineEvent::Up,
-                    ]),
-                );
-                keybindings.add_binding(
-                    reedline::KeyModifiers::NONE,
-                    reedline::KeyCode::PageDown,
-                    reedline::ReedlineEvent::UntilFound(vec![
-                        reedline::ReedlineEvent::MenuPageNext,
-                        reedline::ReedlineEvent::Down,
-                    ]),
-                );
-                keybindings.add_binding(
-                    reedline::KeyModifiers::NONE,
-                    reedline::KeyCode::PageUp,
-                    reedline::ReedlineEvent::UntilFound(vec![
-                        reedline::ReedlineEvent::MenuPagePrevious,
-                        reedline::ReedlineEvent::Up,
-                    ]),
-                );
-                Box::new(reedline::Emacs::new(keybindings))
-            }
-            EditMode::Vi => {
-                let mut insert_keybindings = reedline::default_vi_insert_keybindings();
-                insert_keybindings.add_binding(
-                    reedline::KeyModifiers::NONE,
-                    reedline::KeyCode::Tab,
-                    reedline::ReedlineEvent::UntilFound(vec![
-                        reedline::ReedlineEvent::Menu("completion_menu".to_string()),
-                        reedline::ReedlineEvent::MenuNext,
-                    ]),
-                );
-                insert_keybindings.add_binding(
-                    reedline::KeyModifiers::SHIFT,
-                    reedline::KeyCode::BackTab,
-                    reedline::ReedlineEvent::MenuPrevious,
-                );
-                insert_keybindings.add_binding(
-                    reedline::KeyModifiers::CONTROL,
-                    reedline::KeyCode::Char('n'),
-                    reedline::ReedlineEvent::UntilFound(vec![
-                        reedline::ReedlineEvent::MenuDown,
-                        reedline::ReedlineEvent::Down,
-                    ]),
-                );
-                insert_keybindings.add_binding(
-                    reedline::KeyModifiers::CONTROL,
-                    reedline::KeyCode::Char('p'),
-                    reedline::ReedlineEvent::UntilFound(vec![
-                        reedline::ReedlineEvent::MenuUp,
-                        reedline::ReedlineEvent::Up,
-                    ]),
-                );
-                insert_keybindings.add_binding(
-                    reedline::KeyModifiers::NONE,
-                    reedline::KeyCode::PageDown,
-                    reedline::ReedlineEvent::UntilFound(vec![
-                        reedline::ReedlineEvent::MenuPageNext,
-                        reedline::ReedlineEvent::Down,
-                    ]),
-                );
-                insert_keybindings.add_binding(
-                    reedline::KeyModifiers::NONE,
-                    reedline::KeyCode::PageUp,
-                    reedline::ReedlineEvent::UntilFound(vec![
-                        reedline::ReedlineEvent::MenuPagePrevious,
-                        reedline::ReedlineEvent::Up,
-                    ]),
-                );
-                Box::new(reedline::Vi::new(
-                    insert_keybindings,
-                    reedline::default_vi_normal_keybindings(),
-                    reedline::default_vi_visual_keybindings(),
-                ))
-            }
+            EditMode::Default | EditMode::Emacs => lsh_input::Keymap::default_emacs(),
+            EditMode::Vi => lsh_input::Keymap::default_vi_insert(),
         }
     }
 }
@@ -330,15 +232,9 @@ mod tests {
 
     #[test]
     fn edit_mode_default_converts_to_emacs() {
-        let default_mode = EditMode::Default.create_reedline_edit_mode();
-        assert_eq!(default_mode.edit_mode(), reedline::PromptEditMode::Emacs);
-        let emacs_mode = EditMode::Emacs.create_reedline_edit_mode();
-        assert_eq!(emacs_mode.edit_mode(), reedline::PromptEditMode::Emacs);
-        let vi_mode = EditMode::Vi.create_reedline_edit_mode();
-        assert!(matches!(
-            vi_mode.edit_mode(),
-            reedline::PromptEditMode::Vi(_)
-        ));
+        let default_mode = EditMode::Default.create_keymap();
+        let emacs_mode = EditMode::Emacs.create_keymap();
+        assert_eq!(default_mode, emacs_mode);
     }
 
     #[test]

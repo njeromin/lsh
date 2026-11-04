@@ -1,0 +1,15 @@
+[package]
+name = "lsh-input"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+default = ["system-clipboard"]
+system-clipboard = ["dep:arboard"]
+
+[dependencies]
+crossterm = "0.29.0"
+unicode-width = "0.2.3"
+unicode-segmentation = "1.12.0"
+arboard = { version = "3.7.0", default-features = false, features = ["wayland-data-control"], optional = true }
+

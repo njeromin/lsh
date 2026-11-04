@@ -1,11 +1,12 @@
 [workspace]
 members = [
-    ".",
-    "crates/lsh-syntax",
-    "crates/lsh-completions",
-    "crates/lsh-eval",
-    "crates/lsh-terminal",
-    "crates/lsh-sys",
+  ".",
+  "crates/lsh-syntax",
+  "crates/lsh-completions",
+  "crates/lsh-eval",
+  "crates/lsh-terminal",
+  "crates/lsh-input",
+  "crates/lsh-sys",
 ]
 resolver = "2"
 
@@ -20,7 +21,7 @@ lsh-completions = { path = "crates/lsh-completions" }
 lsh-eval = { path = "crates/lsh-eval" }
 lsh-terminal = { path = "crates/lsh-terminal" }
 lsh-sys = { path = "crates/lsh-sys" }
+lsh-input = { path = "crates/lsh-input" }
 crossterm = "0.29.0"
 dirs = "6.0.0"
-reedline = "0.52.1"
 nu-ansi-term = "0.50.1"

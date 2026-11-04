@@ -3988,11 +3988,7 @@ mod tests {
         let path = eval.get_var(0, "path").expect("path exists");
         assert!(!path.to_string().is_empty());
         let rendered = eval.get_var(0, "rendered").expect("rendered exists");
-        assert!(
-            rendered
-                .to_string()
-                .contains(&format!("[{}]", path.to_string()))
-        );
+        assert!(rendered.to_string().contains(&format!("[{path}]")));
         assert!(rendered.to_string().ends_with("❯ "));
     }
 
