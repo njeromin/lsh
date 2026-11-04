@@ -1,13 +1,23 @@
 pub mod buffer;
+pub mod completer;
 pub mod editor;
 pub mod formatter;
+pub mod hinter;
+pub mod history;
 pub mod keymap;
+pub mod layout;
+pub mod menu;
 pub mod prompt;
 pub mod validator;
 
 pub use buffer::LineBuffer;
-pub use editor::{compute_screen_layout, normalise_paste, Editor, ScreenLayout, Signal};
+pub use completer::{Candidate, Completer};
+pub use editor::{Editor, Signal, normalise_paste};
 pub use formatter::{StyledText, TextFormatter};
+pub use hinter::{Hinter, default_next_hint_word};
+pub use history::{DefaultHistory, History};
 pub use keymap::{EditorAction, KeyCombo, Keymap};
-pub use prompt::{printable_width, strip_ansi, Prompt};
+pub use layout::{ScreenLayout, compute_screen_layout};
+pub use menu::{BasicMenu, Menu, MenuOutcome};
+pub use prompt::{Prompt, printable_width, strip_ansi};
 pub use validator::{DefaultValidator, DelimiterValidator, ValidationResult, Validator};

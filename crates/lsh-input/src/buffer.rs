@@ -58,6 +58,21 @@ impl LineBuffer {
         self.cursor
     }
 
+    /// Explicitly set the cursor position as a byte offset, clamping to content bounds.
+    pub fn set_cursor(&mut self, pos: usize) {
+        self.cursor = pos.min(self.content.len());
+    }
+
+    /// Replaces the byte range `range` with `replacement` and positions cursor at the end of the inserted replacement.
+    pub fn replace_range(&mut self, range: std::ops::Range<usize>, replacement: &str) {
+        let start = range.start.min(self.content.len());
+        let end = range.end.min(self.content.len());
+        if start <= end {
+            self.content.replace_range(start..end, replacement);
+            self.cursor = start + replacement.len();
+        }
+    }
+
     /// Total number of lines (separated by '\n') in the buffer.
     pub fn line_count(&self) -> usize {
         self.content.split('\n').count()
@@ -81,8 +96,7 @@ impl LineBuffer {
         }
 
         let col_byte_offset = self.cursor - line_start_byte;
-        let col_visual_width =
-            UnicodeWidthStr::width(&self.content[line_start_byte..self.cursor]);
+        let col_visual_width = UnicodeWidthStr::width(&self.content[line_start_byte..self.cursor]);
 
         CursorPosition {
             line_index,
@@ -157,7 +171,7 @@ impl LineBuffer {
         // If the text before cursor on this line is entirely spaces (at least 1)
         if !prefix.is_empty() && prefix.chars().all(|c| c == ' ') {
             let num_spaces = prefix.len();
-            let to_delete = if num_spaces % indent_size == 0 {
+            let to_delete = if num_spaces.is_multiple_of(indent_size) {
                 indent_size
             } else {
                 num_spaces % indent_size
@@ -201,10 +215,9 @@ impl LineBuffer {
             return false;
         }
 
-        let prev_idx = self
-            .content[..self.cursor]
+        let prev_idx = self.content[..self.cursor]
             .grapheme_indices(true)
-            .last()
+            .next_back()
             .map(|(idx, _)| idx)
             .unwrap_or(0);
 
@@ -237,10 +250,9 @@ impl LineBuffer {
             return false;
         }
 
-        let prev_idx = self
-            .content[..self.cursor]
+        let prev_idx = self.content[..self.cursor]
             .grapheme_indices(true)
-            .last()
+            .next_back()
             .map(|(idx, _)| idx)
             .unwrap_or(0);
 
@@ -434,7 +446,7 @@ impl LineBuffer {
         let prefix = &self.content[..self.cursor];
         let mut chars = prefix.char_indices().rev().peekable();
 
-        // 1. Skip trailing whitespace
+        // Skip trailing whitespace
         while let Some(&(_, c)) = chars.peek() {
             if c.is_whitespace() {
                 chars.next();
@@ -443,7 +455,7 @@ impl LineBuffer {
             }
         }
 
-        // 2. Skip non-whitespace to find start of word
+        // Skip non-whitespace to find start of word
         while let Some(&(_, c)) = chars.peek() {
             if !c.is_whitespace() {
                 chars.next();
@@ -459,7 +471,7 @@ impl LineBuffer {
         let suffix = &self.content[self.cursor..];
         let mut chars = suffix.char_indices().peekable();
 
-        // 1. Skip non-whitespace
+        // Skip non-whitespace
         while let Some(&(_, c)) = chars.peek() {
             if !c.is_whitespace() {
                 chars.next();
@@ -468,7 +480,7 @@ impl LineBuffer {
             }
         }
 
-        // 2. Skip whitespace to find start of next word
+        // Skip whitespace to find start of next word
         while let Some(&(_, c)) = chars.peek() {
             if c.is_whitespace() {
                 chars.next();
@@ -504,11 +516,11 @@ mod tests {
         buf.move_word_left();
         assert_eq!(buf.cursor(), 6); // at "world"
 
-        buf.insert_str("brave ");
-        assert_eq!(buf.as_str(), "hello brave world");
+        buf.insert_str("test ");
+        assert_eq!(buf.as_str(), "hello test world");
 
         buf.delete_prev_grapheme(); // delete space
-        assert_eq!(buf.as_str(), "hello braveworld");
+        assert_eq!(buf.as_str(), "hello testworld");
     }
 
     #[test]
@@ -626,5 +638,23 @@ mod tests {
 
         // dedent_line does not remove text when non-whitespace is present
         assert!(!buf.dedent_line(4));
+    }
+
+    #[test]
+    fn test_replace_range_and_set_cursor() {
+        let mut buf = LineBuffer::new();
+        buf.insert_str("cargo build");
+        assert_eq!(buf.cursor(), 11);
+
+        buf.replace_range(6..11, "clippy");
+        assert_eq!(buf.as_str(), "cargo clippy");
+        assert_eq!(buf.cursor(), 12);
+
+        buf.set_cursor(5);
+        assert_eq!(buf.cursor(), 5);
+
+        // Clamping past bounds
+        buf.set_cursor(100);
+        assert_eq!(buf.cursor(), 12);
     }
 }

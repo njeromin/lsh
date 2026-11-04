@@ -502,28 +502,26 @@ impl LshCompleter {
     }
 }
 
-impl reedline::Completer for LshCompleter {
-    fn complete(&mut self, line: &str, pos: usize) -> reedline::CompletionResult {
-        let (start, items) = self.get_candidates(line, pos);
+impl lsh_input::Completer for LshCompleter {
+    fn complete(&self, line: &str, cursor: usize) -> (usize, Vec<lsh_input::Candidate>) {
+        let (start, items) = self.get_candidates(line, cursor);
         let nerd_icons = *self.nerd_icons.read().unwrap();
-        let suggestions: Vec<reedline::Suggestion> = items
+        let candidates = items
             .into_iter()
             .map(|item| {
                 let is_dir = matches!(item.kind, CompletionKind::Directory);
                 let badge = badge_for_kind(&item.kind, nerd_icons);
-                reedline::Suggestion {
-                    value: item.replacement,
-                    display_override: Some(item.display),
-                    description: item.description,
-                    style: None,
-                    extra: Some(vec![badge]),
-                    span: reedline::Span { start, end: pos },
-                    append_whitespace: !is_dir,
-                    match_indices: None,
+                let display = format!("{} {}", badge, item.display);
+                let mut candidate = lsh_input::Candidate::new(item.replacement)
+                    .with_display(display)
+                    .with_append_space(!is_dir);
+                if let Some(desc) = item.description {
+                    candidate = candidate.with_description(desc);
                 }
+                candidate
             })
             .collect();
-        reedline::CompletionResult::fresh(suggestions)
+        (start, candidates)
     }
 }
 
@@ -680,15 +678,15 @@ mod tests {
 
     #[test]
     fn completes_with_menu_type_returns_suggestions() {
-        use reedline::Completer;
+        use lsh_input::Completer;
 
-        let mut helper = LineEditorHelper::new();
+        let helper = LineEditorHelper::new();
         helper.set_binaries(vec![]);
         helper.set_aliases(vec!["gco".to_string()]);
-        let result = helper.complete("gc", 2);
-        let suggestions = result.suggestions();
-        assert!(!suggestions.is_empty());
-        assert_eq!(suggestions[0].value, "gco");
+        let (start, candidates) = helper.complete("gc", 2);
+        assert_eq!(start, 0);
+        assert!(!candidates.is_empty());
+        assert_eq!(candidates[0].replacement, "gco");
     }
 
     #[test]

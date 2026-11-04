@@ -40,21 +40,29 @@ pub fn strip_ansi(s: &str) -> String {
     while let Some(c) = chars.next() {
         if c == '\x1b' {
             match chars.next() {
-                // CSI escape: \x1b[ ... [A-Za-z]
+                // CSI escape: \x1b[ ... [@-~]
                 Some('[') => {
                     for next in chars.by_ref() {
-                        if next.is_ascii_alphabetic() {
+                        if ('\x40'..='\x7e').contains(&next) {
                             break;
                         }
                     }
                 }
-                // OSC escape: \x1b] ... \x07 (or \x1b\)
+                // OSC escape: \x1b] ... \x07 (BEL) or \x1b\ (ST)
                 Some(']') => {
-                    for next in chars.by_ref() {
+                    while let Some(next) = chars.next() {
                         if next == '\x07' {
                             break;
                         }
+                        if next == '\x1b' && chars.peek() == Some(&'\\') {
+                            chars.next();
+                            break;
+                        }
                     }
+                }
+                // Character set selection: \x1b(X or \x1b)X
+                Some('(') | Some(')') => {
+                    chars.next();
                 }
                 _ => {}
             }
@@ -69,4 +77,35 @@ pub fn strip_ansi(s: &str) -> String {
 /// Computes the visual printable width on screen of a string, ignoring ANSI escape codes.
 pub fn printable_width(s: &str) -> usize {
     unicode_width::UnicodeWidthStr::width(strip_ansi(s).as_str())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_strip_ansi_csi_colors() {
+        let text = "\x1b[1;34mhello\x1b[0m \x1b[32mworld\x1b[0m";
+        assert_eq!(strip_ansi(text), "hello world");
+        assert_eq!(printable_width(text), 11);
+    }
+
+    #[test]
+    fn test_strip_ansi_osc_133_and_multiline() {
+        let prompt = "\n\x1b]133;A\x07\x1b[1;34m~/dev/lsh\x1b[0m (main)\n\x1b]133;A;k=s\x07\x1b[35m❯ \x1b[0m\x1b]133;B\x07";
+        let stripped = strip_ansi(prompt);
+        assert_eq!(stripped, "\n~/dev/lsh (main)\n❯ ");
+    }
+
+    #[test]
+    fn test_strip_ansi_osc_st_terminator() {
+        let text = "\x1b]0;Title\x1b\\prompt> ";
+        assert_eq!(strip_ansi(text), "prompt> ");
+    }
+
+    #[test]
+    fn test_strip_ansi_charset_reset() {
+        let text = "\x1b(Bhello";
+        assert_eq!(strip_ansi(text), "hello");
+    }
 }

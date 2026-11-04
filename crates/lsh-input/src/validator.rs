@@ -185,7 +185,10 @@ mod tests {
         let val = DefaultValidator;
         assert_eq!(val.validate("fn foo() {"), ValidationResult::Incomplete);
         assert_eq!(val.validate("echo 'unclosed"), ValidationResult::Incomplete);
-        assert_eq!(val.validate("echo \"unclosed"), ValidationResult::Incomplete);
+        assert_eq!(
+            val.validate("echo \"unclosed"),
+            ValidationResult::Incomplete
+        );
         assert_eq!(val.validate("echo [1, 2,"), ValidationResult::Incomplete);
         assert_eq!(val.validate("echo hello \\"), ValidationResult::Incomplete);
     }

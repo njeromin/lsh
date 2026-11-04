@@ -4,8 +4,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crossterm::{cursor, execute};
-use lsh_eval::{Evaluator, Value, exec_file};
+use crossterm::{cursor, execute, terminal::SetTitle};
+use dirs::home_dir;
+use lsh_eval::{Evaluator, Value, builtins::fmt_cwd::format_cwd, exec_file};
+use lsh_input::{DefaultHistory, DefaultValidator, Editor, Signal};
 use lsh_syntax::{
     SourceMap, debug, diagnostics::print_diagnostic, lexer, parser::Parser, print_error,
 };
@@ -13,7 +15,6 @@ use lsh_sys::signals::{init_interactive_terminal, reset_interrupted};
 use lsh_terminal::{
     CompletionType, EditMode, LshCompleter, LshHinter, LshPrompt, Options, SyntaxHighlighter, osc,
 };
-use reedline::{DefaultValidator, FileBackedHistory, Reedline, Signal};
 
 const DEFAULT_PROMPT: &str = "\x1b[35m›\x1b[0m ";
 
@@ -69,27 +70,27 @@ fn interactive_session(
     }
 
     let history_path = config_dir.join("history.txt");
-    let history = Box::new(FileBackedHistory::with_file(1000, history_path)?);
+    let history = std::sync::Arc::new(std::sync::RwLock::new(DefaultHistory::with_file(
+        1000,
+        history_path,
+    )?));
 
     let mut completer = LshCompleter::new();
     completer.set_completion_registry(std::sync::Arc::clone(&eval.completion_registry));
 
-    let hinter = Box::new(LshHinter::new(completer.clone()));
-    let validator = Box::new(DefaultValidator);
-    let highlighter = Box::new(SyntaxHighlighter::new());
-    let initial_menu = CompletionType::Menu.create_reedline_menu(&completer);
+    let hinter = LshHinter::new(completer.clone()).with_history(std::sync::Arc::clone(&history));
+    let validator = DefaultValidator;
+    let highlighter = SyntaxHighlighter::new();
+    let initial_menu = CompletionType::Menu.create_menu(&completer);
 
-    let mut line_editor = Reedline::create()
-        .use_kitty_keyboard_enhancement(true)
-        .with_quick_completions(true)
-        .with_partial_completions(true)
-        .with_history(history)
-        .with_highlighter(highlighter)
-        .with_completer(Box::new(completer.clone()))
+    let mut line_editor = Editor::new()
+        .with_history(std::sync::Arc::clone(&history))
+        .with_formatter(highlighter)
+        .with_completer(completer.clone())
         .with_hinter(hinter)
         .with_validator(validator)
         .with_menu(initial_menu)
-        .with_edit_mode(EditMode::Default.create_reedline_edit_mode());
+        .with_keymap(EditMode::Default.create_keymap());
 
     let mut last_applied_options: Option<Options> = None;
 
@@ -100,10 +101,8 @@ fn interactive_session(
             let opts = Options::from(opts);
 
             if last_applied_options.as_ref() != Some(&opts) {
-                line_editor = line_editor
-                    .with_edit_mode(opts.edit_mode.create_reedline_edit_mode())
-                    .clear_menus()
-                    .with_menu(opts.completion_type.create_reedline_menu(&completer));
+                line_editor.set_keymap(opts.edit_mode.create_keymap());
+                line_editor.set_menu(Some(opts.completion_type.create_menu(&completer)));
                 completer.set_completion_type(opts.completion_type);
                 completer.set_nerd_icons(opts.nerd_icons);
                 last_applied_options = Some(opts);
@@ -116,6 +115,10 @@ fn interactive_session(
         completer.set_aliases(commands);
         completer.set_vars(eval.get_var_names());
         completer.refresh_binaries_if_path_changed();
+
+        let cwd_path = current_dir().expect("Failed to get CWD");
+        let formatted_cwd = format_cwd(&cwd_path, &home_dir().expect("Failed to get home dir"));
+        execute!(io::stdout(), SetTitle(formatted_cwd)).expect("Failed to set tab title");
 
         let prompt_str = get_prompt(eval);
         let prompt = LshPrompt::new(prompt_str);
@@ -136,9 +139,6 @@ fn interactive_session(
             Ok(Signal::CtrlD) => {
                 println!();
                 break Ok(());
-            }
-            Ok(_) => {
-                continue;
             }
             Err(e) => {
                 print_error(&mut cerr, e.to_string().as_str());

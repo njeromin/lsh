@@ -7,147 +7,19 @@ use crossterm::{
         KeyModifiers,
     },
     queue,
-    style::Print,
+    style::{ContentStyle, Print, Stylize},
     terminal::{self, Clear, ClearType},
 };
-use unicode_segmentation::UnicodeSegmentation;
-use unicode_width::UnicodeWidthStr;
-
 use crate::buffer::LineBuffer;
+use crate::completer::Completer;
 use crate::formatter::{StyledText, TextFormatter};
+use crate::hinter::{Hinter, default_next_hint_word};
+use crate::history::History;
 use crate::keymap::{EditorAction, Keymap};
+pub use crate::layout::{ScreenLayout, compute_screen_layout};
+use crate::menu::{Menu, MenuOutcome};
 use crate::prompt::Prompt;
 use crate::validator::{ValidationResult, Validator};
-
-/// Screen layout coordinates for the cursor and the rendered text.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ScreenLayout {
-    /// Visual row of the cursor relative to the first row of the prompt (0-indexed).
-    pub cursor_row: usize,
-    /// Visual column of the cursor (0-indexed).
-    pub cursor_col: usize,
-    /// Visual row where rendered text ends (relative to the first row of the prompt).
-    pub end_row: usize,
-    /// Visual column where rendered text ends.
-    pub end_col: usize,
-}
-
-fn resolve_cursor_wrap(
-    (col, row): (usize, usize),
-    is_at_buffer_end: bool,
-    term_cols: usize,
-) -> (usize, usize) {
-    if col >= term_cols {
-        if is_at_buffer_end {
-            (term_cols.saturating_sub(1), row)
-        } else {
-            (0, row + 1)
-        }
-    } else {
-        (col, row)
-    }
-}
-
-/// Computes the visual screen layout (soft-wrapped rows and cursor coordinates)
-/// given the prompt, multiline indicator, line buffer, and terminal column width.
-pub fn compute_screen_layout(
-    prompt_stripped: &str,
-    indicator_stripped: &str,
-    line_buffer: &LineBuffer,
-    term_cols: usize,
-) -> ScreenLayout {
-    let term_cols = term_cols.max(1);
-    let mut current_row: usize = 0;
-    let mut current_col: usize = 0;
-    let mut cursor_screen: Option<(usize, usize)> = None;
-
-    let target_cursor_byte = line_buffer.cursor();
-    let mut current_byte_offset: usize = 0;
-
-    let lines: Vec<&str> = line_buffer.as_str().split('\n').collect();
-
-    for (line_idx, line) in lines.iter().enumerate() {
-        if line_idx > 0 {
-            current_row += 1;
-            current_col = 0;
-        }
-
-        let prefix = if line_idx == 0 {
-            prompt_stripped
-        } else {
-            indicator_stripped
-        };
-
-        // Advance through prefix graphemes
-        for grapheme in prefix.graphemes(true) {
-            let w = UnicodeWidthStr::width(grapheme);
-            if current_col >= term_cols {
-                current_row += 1;
-                current_col = 0;
-            }
-            if current_col > 0 && current_col + w > term_cols {
-                current_row += 1;
-                current_col = 0;
-            }
-            current_col += w;
-        }
-
-        // Check if cursor sits at the beginning of this line's content
-        if cursor_screen.is_none() && current_byte_offset == target_cursor_byte {
-            let is_at_end = current_byte_offset == line_buffer.len();
-            cursor_screen = Some(resolve_cursor_wrap(
-                (current_col, current_row),
-                is_at_end,
-                term_cols,
-            ));
-        }
-
-        // Advance through line content graphemes
-        for grapheme in line.graphemes(true) {
-            let w = UnicodeWidthStr::width(grapheme);
-            if current_col >= term_cols {
-                current_row += 1;
-                current_col = 0;
-            }
-            if current_col > 0 && current_col + w > term_cols {
-                current_row += 1;
-                current_col = 0;
-            }
-            current_col += w;
-            current_byte_offset += grapheme.len();
-
-            if cursor_screen.is_none() && current_byte_offset == target_cursor_byte {
-                let is_at_end = current_byte_offset == line_buffer.len();
-                cursor_screen = Some(resolve_cursor_wrap(
-                    (current_col, current_row),
-                    is_at_end,
-                    term_cols,
-                ));
-            }
-        }
-
-        // Account for '\n' byte between lines
-        if line_idx + 1 < lines.len() {
-            current_byte_offset += 1; // for '\n'
-        }
-    }
-
-    let end_col = if current_col >= term_cols {
-        term_cols.saturating_sub(1)
-    } else {
-        current_col
-    };
-    let end_row = current_row;
-
-    let (cursor_col, cursor_row) = cursor_screen.unwrap_or((end_col, end_row));
-
-    ScreenLayout {
-        cursor_row,
-        cursor_col,
-        end_row,
-        end_col,
-    }
-}
 
 /// Normalises pasted text by converting CRLF and CR line endings to standard LF (`\n`),
 /// preserving valid whitespace (`\n`, `\t`) and printable Unicode characters,
@@ -214,6 +86,11 @@ pub struct Editor<W: Write = BufWriter<Stdout>> {
     keymap: Keymap,
     formatter: Option<Box<dyn TextFormatter>>,
     validator: Option<Box<dyn Validator>>,
+    hinter: Option<Box<dyn Hinter>>,
+    hint_style: ContentStyle,
+    completer: Option<Box<dyn Completer>>,
+    menu: Option<Box<dyn Menu>>,
+    history: Option<Box<dyn History>>,
     indent_size: usize,
     terminal_width: Option<usize>,
 }
@@ -226,6 +103,11 @@ impl Editor<BufWriter<Stdout>> {
             keymap: Keymap::default(),
             formatter: None,
             validator: None,
+            hinter: None,
+            hint_style: ContentStyle::new().dark_grey(),
+            completer: None,
+            menu: None,
+            history: None,
             indent_size: 4,
             terminal_width: None,
         }
@@ -240,9 +122,99 @@ impl<W: Write> Editor<W> {
             keymap: Keymap::default(),
             formatter: None,
             validator: None,
+            hinter: None,
+            hint_style: ContentStyle::new().dark_grey(),
+            completer: None,
+            menu: None,
+            history: None,
             indent_size: 4,
             terminal_width: None,
         }
+    }
+
+    /// Set a custom hinter for providing inline ghost text suggestions.
+    pub fn with_hinter(mut self, hinter: impl Hinter + 'static) -> Self {
+        self.hinter = Some(Box::new(hinter));
+        self
+    }
+
+    /// Dynamically set or clear the hinter.
+    pub fn set_hinter(&mut self, hinter: Option<Box<dyn Hinter>>) {
+        self.hinter = hinter;
+    }
+
+    /// Immutably borrow the active hinter, if any.
+    pub fn hinter(&self) -> Option<&dyn Hinter> {
+        self.hinter.as_deref()
+    }
+
+    /// Set the styling for inline ghost text hints (defaults to dark grey / dim).
+    pub fn with_hint_style(mut self, style: ContentStyle) -> Self {
+        self.hint_style = style;
+        self
+    }
+
+    /// Get the current styling for inline ghost text hints.
+    pub fn hint_style(&self) -> ContentStyle {
+        self.hint_style
+    }
+
+    /// Set a custom completer for tab completion.
+    pub fn with_completer(mut self, completer: impl Completer + 'static) -> Self {
+        self.completer = Some(Box::new(completer));
+        self
+    }
+
+    /// Dynamically set or clear the completer.
+    pub fn set_completer(&mut self, completer: Option<Box<dyn Completer>>) {
+        self.completer = completer;
+    }
+
+    /// Immutably borrow the active completer, if any.
+    pub fn completer(&self) -> Option<&dyn Completer> {
+        self.completer.as_deref()
+    }
+
+    /// Set a custom completion menu.
+    pub fn with_menu(mut self, menu: impl Menu + 'static) -> Self {
+        self.menu = Some(Box::new(menu));
+        self
+    }
+
+    /// Dynamically set or clear the completion menu.
+    pub fn set_menu(&mut self, menu: Option<Box<dyn Menu>>) {
+        self.menu = menu;
+    }
+
+    /// Immutably borrow the active completion menu, if any.
+    pub fn menu(&self) -> Option<&dyn Menu> {
+        self.menu.as_deref()
+    }
+
+    /// Mutably borrow the active completion menu, if any.
+    pub fn menu_mut(&mut self) -> Option<&mut (dyn Menu + 'static)> {
+        self.menu.as_deref_mut()
+    }
+
+    /// Set a custom command history.
+    pub fn with_history(mut self, history: impl History + 'static) -> Self {
+        self.history = Some(Box::new(history));
+        self
+    }
+
+    /// Dynamically set or clear the command history.
+    pub fn set_history(&mut self, history: Option<Box<dyn History>>) {
+        self.history = history;
+    }
+
+    /// Immutably borrow the active command history, if any.
+    pub fn history(&self) -> Option<&dyn History> {
+        self.history.as_deref()
+    }
+
+    /// Mutably borrow the active command history, if any.
+    pub fn history_mut(&mut self) -> Option<&mut (dyn History + 'static)> {
+        self.history.as_deref_mut()
     }
 
     /// Set an explicit terminal column width override (useful for testing or fixed-width rendering).
@@ -327,14 +299,26 @@ impl<W: Write> Editor<W> {
         &mut self.keymap
     }
 
+    /// Dynamically update the active keymap.
+    pub fn set_keymap(&mut self, keymap: Keymap) {
+        self.keymap = keymap;
+    }
+
     /// Read a line of input with the given prompt.
     pub fn read_line(&mut self, prompt: impl Prompt) -> io::Result<Signal> {
         let mut line_buffer = LineBuffer::new();
+        if let Some(menu) = &mut self.menu {
+            menu.dismiss(&mut line_buffer);
+        }
+
+        let mut history_index: Option<usize> = None;
+        let mut saved_buffer: Option<String> = None;
+        let mut history_prefix: Option<String> = None;
 
         let _guard = RawModeGuard::new(&mut self.writer)?;
 
         // Initial render
-        let layout = self.render_line(&prompt, &line_buffer, 0)?;
+        let (layout, mut current_hint) = self.render_line(&prompt, &line_buffer, 0)?;
         let mut previous_cursor_row = layout.cursor_row;
         let mut last_end_row = layout.end_row;
 
@@ -353,10 +337,60 @@ impl<W: Write> Editor<W> {
                         continue;
                     }
 
+                    // Delegate to active menu first if menu is open
+                    if let Some(menu) = &mut self.menu
+                        && menu.is_active()
+                    {
+                        let outcome = menu.handle_key(
+                            code,
+                            modifiers,
+                            &mut line_buffer,
+                            self.completer.as_deref(),
+                        );
+                        match outcome {
+                            MenuOutcome::Consumed
+                            | MenuOutcome::Accepted
+                            | MenuOutcome::Dismissed => {
+                                let (layout, hint) =
+                                    self.render_line(&prompt, &line_buffer, previous_cursor_row)?;
+                                previous_cursor_row = layout.cursor_row;
+                                last_end_row = layout.end_row;
+                                current_hint = hint;
+                                continue;
+                            }
+                            MenuOutcome::PassThrough => {
+                                // Menu dismissed; fall through to normal editor handling
+                            }
+                        }
+                    }
+
                     let mut changed = false;
 
                     if let Some(action) = self.keymap.get(code, modifiers) {
                         match action {
+                            EditorAction::Complete => {
+                                if let Some(menu) = &mut self.menu {
+                                    menu.activate(&mut line_buffer, self.completer.as_deref());
+                                    changed = true;
+                                } else if let Some(completer) = &self.completer {
+                                    let (start, candidates) = completer
+                                        .complete(line_buffer.as_str(), line_buffer.cursor());
+                                    if candidates.len() == 1 {
+                                        let c = &candidates[0];
+                                        let mut rep = c.replacement.clone();
+                                        if c.append_space && !rep.ends_with(' ') {
+                                            rep.push(' ');
+                                        }
+                                        line_buffer
+                                            .replace_range(start..line_buffer.cursor(), &rep);
+                                        line_buffer.set_cursor(start + rep.len());
+                                        changed = true;
+                                    }
+                                }
+                            }
+                            EditorAction::CompletePrevious => {
+                                // If a menu is active, handle_key already dealt with reverse cycling
+                            }
                             EditorAction::Submit => {
                                 let is_complete = match &self.validator {
                                     Some(v) => matches!(
@@ -378,28 +412,40 @@ impl<W: Write> Editor<W> {
                                     }
                                     queue!(self.writer, Print("\r\n"))?;
                                     self.writer.flush()?;
-                                    return Ok(Signal::Success(line_buffer.into_string()));
+                                    let line = line_buffer.into_string();
+                                    if let Some(history) = &mut self.history {
+                                        history.append(&line);
+                                    }
+                                    return Ok(Signal::Success(line));
                                 } else {
                                     // Incomplete input -> query validator if we should indent
-                                    let should_indent = self
-                                        .validator
-                                        .as_ref()
-                                        .map_or(false, |v| v.should_indent(line_buffer.current_line_prefix()));
-                                    line_buffer
-                                        .insert_newline_preserve_indent(should_indent, self.indent_size);
+                                    let should_indent = self.validator.as_ref().is_some_and(|v| {
+                                        v.should_indent(line_buffer.current_line_prefix())
+                                    });
+                                    line_buffer.insert_newline_preserve_indent(
+                                        should_indent,
+                                        self.indent_size,
+                                    );
                                     changed = true;
                                 }
                             }
                             EditorAction::InsertNewline => {
-                                let should_indent = self
-                                    .validator
-                                    .as_ref()
-                                    .map_or(false, |v| v.should_indent(line_buffer.current_line_prefix()));
-                                line_buffer
-                                    .insert_newline_preserve_indent(should_indent, self.indent_size);
+                                if let Some(menu) = &mut self.menu {
+                                    menu.dismiss(&mut line_buffer);
+                                }
+                                let should_indent = self.validator.as_ref().is_some_and(|v| {
+                                    v.should_indent(line_buffer.current_line_prefix())
+                                });
+                                line_buffer.insert_newline_preserve_indent(
+                                    should_indent,
+                                    self.indent_size,
+                                );
                                 changed = true;
                             }
                             EditorAction::Interrupt => {
+                                if let Some(menu) = &mut self.menu {
+                                    menu.dismiss(&mut line_buffer);
+                                }
                                 let rows_to_move_down =
                                     last_end_row.saturating_sub(previous_cursor_row);
                                 if rows_to_move_down > 0 {
@@ -417,83 +463,219 @@ impl<W: Write> Editor<W> {
                                 self.writer.flush()?;
                                 return Ok(Signal::CtrlD);
                             }
+                            EditorAction::AcceptGhostText => {
+                                if let Some(hint) = &current_hint {
+                                    line_buffer.insert_str(hint);
+                                    changed = true;
+                                }
+                            }
+                            EditorAction::AcceptGhostTextWord => {
+                                if let Some(hint) = &current_hint {
+                                    let word = self.hinter.as_ref().map_or_else(
+                                        || default_next_hint_word(hint),
+                                        |h| h.next_hint_word(hint),
+                                    );
+                                    if !word.is_empty() {
+                                        line_buffer.insert_str(word);
+                                        changed = true;
+                                    }
+                                }
+                            }
                             EditorAction::MoveLeft => changed = line_buffer.move_left(),
-                            EditorAction::MoveRight => changed = line_buffer.move_right(),
-                            EditorAction::MoveUp => changed = line_buffer.move_up(),
-                            EditorAction::MoveDown => changed = line_buffer.move_down(),
+                            EditorAction::MoveRight => {
+                                if !line_buffer.move_right() {
+                                    // At end of line: accept ghost text if present
+                                    if let Some(hint) = &current_hint {
+                                        line_buffer.insert_str(hint);
+                                        changed = true;
+                                    }
+                                } else {
+                                    changed = true;
+                                }
+                            }
+                            EditorAction::MoveUp => {
+                                if line_buffer.move_up() {
+                                    changed = true;
+                                } else if let Some(history) = &self.history
+                                    && !history.is_empty()
+                                {
+                                    let hist_len = history.len();
+                                    let pfx = history_prefix.get_or_insert_with(|| {
+                                        saved_buffer = Some(line_buffer.as_str().to_string());
+                                        line_buffer.as_str().to_string()
+                                    });
+
+                                    let search_start = history_index.unwrap_or(hist_len);
+                                    if search_start > 0 {
+                                        for i in (0..search_start).rev() {
+                                            if let Some(entry) = history.get(i)
+                                                && entry.starts_with(pfx.as_str())
+                                            {
+                                                history_index = Some(i);
+                                                line_buffer
+                                                    .replace_range(0..line_buffer.len(), &entry);
+                                                line_buffer.set_cursor(entry.len());
+                                                changed = true;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            EditorAction::MoveDown => {
+                                if line_buffer.move_down() {
+                                    changed = true;
+                                } else if let Some(history) = &self.history
+                                    && let Some(curr_idx) = history_index
+                                {
+                                    let hist_len = history.len();
+                                    let pfx = history_prefix.as_deref().unwrap_or("");
+                                    let mut next_entry = None;
+
+                                    for i in (curr_idx + 1)..hist_len {
+                                        if let Some(entry) = history.get(i)
+                                            && entry.starts_with(pfx)
+                                        {
+                                            next_entry = Some((i, entry));
+                                            break;
+                                        }
+                                    }
+
+                                    if let Some((idx, entry)) = next_entry {
+                                        history_index = Some(idx);
+                                        line_buffer.replace_range(0..line_buffer.len(), &entry);
+                                        line_buffer.set_cursor(entry.len());
+                                        changed = true;
+                                    } else {
+                                        history_index = None;
+                                        history_prefix = None;
+                                        let orig = saved_buffer.take().unwrap_or_default();
+                                        line_buffer.replace_range(0..line_buffer.len(), &orig);
+                                        line_buffer.set_cursor(orig.len());
+                                        changed = true;
+                                    }
+                                }
+                            }
                             EditorAction::MoveWordLeft => {
-                                changed = line_buffer.move_word_left()
+                                changed = line_buffer.move_word_left();
                             }
                             EditorAction::MoveWordRight => {
-                                changed = line_buffer.move_word_right()
+                                if !line_buffer.move_word_right() {
+                                    // At end of line: accept next hint word if present
+                                    if let Some(hint) = &current_hint {
+                                        let word = self.hinter.as_ref().map_or_else(
+                                            || default_next_hint_word(hint),
+                                            |h| h.next_hint_word(hint),
+                                        );
+                                        if !word.is_empty() {
+                                            line_buffer.insert_str(word);
+                                            changed = true;
+                                        }
+                                    }
+                                } else {
+                                    changed = true;
+                                }
                             }
                             EditorAction::MoveHome => changed = line_buffer.move_home(),
-                            EditorAction::MoveEnd => changed = line_buffer.move_end(),
+                            EditorAction::MoveEnd => {
+                                if !line_buffer.move_end() {
+                                    // Already at end: accept ghost text if present
+                                    if let Some(hint) = &current_hint {
+                                        line_buffer.insert_str(hint);
+                                        changed = true;
+                                    }
+                                } else {
+                                    changed = true;
+                                }
+                            }
                             EditorAction::Backspace => {
-                                changed = line_buffer
-                                    .delete_prev_grapheme_or_dedent(self.indent_size);
+                                changed =
+                                    line_buffer.delete_prev_grapheme_or_dedent(self.indent_size);
                             }
                             EditorAction::Delete => {
-                                changed = line_buffer.delete_next_grapheme()
+                                changed = line_buffer.delete_next_grapheme();
                             }
                             EditorAction::DeleteWordLeft => {
-                                changed = line_buffer.delete_word_left()
+                                changed = line_buffer.delete_word_left();
                             }
                             EditorAction::DeleteWordRight => {
-                                changed = line_buffer.delete_word_right()
+                                changed = line_buffer.delete_word_right();
                             }
                             EditorAction::ClearToStart => {
-                                changed = line_buffer.clear_to_start()
+                                changed = line_buffer.clear_to_start();
                             }
                             EditorAction::ClearToEnd => changed = line_buffer.clear_to_end(),
                             EditorAction::ClearLine => changed = line_buffer.clear(),
+                            EditorAction::ClearScreen => {
+                                queue!(self.writer, Clear(ClearType::All), cursor::MoveTo(0, 0),)?;
+                                let (layout, hint) = self.render_line(&prompt, &line_buffer, 0)?;
+                                previous_cursor_row = layout.cursor_row;
+                                last_end_row = layout.end_row;
+                                current_hint = hint;
+                                continue;
+                            }
                             EditorAction::Ignore | EditorAction::Eof => {}
                         }
-                    } else {
+                    } else if let (KeyCode::Char(c), KeyModifiers::NONE | KeyModifiers::SHIFT) =
+                        (code, modifiers)
+                    {
                         // Unbound printable characters are inserted into the buffer
-                        match (code, modifiers) {
-                            (KeyCode::Char(c), KeyModifiers::NONE | KeyModifiers::SHIFT) => {
-                                let should_dedent = self
-                                    .validator
-                                    .as_ref()
-                                    .map_or(false, |v| v.should_dedent_on_char(c));
-                                if should_dedent {
-                                    line_buffer.dedent_line(self.indent_size);
-                                }
-                                line_buffer.insert_char(c);
-                                changed = true;
-                            }
-                            _ => {}
+                        let should_dedent = self
+                            .validator
+                            .as_ref()
+                            .is_some_and(|v| v.should_dedent_on_char(c));
+                        if should_dedent {
+                            line_buffer.dedent_line(self.indent_size);
                         }
+                        line_buffer.insert_char(c);
+                        changed = true;
+                    }
+
+                    // Reset history navigation if buffer was modified by an action other than up/down
+                    if changed
+                        && !matches!(
+                            self.keymap.get(code, modifiers),
+                            Some(EditorAction::MoveUp | EditorAction::MoveDown)
+                        )
+                    {
+                        history_index = None;
+                        saved_buffer = None;
+                        history_prefix = None;
                     }
 
                     // Only redraw if the line buffer or cursor actually changed
                     if changed {
-                        let layout =
+                        let (layout, hint) =
                             self.render_line(&prompt, &line_buffer, previous_cursor_row)?;
                         previous_cursor_row = layout.cursor_row;
                         last_end_row = layout.end_row;
+                        current_hint = hint;
                     }
                 }
 
                 // Bracketed paste event
                 Event::Paste(text) => {
+                    if let Some(menu) = &mut self.menu {
+                        menu.dismiss(&mut line_buffer);
+                    }
                     let normalised = normalise_paste(&text);
                     if !normalised.is_empty() {
                         line_buffer.insert_str(&normalised);
-                        let layout =
+                        let (layout, hint) =
                             self.render_line(&prompt, &line_buffer, previous_cursor_row)?;
                         previous_cursor_row = layout.cursor_row;
                         last_end_row = layout.end_row;
+                        current_hint = hint;
                     }
                 }
 
                 // Terminal resize -> re-render line to adjust layout
                 Event::Resize(..) => {
-                    let layout =
+                    let (layout, hint) =
                         self.render_line(&prompt, &line_buffer, previous_cursor_row)?;
                     previous_cursor_row = layout.cursor_row;
                     last_end_row = layout.end_row;
+                    current_hint = hint;
                 }
 
                 _ => {}
@@ -501,38 +683,59 @@ impl<W: Write> Editor<W> {
         }
     }
 
-    /// Redraws the prompt, buffer (including soft-wrapped and multiline rows), and positions the cursor.
+    /// Redraws the prompt, buffer (including soft-wrapped and multiline rows),
+    /// optional inline ghost text hint, and positions the cursor.
     pub fn render_line(
         &mut self,
         prompt: &impl Prompt,
         line_buffer: &LineBuffer,
         previous_cursor_row: usize,
-    ) -> io::Result<ScreenLayout> {
+    ) -> io::Result<(ScreenLayout, Option<String>)> {
         let term_cols = self.terminal_width();
         let prompt_text = prompt.render();
         let prompt_stripped = crate::prompt::strip_ansi(&prompt_text);
         let indicator_text = prompt.render_multiline_indicator();
         let indicator_stripped = crate::prompt::strip_ansi(&indicator_text);
 
+        // Query ghost text hint if cursor is at the end of the buffer, content is non-empty, and menu is not active
+        let is_menu_active = self.menu.as_ref().is_some_and(|m| m.is_active());
+        let ghost_text = if is_menu_active {
+            None
+        } else if let Some(hinter) = &self.hinter {
+            if line_buffer.cursor() == line_buffer.len() && !line_buffer.is_empty() {
+                hinter
+                    .hint(line_buffer.as_str(), line_buffer.cursor())
+                    .filter(|s| !s.is_empty())
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         let layout = compute_screen_layout(
             &prompt_stripped,
             &indicator_stripped,
             line_buffer,
+            ghost_text.as_deref(),
             term_cols,
         );
 
-        // 1. Move up to row 0 if we were previously on a lower row
+        // Move up to row 0 if we were previously on a lower row
         if previous_cursor_row > 0 {
             queue!(self.writer, cursor::MoveUp(previous_cursor_row as u16))?;
         }
 
-        // 2. Clear from row 0 downwards and print the prompt
+        // Clear from row 0 downwards and print the prompt with CRLF newlines
+        let prompt_render = prompt_text.replace("\r\n", "\n").replace('\n', "\r\n");
+        let indicator_render = indicator_text.replace("\r\n", "\n").replace('\n', "\r\n");
+
         queue!(
             self.writer,
             cursor::Hide,
             MoveToColumn(0),
             Clear(ClearType::FromCursorDown),
-            Print(&prompt_text),
+            Print(&prompt_render),
         )?;
 
         let styled_text = match &self.formatter {
@@ -540,7 +743,7 @@ impl<W: Write> Editor<W> {
             None => StyledText::plain(line_buffer.as_str()),
         };
 
-        // 3. Render spans, inserting indicator on newlines
+        // Render spans, inserting indicator on newlines
         for (style, text) in &styled_text {
             let mut parts = text.split('\n').peekable();
             while let Some(part) = parts.next() {
@@ -555,20 +758,44 @@ impl<W: Write> Editor<W> {
                         self.writer,
                         crossterm::style::ResetColor,
                         Print("\r\n"),
-                        Print(&indicator_text),
+                        Print(&indicator_render),
                     )?;
                 }
             }
         }
+
+        // Render inline ghost text hint if present
+        if let Some(ref hint) = ghost_text {
+            queue!(
+                self.writer,
+                crossterm::style::PrintStyledContent(self.hint_style.apply(hint))
+            )?;
+        }
+
         queue!(self.writer, crossterm::style::ResetColor)?;
 
-        // 4. Move cursor from the end of the rendered content back to layout.cursor_row
-        let rows_to_move_up = layout.end_row.saturating_sub(layout.cursor_row);
+        // 5. Render completion menu lines beneath the buffer if menu is active
+        let mut menu_rows = 0;
+        if let Some(menu) = &self.menu
+            && menu.is_active()
+        {
+            let lines = menu.render_lines(term_cols, layout.cursor_col);
+            for line in &lines {
+                queue!(self.writer, Print("\r\n"), Print(line))?;
+            }
+            menu_rows = lines.len();
+        }
+
+        queue!(self.writer, crossterm::style::ResetColor)?;
+
+        // Move cursor from the end of the rendered content back to layout.cursor_row
+        let total_end_row = layout.end_row + menu_rows;
+        let rows_to_move_up = total_end_row.saturating_sub(layout.cursor_row);
         if rows_to_move_up > 0 {
             queue!(self.writer, cursor::MoveUp(rows_to_move_up as u16))?;
         }
 
-        // 5. Position cursor horizontally at layout.cursor_col
+        // Position cursor horizontally at layout.cursor_col
         queue!(
             self.writer,
             MoveToColumn(layout.cursor_col as u16),
@@ -576,7 +803,9 @@ impl<W: Write> Editor<W> {
         )?;
         self.writer.flush()?;
 
-        Ok(layout)
+        let mut effective_layout = layout;
+        effective_layout.end_row = total_end_row;
+        Ok((effective_layout, ghost_text))
     }
 
     /// Immutably borrow the underlying writer.
@@ -619,6 +848,7 @@ pub enum Signal {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::completer::Candidate;
     use crate::keymap::KeyCombo;
 
     #[test]
@@ -652,7 +882,7 @@ mod tests {
         let buffer = Vec::new();
         let mut editor = Editor::with_writer(buffer);
         let line_buf = LineBuffer::with_content("echo 1".to_string());
-        let layout = editor.render_line(&"> ", &line_buf, 0).unwrap();
+        let (layout, _) = editor.render_line(&"> ", &line_buf, 0).unwrap();
         assert_eq!(layout.cursor_row, 0);
         assert_eq!(layout.cursor_col, 8); // "> " (2) + "echo 1" (6)
         let out = editor.into_writer();
@@ -665,7 +895,7 @@ mod tests {
         let mut editor =
             Editor::with_writer(buffer).with_formatter(|s: &str| format!("***{}***", s));
         let line_buf = LineBuffer::with_content("secret".to_string());
-        let layout = editor.render_line(&"> ", &line_buf, 0).unwrap();
+        let (layout, _) = editor.render_line(&"> ", &line_buf, 0).unwrap();
         assert_eq!(layout.cursor_row, 0);
         let out = String::from_utf8(editor.into_writer()).unwrap();
         assert!(out.contains("***secret***"));
@@ -676,63 +906,12 @@ mod tests {
         let buffer = Vec::new();
         let mut editor = Editor::with_writer(buffer);
         let line_buf = LineBuffer::with_content("first\nsecond".to_string());
-        let layout = editor.render_line(&"> ", &line_buf, 0).unwrap();
+        let (layout, _) = editor.render_line(&"> ", &line_buf, 0).unwrap();
         let out = String::from_utf8(editor.into_writer()).unwrap();
         // Should contain continuation indicator "… "
         assert!(out.contains("… "));
         assert_eq!(layout.cursor_row, 1);
         assert_eq!(layout.end_row, 1);
-    }
-
-    #[test]
-    fn test_compute_screen_layout_soft_wrap() {
-        // Terminal of width 10 columns
-        let mut line_buf = LineBuffer::new();
-        line_buf.insert_str("12345678"); // 8 chars. Prompt is "> " (2 chars). Total = 10 chars.
-
-        // At end of row (10 chars in 10-col terminal)
-        let layout = compute_screen_layout("> ", "… ", &line_buf, 10);
-        assert_eq!(layout.cursor_row, 0);
-        assert_eq!(layout.cursor_col, 9); // sits at right margin
-        assert_eq!(layout.end_row, 0);
-        assert_eq!(layout.end_col, 9);
-
-        // Type 1 more character -> wraps to row 1, col 1
-        line_buf.insert_char('9');
-        let layout = compute_screen_layout("> ", "… ", &line_buf, 10);
-        assert_eq!(layout.cursor_row, 1);
-        assert_eq!(layout.cursor_col, 1);
-        assert_eq!(layout.end_row, 1);
-        assert_eq!(layout.end_col, 1);
-
-        // Move cursor back to beginning: cursor sits on row 0, col 2 (right after prompt)
-        line_buf.move_home();
-        let layout = compute_screen_layout("> ", "… ", &line_buf, 10);
-        assert_eq!(layout.cursor_row, 0);
-        assert_eq!(layout.cursor_col, 2);
-        assert_eq!(layout.end_row, 1);
-        assert_eq!(layout.end_col, 1);
-    }
-
-    #[test]
-    fn test_compute_screen_layout_wide_characters() {
-        // Terminal of width 10 columns
-        let mut line_buf = LineBuffer::new();
-        // Prompt is "> " (2 cols)
-        // Insert 7 single-width chars -> col reaches 9 (1 col left)
-        line_buf.insert_str("1234567");
-
-        let layout = compute_screen_layout("> ", "… ", &line_buf, 10);
-        assert_eq!(layout.cursor_row, 0);
-        assert_eq!(layout.cursor_col, 9);
-
-        // Insert double-width emoji 🦀 (width 2). It cannot fit in col 9, so it wraps to row 1!
-        line_buf.insert_str("🦀");
-        let layout = compute_screen_layout("> ", "… ", &line_buf, 10);
-        assert_eq!(layout.cursor_row, 1);
-        assert_eq!(layout.cursor_col, 2); // on row 1, occupies cols 0 and 1, cursor at 2
-        assert_eq!(layout.end_row, 1);
-        assert_eq!(layout.end_col, 2);
     }
 
     #[test]
@@ -742,11 +921,38 @@ mod tests {
         let mut line_buf = LineBuffer::new();
         line_buf.insert_str("123456789"); // 2 + 9 = 11 cols in 10-col terminal
 
-        let layout = editor.render_line(&"> ", &line_buf, 0).unwrap();
+        let (layout, _) = editor.render_line(&"> ", &line_buf, 0).unwrap();
         assert_eq!(layout.cursor_row, 1);
         assert_eq!(layout.cursor_col, 1);
         assert_eq!(layout.end_row, 1);
         assert_eq!(layout.end_col, 1);
+    }
+
+    #[test]
+    fn test_render_line_with_ghost_text() {
+        let buffer = Vec::new();
+        let mut editor = Editor::with_writer(buffer).with_hinter(|line: &str, cursor: usize| {
+            if line == "git c" && cursor == 5 {
+                Some("heckout".to_string())
+            } else {
+                None
+            }
+        });
+
+        let mut line_buf = LineBuffer::new();
+        line_buf.insert_str("git c");
+
+        let (layout, hint) = editor.render_line(&"> ", &line_buf, 0).unwrap();
+        assert_eq!(hint.as_deref(), Some("heckout"));
+        // Prompt is "> " (2) + "git c" (5) = 7
+        assert_eq!(layout.cursor_col, 7);
+        assert_eq!(layout.cursor_row, 0);
+        // Total printed text is "> git checkout" (2 + 12 = 14)
+        assert_eq!(layout.end_col, 14);
+        assert_eq!(layout.end_row, 0);
+
+        let out = String::from_utf8(editor.into_writer()).unwrap();
+        assert!(out.contains("heckout"));
     }
 
     #[test]
@@ -769,5 +975,123 @@ mod tests {
         let input = "def foo():\r\n    return 42\r\n";
         let normalised = normalise_paste(input);
         assert_eq!(normalised, "def foo():\n    return 42\n");
+    }
+
+    #[test]
+    fn test_editor_with_completer_and_menu() {
+        let buffer = Vec::new();
+        let mut editor = Editor::with_writer(buffer)
+            .with_completer(|line: &str, cursor: usize| {
+                if line == "car" && cursor == 3 {
+                    (0, vec![Candidate::new("cargo")])
+                } else {
+                    (cursor, Vec::new())
+                }
+            })
+            .with_menu(crate::menu::BasicMenu::default());
+
+        assert!(editor.completer().is_some());
+        assert!(editor.menu().is_some());
+
+        let (start, items) = editor.completer().unwrap().complete("car", 3);
+        assert_eq!(start, 0);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].display, "cargo");
+
+        editor.set_menu(None);
+        assert!(editor.menu().is_none());
+        editor.set_completer(None);
+        assert!(editor.completer().is_none());
+    }
+
+    #[test]
+    fn test_render_line_with_active_completion_menu() {
+        let buffer = Vec::new();
+        let mut menu = crate::menu::BasicMenu::default();
+
+        let mut line_buf = LineBuffer::new();
+        line_buf.insert_str("ca");
+
+        let completer = |_line: &str, _cursor: usize| {
+            (
+                0,
+                vec![
+                    Candidate::new("cargo").with_description("Rust package manager"),
+                    Candidate::new("cat").with_description("Concatenate files"),
+                ],
+            )
+        };
+
+        menu.activate(&mut line_buf, Some(&completer));
+        assert!(menu.is_active());
+
+        let mut editor = Editor::with_writer(buffer)
+            .with_terminal_width(80)
+            .with_hinter(|_line: &str, _cursor: usize| Some("ghost-hint".to_string()))
+            .with_menu(menu);
+
+        let (layout, hint) = editor.render_line(&"> ", &line_buf, 0).unwrap();
+
+        // Ghost text MUST be suppressed when completion menu is active
+        assert_eq!(hint, None);
+
+        // Layout cursor is at row 0, col 4 ("> " (2) + "ca" (2))
+        assert_eq!(layout.cursor_row, 0);
+        assert_eq!(layout.cursor_col, 4);
+
+        // Layout end_row includes menu lines: 1 (buffer row 0) + 4 (top border + 2 items + bottom border) = 4
+        assert_eq!(layout.end_row, 4);
+
+        let out = String::from_utf8(editor.into_writer()).unwrap();
+        // Menu borders and items are drawn in the rendered output
+        assert!(out.contains("┌"));
+        assert!(out.contains("└"));
+        assert!(out.contains("cargo"));
+        assert!(out.contains("cat"));
+        // Ghost text is NOT drawn
+        assert!(!out.contains("ghost-hint"));
+    }
+
+    #[test]
+    fn test_editor_history_builder() {
+        let mut hist = crate::history::DefaultHistory::new(10);
+        hist.append("echo 1");
+        hist.append("echo 2");
+
+        let buffer = Vec::new();
+        let mut editor = Editor::with_writer(buffer).with_history(hist);
+        assert!(editor.history().is_some());
+        assert_eq!(editor.history().unwrap().len(), 2);
+        assert_eq!(editor.history().unwrap().get(0).as_deref(), Some("echo 1"));
+        assert_eq!(editor.history().unwrap().get(1).as_deref(), Some("echo 2"));
+
+        editor.set_history(None);
+        assert!(editor.history().is_none());
+    }
+
+    #[test]
+    fn test_render_line_multiline_prompt_redraws_in_place() {
+        let buffer = Vec::new();
+        let mut editor = Editor::with_writer(buffer).with_terminal_width(80);
+        let prompt = "\n\x1b[1;34m~/dev/lsh\x1b[0m (main)\n\x1b[35m❯ \x1b[0m";
+
+        let mut line_buf = LineBuffer::new();
+        let (layout1, _) = editor.render_line(&prompt, &line_buf, 0).unwrap();
+        assert_eq!(layout1.cursor_row, 2);
+        assert_eq!(layout1.cursor_col, 2);
+
+        // Render second keystroke with previous_cursor_row = 2
+        line_buf.insert_char('c');
+        let (layout2, _) = editor
+            .render_line(&prompt, &line_buf, layout1.cursor_row)
+            .unwrap();
+        assert_eq!(layout2.cursor_row, 2);
+        assert_eq!(layout2.cursor_col, 3);
+
+        let out = String::from_utf8(editor.into_writer()).unwrap();
+        // Prompt newlines should be rendered with \r\n for raw mode compatibility
+        assert!(out.contains("\r\n"));
+        // Second render must emit MoveUp(2) to return to row 0 of the prompt
+        assert!(out.contains("\x1b[2A"));
     }
 }

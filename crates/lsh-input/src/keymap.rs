@@ -96,6 +96,16 @@ pub enum EditorAction {
     ClearToEnd,
     /// Clear the entire line.
     ClearLine,
+    /// Clear the terminal screen and redraw the prompt at top (Ctrl+L).
+    ClearScreen,
+    /// Accept the entire inline ghost text hint.
+    AcceptGhostText,
+    /// Accept only the next word of the inline ghost text hint.
+    AcceptGhostTextWord,
+    /// Trigger completion or cycle to next candidate.
+    Complete,
+    /// Cycle to previous completion candidate.
+    CompletePrevious,
     /// Explicitly do nothing for this key combination.
     Ignore,
 }
@@ -135,9 +145,19 @@ impl Keymap {
         km.bind(KeyCombo::ctrl('c'), EditorAction::Interrupt);
         km.bind(KeyCombo::ctrl('d'), EditorAction::Eof);
 
+        // Completion
+        km.bind(KeyCode::Tab, EditorAction::Complete);
+        km.bind(KeyCode::BackTab, EditorAction::CompletePrevious);
+        km.bind(
+            (KeyCode::Tab, KeyModifiers::SHIFT),
+            EditorAction::CompletePrevious,
+        );
+
         // Basic navigation
         km.bind(KeyCode::Left, EditorAction::MoveLeft);
+        km.bind(KeyCombo::ctrl('b'), EditorAction::MoveLeft);
         km.bind(KeyCode::Right, EditorAction::MoveRight);
+        km.bind(KeyCombo::ctrl('f'), EditorAction::MoveRight);
         km.bind(KeyCode::Up, EditorAction::MoveUp);
         km.bind(KeyCode::Down, EditorAction::MoveDown);
         km.bind(KeyCombo::ctrl('p'), EditorAction::MoveUp);
@@ -190,9 +210,10 @@ impl Keymap {
             EditorAction::DeleteWordRight,
         );
 
-        // Line clearing
+        // Line clearing and screen refresh
         km.bind(KeyCombo::ctrl('u'), EditorAction::ClearToStart);
         km.bind(KeyCombo::ctrl('k'), EditorAction::ClearToEnd);
+        km.bind(KeyCombo::ctrl('l'), EditorAction::ClearScreen);
 
         km
     }
@@ -261,6 +282,18 @@ mod tests {
         assert_eq!(
             km.get(KeyCode::Char('a'), KeyModifiers::CONTROL),
             Some(&EditorAction::MoveHome)
+        );
+        assert_eq!(
+            km.get(KeyCode::Tab, KeyModifiers::NONE),
+            Some(&EditorAction::Complete)
+        );
+        assert_eq!(
+            km.get(KeyCode::BackTab, KeyModifiers::NONE),
+            Some(&EditorAction::CompletePrevious)
+        );
+        assert_eq!(
+            km.get(KeyCode::Tab, KeyModifiers::SHIFT),
+            Some(&EditorAction::CompletePrevious)
         );
     }
 

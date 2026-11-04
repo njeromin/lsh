@@ -1,4 +1,4 @@
-use super::types::CompletionItem;
+use lsh_completions::CompletionItem;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FuzzyMatch {
@@ -161,7 +161,7 @@ pub fn filter_completion_items(items: &[CompletionItem], query: &str) -> Vec<Com
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::menu::types::{CompletionItem, CompletionKind};
+    use lsh_completions::{CompletionItem, CompletionKind};
 
     #[test]
     fn fuzzy_match_detects_subsequences_and_word_boundaries() {
