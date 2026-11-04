@@ -89,6 +89,7 @@ pub struct Editor<W: Write = BufWriter<Stdout>> {
     keymap: Keymap,
     edit_mode: EditMode,
     vi_mode: ViMode,
+    cursor_style: cursor::SetCursorStyle,
     formatter: Option<Box<dyn TextFormatter>>,
     validator: Option<Box<dyn Validator>>,
     hinter: Option<Box<dyn Hinter>>,
@@ -109,6 +110,7 @@ impl Editor<BufWriter<Stdout>> {
             keymap: Keymap::default(),
             edit_mode: EditMode::Emacs,
             vi_mode: ViMode::Insert,
+            cursor_style: cursor::SetCursorStyle::BlinkingBar,
             formatter: None,
             validator: None,
             hinter: None,
@@ -131,6 +133,7 @@ impl<W: Write> Editor<W> {
             keymap: Keymap::default(),
             edit_mode: EditMode::Emacs,
             vi_mode: ViMode::Insert,
+            cursor_style: cursor::SetCursorStyle::BlinkingBar,
             formatter: None,
             validator: None,
             hinter: None,
@@ -283,6 +286,22 @@ impl<W: Write> Editor<W> {
         self.vi_mode
     }
 
+    /// Set the cursor style used for insert/editing mode (defaults to `cursor::SetCursorStyle::BlinkingBar`).
+    pub fn with_cursor_style(mut self, style: cursor::SetCursorStyle) -> Self {
+        self.cursor_style = style;
+        self
+    }
+
+    /// Dynamically update the cursor style used for insert/editing mode.
+    pub fn set_cursor_style(&mut self, style: cursor::SetCursorStyle) {
+        self.cursor_style = style;
+    }
+
+    /// Get the current cursor style.
+    pub fn cursor_style(&self) -> cursor::SetCursorStyle {
+        self.cursor_style
+    }
+
     /// Set an explicit terminal column width override (useful for testing or fixed-width rendering).
     pub fn with_terminal_width(mut self, width: usize) -> Self {
         self.terminal_width = Some(width);
@@ -394,10 +413,15 @@ impl<W: Write> Editor<W> {
 
         let _guard = RawModeGuard::new(&mut self.writer)?;
 
-        if self.edit_mode == EditMode::Vi {
-            self.vi_mode = ViMode::Insert;
-            self.keymap = Keymap::default_vi_insert();
-            let _ = queue!(self.writer, cursor::SetCursorStyle::BlinkingBar);
+        match self.edit_mode {
+            EditMode::Emacs => {
+                let _ = queue!(self.writer, self.cursor_style);
+            }
+            EditMode::Vi => {
+                self.vi_mode = ViMode::Insert;
+                self.keymap = Keymap::default_vi_insert();
+                let _ = queue!(self.writer, self.cursor_style);
+            }
         }
 
         // Initial render
@@ -586,8 +610,7 @@ impl<W: Write> Editor<W> {
                                 if enter_insert {
                                     self.vi_mode = ViMode::Insert;
                                     self.keymap = Keymap::default_vi_insert();
-                                    let _ =
-                                        queue!(self.writer, cursor::SetCursorStyle::BlinkingBar);
+                                    let _ = queue!(self.writer, self.cursor_style);
                                     changed = true;
                                 }
                             }
@@ -1083,10 +1106,7 @@ impl<W: Write> Editor<W> {
                                 {
                                     self.vi_mode = ViMode::Insert;
                                     self.keymap = Keymap::default_vi_insert();
-                                    let _ = queue!(
-                                        self.writer,
-                                        cursor::SetCursorStyle::BlinkingBar
-                                    );
+                                    let _ = queue!(self.writer, self.cursor_style);
                                     changed = true;
                                 }
                             }
@@ -1097,10 +1117,7 @@ impl<W: Write> Editor<W> {
                                     }
                                     self.vi_mode = ViMode::Insert;
                                     self.keymap = Keymap::default_vi_insert();
-                                    let _ = queue!(
-                                        self.writer,
-                                        cursor::SetCursorStyle::BlinkingBar
-                                    );
+                                    let _ = queue!(self.writer, self.cursor_style);
                                     changed = true;
                                 }
                             }
@@ -1109,10 +1126,7 @@ impl<W: Write> Editor<W> {
                                     line_buffer.move_end();
                                     self.vi_mode = ViMode::Insert;
                                     self.keymap = Keymap::default_vi_insert();
-                                    let _ = queue!(
-                                        self.writer,
-                                        cursor::SetCursorStyle::BlinkingBar
-                                    );
+                                    let _ = queue!(self.writer, self.cursor_style);
                                     changed = true;
                                 }
                             }
@@ -1121,10 +1135,7 @@ impl<W: Write> Editor<W> {
                                     line_buffer.move_to_first_non_whitespace();
                                     self.vi_mode = ViMode::Insert;
                                     self.keymap = Keymap::default_vi_insert();
-                                    let _ = queue!(
-                                        self.writer,
-                                        cursor::SetCursorStyle::BlinkingBar
-                                    );
+                                    let _ = queue!(self.writer, self.cursor_style);
                                     changed = true;
                                 }
                             }
@@ -1141,10 +1152,7 @@ impl<W: Write> Editor<W> {
                                     );
                                     self.vi_mode = ViMode::Insert;
                                     self.keymap = Keymap::default_vi_insert();
-                                    let _ = queue!(
-                                        self.writer,
-                                        cursor::SetCursorStyle::BlinkingBar
-                                    );
+                                    let _ = queue!(self.writer, self.cursor_style);
                                     changed = true;
                                 }
                             }
@@ -1156,10 +1164,7 @@ impl<W: Write> Editor<W> {
                                     line_buffer.move_up();
                                     self.vi_mode = ViMode::Insert;
                                     self.keymap = Keymap::default_vi_insert();
-                                    let _ = queue!(
-                                        self.writer,
-                                        cursor::SetCursorStyle::BlinkingBar
-                                    );
+                                    let _ = queue!(self.writer, self.cursor_style);
                                     changed = true;
                                 }
                             }
@@ -1173,10 +1178,7 @@ impl<W: Write> Editor<W> {
                                 if self.edit_mode == EditMode::Vi {
                                     self.vi_mode = ViMode::Insert;
                                     self.keymap = Keymap::default_vi_insert();
-                                    let _ = queue!(
-                                        self.writer,
-                                        cursor::SetCursorStyle::BlinkingBar
-                                    );
+                                    let _ = queue!(self.writer, self.cursor_style);
                                 }
                                 changed = true;
                             }
@@ -1190,10 +1192,7 @@ impl<W: Write> Editor<W> {
                                 if self.edit_mode == EditMode::Vi {
                                     self.vi_mode = ViMode::Insert;
                                     self.keymap = Keymap::default_vi_insert();
-                                    let _ = queue!(
-                                        self.writer,
-                                        cursor::SetCursorStyle::BlinkingBar
-                                    );
+                                    let _ = queue!(self.writer, self.cursor_style);
                                 }
                                 changed = true;
                             }
@@ -1207,10 +1206,7 @@ impl<W: Write> Editor<W> {
                                 if self.edit_mode == EditMode::Vi {
                                     self.vi_mode = ViMode::Insert;
                                     self.keymap = Keymap::default_vi_insert();
-                                    let _ = queue!(
-                                        self.writer,
-                                        cursor::SetCursorStyle::BlinkingBar
-                                    );
+                                    let _ = queue!(self.writer, self.cursor_style);
                                 }
                                 changed = true;
                             }
@@ -1942,5 +1938,18 @@ mod tests {
             editor.keymap().get(KeyCode::Char('r'), KeyModifiers::ALT),
             Some(&EditorAction::Redo)
         );
+    }
+
+    #[test]
+    fn test_editor_cursor_style_configuration() {
+        let mut editor = Editor::new();
+        assert_eq!(editor.cursor_style(), cursor::SetCursorStyle::BlinkingBar);
+
+        editor.set_cursor_style(cursor::SetCursorStyle::SteadyBar);
+        assert_eq!(editor.cursor_style(), cursor::SetCursorStyle::SteadyBar);
+
+        let editor2 = Editor::with_writer(Vec::<u8>::new())
+            .with_cursor_style(cursor::SetCursorStyle::SteadyBlock);
+        assert_eq!(editor2.cursor_style(), cursor::SetCursorStyle::SteadyBlock);
     }
 }

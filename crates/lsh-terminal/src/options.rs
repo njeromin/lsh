@@ -17,6 +17,55 @@ pub enum CompletionType {
     Circular,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CursorShape {
+    Bar,
+    SteadyBar,
+    Block,
+    SteadyBlock,
+    Underline,
+    SteadyUnderline,
+}
+
+impl fmt::Display for CursorShape {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            CursorShape::Bar => write!(f, "bar"),
+            CursorShape::SteadyBar => write!(f, "steady_bar"),
+            CursorShape::Block => write!(f, "block"),
+            CursorShape::SteadyBlock => write!(f, "steady_block"),
+            CursorShape::Underline => write!(f, "underline"),
+            CursorShape::SteadyUnderline => write!(f, "steady_underline"),
+        }
+    }
+}
+
+impl From<&str> for CursorShape {
+    fn from(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "steady_bar" | "steady-bar" => CursorShape::SteadyBar,
+            "block" | "blinking_block" | "blinking-block" => CursorShape::Block,
+            "steady_block" | "steady-block" => CursorShape::SteadyBlock,
+            "underline" | "blinking_underline" | "blinking-underline" => CursorShape::Underline,
+            "steady_underline" | "steady-underline" => CursorShape::SteadyUnderline,
+            _ => CursorShape::Bar,
+        }
+    }
+}
+
+impl From<CursorShape> for crossterm::cursor::SetCursorStyle {
+    fn from(shape: CursorShape) -> Self {
+        match shape {
+            CursorShape::Bar => crossterm::cursor::SetCursorStyle::BlinkingBar,
+            CursorShape::SteadyBar => crossterm::cursor::SetCursorStyle::SteadyBar,
+            CursorShape::Block => crossterm::cursor::SetCursorStyle::BlinkingBlock,
+            CursorShape::SteadyBlock => crossterm::cursor::SetCursorStyle::SteadyBlock,
+            CursorShape::Underline => crossterm::cursor::SetCursorStyle::BlinkingUnderScore,
+            CursorShape::SteadyUnderline => crossterm::cursor::SetCursorStyle::SteadyUnderScore,
+        }
+    }
+}
+
 impl fmt::Display for CompletionType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -96,6 +145,7 @@ pub struct Options {
     pub edit_mode: EditMode,
     pub completion_type: CompletionType,
     pub nerd_icons: bool,
+    pub cursor_shape: CursorShape,
 }
 
 impl Default for Options {
@@ -115,6 +165,7 @@ impl Default for Options {
             edit_mode: EditMode::Default,
             completion_type: CompletionType::Menu,
             nerd_icons,
+            cursor_shape: CursorShape::Bar,
         }
     }
 }
@@ -133,6 +184,10 @@ impl From<Options> for HashMap<String, Value> {
             Value::String(value.completion_type.to_string()),
         );
         map.insert("nerd_icons".to_string(), Value::Bool(value.nerd_icons));
+        map.insert(
+            "cursor_shape".to_string(),
+            Value::String(value.cursor_shape.to_string()),
+        );
 
         map
     }
@@ -217,11 +272,21 @@ impl From<&HashMap<String, Value>> for Options {
                     .unwrap_or(false)
             });
 
+        let cursor_shape = map
+            .get("cursor_shape")
+            .or_else(|| map.get("cursor_style"))
+            .and_then(|v| match v {
+                Value::String(s) => Some(CursorShape::from(s.as_str())),
+                _ => None,
+            })
+            .unwrap_or(CursorShape::Bar);
+
         Self {
             tab_stop,
             edit_mode,
             completion_type,
             nerd_icons,
+            cursor_shape,
         }
     }
 }
@@ -244,6 +309,7 @@ mod tests {
             edit_mode: EditMode::Vi,
             completion_type: CompletionType::List,
             nerd_icons: true,
+            cursor_shape: CursorShape::SteadyBar,
         };
 
         let map: HashMap<String, Value> = opts.clone().into();
@@ -254,9 +320,31 @@ mod tests {
             Some(&Value::String("list".to_string()))
         );
         assert_eq!(map.get("nerd_icons"), Some(&Value::Bool(true)));
+        assert_eq!(
+            map.get("cursor_shape"),
+            Some(&Value::String("steady_bar".to_string()))
+        );
 
         let parsed = Options::from(&map);
         assert_eq!(parsed, opts);
+    }
+
+    #[test]
+    fn options_parses_cursor_shape() {
+        let mut map = HashMap::new();
+        map.insert("cursor_shape".to_string(), Value::String("block".to_string()));
+        assert_eq!(Options::from(&map).cursor_shape, CursorShape::Block);
+
+        map.insert("cursor_shape".to_string(), Value::String("underline".to_string()));
+        assert_eq!(Options::from(&map).cursor_shape, CursorShape::Underline);
+
+        map.insert("cursor_shape".to_string(), Value::String("steady_bar".to_string()));
+        assert_eq!(Options::from(&map).cursor_shape, CursorShape::SteadyBar);
+
+        // Alias cursor_style works too
+        let mut map_alias = HashMap::new();
+        map_alias.insert("cursor_style".to_string(), Value::String("bar".to_string()));
+        assert_eq!(Options::from(&map_alias).cursor_shape, CursorShape::Bar);
     }
 
     #[test]

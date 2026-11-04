@@ -126,6 +126,9 @@ $options.tab_stop = 4
 # Keybindings: "default", "emacs", or "vi"
 $options.edit_mode = "default"
 
+# Cursor shape: "bar", "steady_bar", "block", "steady_block", "underline", or "steady_underline"
+$options.cursor_shape = "bar"
+
 # Completion UI: "menu" (fuzzy dropdown) or "list"
 $options.completion_type = "menu"
 ```
