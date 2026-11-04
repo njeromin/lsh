@@ -70,6 +70,7 @@ impl Parser {
                 while !self.check_current(&TokenKind::RightCurly) {
                     while self.check_current(&TokenKind::NewLine)
                         || self.check_current(&TokenKind::Semicolon)
+                        || self.check_current(&TokenKind::Ampersand)
                     {
                         self.advance();
                     }
@@ -188,6 +189,11 @@ impl Parser {
             }
         }
 
+        if self.check_current(&TokenKind::Ampersand) {
+            self.advance(); // Skip '&'
+            expr = CommandExpr::Background(Box::new(expr));
+        }
+
         Ok(expr)
     }
 
@@ -236,6 +242,7 @@ impl Parser {
         while !self.check_current(&TokenKind::Pipe)
             && !self.check_current(&TokenKind::And)
             && !self.check_current(&TokenKind::Or)
+            && !self.check_current(&TokenKind::Ampersand)
             && !self.check_current(&TokenKind::ThinArrow)
             && !terminators.iter().any(|term| self.check_current(term))
         {
@@ -1165,6 +1172,7 @@ impl Parser {
                 while !self.check_current(&TokenKind::RightCurly) {
                     while self.check_current(&TokenKind::NewLine)
                         || self.check_current(&TokenKind::Semicolon)
+                        || self.check_current(&TokenKind::Ampersand)
                     {
                         self.advance();
                     }
@@ -1305,7 +1313,6 @@ impl Parser {
             TokenKind::Not => Some(Expr::String("!".to_string())),
             TokenKind::GreaterThan => Some(Expr::String(">".to_string())),
             TokenKind::LessThan => Some(Expr::String("<".to_string())),
-            TokenKind::Ampersand => Some(Expr::String("&".to_string())),
             TokenKind::LeftBracket => Some(Expr::String("[".to_string())),
             TokenKind::RightBracket => Some(Expr::String("]".to_string())),
             TokenKind::LeftCurly => Some(Expr::String("{".to_string())),
@@ -1371,7 +1378,10 @@ impl Parser {
     }
 
     fn skip_statement_separators(&mut self) {
-        while self.check_current(&TokenKind::NewLine) || self.check_current(&TokenKind::Semicolon) {
+        while self.check_current(&TokenKind::NewLine)
+            || self.check_current(&TokenKind::Semicolon)
+            || self.check_current(&TokenKind::Ampersand)
+        {
             self.advance();
         }
     }
@@ -2797,5 +2807,33 @@ mod tests {
         assert_eq!(variable, "item");
         assert!(matches!(iterable, Expr::Variable(v) if v == "items"));
         assert_eq!(loop_body.len(), 1);
+    }
+
+    #[test]
+    fn parses_background_commands() {
+        let body = parse_program("sleep 10 &");
+        assert_eq!(body.len(), 1);
+        let Statement::Command(CommandExpr::Background(inner)) = &body[0] else {
+            panic!("Expected CommandExpr::Background");
+        };
+        assert!(matches!(inner.as_ref(), CommandExpr::Call { .. }));
+
+        let body2 = parse_program("sleep 1 & sleep 2 &");
+        assert_eq!(body2.len(), 2);
+        assert!(matches!(
+            &body2[0],
+            Statement::Command(CommandExpr::Background(_))
+        ));
+        assert!(matches!(
+            &body2[1],
+            Statement::Command(CommandExpr::Background(_))
+        ));
+
+        let body3 = parse_program("cat foo | grep bar &");
+        assert_eq!(body3.len(), 1);
+        let Statement::Command(CommandExpr::Background(inner)) = &body3[0] else {
+            panic!("Expected CommandExpr::Background");
+        };
+        assert!(matches!(inner.as_ref(), CommandExpr::Pipeline(_)));
     }
 }

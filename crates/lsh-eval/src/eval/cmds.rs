@@ -23,7 +23,7 @@ pub fn exec_cmd<R: io::Read + Send, W: io::Write + Send, WE: io::Write + Send>(
         return builtins::dispatch(builtin.kind, evaluator, ctx, args);
     }
 
-    match spawn_proc(cmd, args, env_assignments, ctx) {
+    match spawn_proc(Some(evaluator), cmd, args, env_assignments, ctx) {
         Ok(status) => status,
         Err(e) => {
             print_error(&mut ctx.err, &e.to_string());
@@ -33,13 +33,14 @@ pub fn exec_cmd<R: io::Read + Send, W: io::Write + Send, WE: io::Write + Send>(
 }
 
 pub fn spawn_proc<R: io::Read + Send, W: io::Write + Send, WE: io::Write + Send>(
+    evaluator: Option<&mut Evaluator>,
     cmd: &str,
     args: Vec<String>,
     env_assignments: &[(String, String)],
     ctx: &mut IoCtx<R, W, WE>,
 ) -> io::Result<i32> {
     let mut c = Command::new(cmd);
-    c.args(args);
+    c.args(args.clone());
     c.envs(
         env_assignments
             .iter()
@@ -67,6 +68,9 @@ pub fn spawn_proc<R: io::Read + Send, W: io::Write + Send, WE: io::Write + Send>
         use std::os::unix::process::CommandExt;
         if signals::is_interactive_tty() {
             c.process_group(0);
+        }
+        unsafe {
+            c.pre_exec(|| signals::reset_child_signals_pre_exec());
         }
     }
 
@@ -111,9 +115,67 @@ pub fn spawn_proc<R: io::Read + Send, W: io::Write + Send, WE: io::Write + Send>
                 }
             });
 
-            let status = child.wait()?;
             #[cfg(unix)]
-            {
+            if is_foreground && signals::is_interactive_tty() {
+                let exit_code;
+                loop {
+                    match signals::wait_pid_status(child_pid, libc::WUNTRACED) {
+                        Ok((pid, signals::ProcessStatus::Stopped(sig))) if pid == child_pid => {
+                            let saved_termios = signals::get_terminal_attributes();
+                            signals::restore_shell_termios();
+                            drop(_guard);
+
+                            let full_cmd = if args.is_empty() {
+                                cmd.to_string()
+                            } else {
+                                format!("{cmd} {}", args.join(" "))
+                            };
+
+                            if let Some(eval) = evaluator {
+                                let job_id = eval.job_manager.add_job(
+                                    child_pid,
+                                    vec![child_pid],
+                                    full_cmd.clone(),
+                                    crate::jobs::JobState::Stopped(sig),
+                                    saved_termios,
+                                );
+                                use std::io::Write as _;
+                                let _ = writeln!(
+                                    io::stderr(),
+                                    "\n[{job_id}]+  Stopped                 {full_cmd}"
+                                );
+                            }
+                            return Ok(signals::signal_exit_code(sig));
+                        }
+                        Ok((pid, signals::ProcessStatus::Exited(code))) if pid == child_pid => {
+                            exit_code = code;
+                            break;
+                        }
+                        Ok((pid, signals::ProcessStatus::Signaled(sig))) if pid == child_pid => {
+                            if sig == signals::SIGINT {
+                                use std::io::Write as _;
+                                let _ = writeln!(io::stderr());
+                            }
+                            exit_code = signals::signal_exit_code(sig);
+                            break;
+                        }
+                        Ok((_, signals::ProcessStatus::StillRunning))
+                        | Ok((_, signals::ProcessStatus::Continued)) => {
+                            continue;
+                        }
+                        Err(e) if e.raw_os_error() == Some(libc::EINTR) => {
+                            continue;
+                        }
+                        Err(e) => {
+                            return Err(e);
+                        }
+                        _ => {}
+                    }
+                }
+                signals::restore_shell_termios();
+                Ok(exit_code)
+            } else {
+                let status = child.wait()?;
                 use std::os::unix::process::ExitStatusExt;
                 if let Some(code) = status.code() {
                     Ok(code)

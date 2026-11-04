@@ -147,10 +147,7 @@ mod tests {
     fn test_format_7_cwd_with_spaces_and_special_chars() {
         let path = Path::new("/tmp/my dir#special");
         let formatted = format_7_cwd(path, "myhost").unwrap();
-        assert_eq!(
-            formatted,
-            "\x1b]7;file://myhost/tmp/my%20dir%23special\x07"
-        );
+        assert_eq!(formatted, "\x1b]7;file://myhost/tmp/my%20dir%23special\x07");
     }
 
     #[test]

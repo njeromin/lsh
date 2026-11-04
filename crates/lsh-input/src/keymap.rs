@@ -277,7 +277,10 @@ impl Keymap {
         // Undo & redo
         km.bind(KeyCombo::ctrl('_'), EditorAction::Undo);
         km.bind(
-            (KeyCode::Char('_'), KeyModifiers::CONTROL | KeyModifiers::SHIFT),
+            (
+                KeyCode::Char('_'),
+                KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+            ),
             EditorAction::Undo,
         );
         km.bind(KeyCombo::ctrl('/'), EditorAction::Undo);
@@ -295,11 +298,17 @@ impl Keymap {
             EditorAction::Redo,
         );
         km.bind(
-            (KeyCode::Char('z'), KeyModifiers::CONTROL | KeyModifiers::SHIFT),
+            (
+                KeyCode::Char('z'),
+                KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+            ),
             EditorAction::Redo,
         );
         km.bind(
-            (KeyCode::Char('Z'), KeyModifiers::CONTROL | KeyModifiers::SHIFT),
+            (
+                KeyCode::Char('Z'),
+                KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+            ),
             EditorAction::Redo,
         );
         km.bind(KeyCombo::ctrl('g'), EditorAction::Redo);
@@ -321,11 +330,17 @@ impl Keymap {
         km.bind(KeyCombo::ctrl('z'), EditorAction::Undo);
         km.bind(KeyCombo::alt('r'), EditorAction::Redo);
         km.bind(
-            (KeyCode::Char('z'), KeyModifiers::CONTROL | KeyModifiers::SHIFT),
+            (
+                KeyCode::Char('z'),
+                KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+            ),
             EditorAction::Redo,
         );
         km.bind(
-            (KeyCode::Char('Z'), KeyModifiers::CONTROL | KeyModifiers::SHIFT),
+            (
+                KeyCode::Char('Z'),
+                KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+            ),
             EditorAction::Redo,
         );
 

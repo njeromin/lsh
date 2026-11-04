@@ -1,15 +1,5 @@
 use std::io::{self, BufWriter, Stdout, Write};
 
-use crossterm::{
-    cursor::{self, MoveToColumn},
-    event::{
-        self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEvent, KeyEventKind,
-        KeyModifiers,
-    },
-    queue,
-    style::{ContentStyle, Print, Stylize},
-    terminal::{self, Clear, ClearType},
-};
 use crate::buffer::LineBuffer;
 use crate::clipboard::{Clipboard, default_clipboard};
 use crate::completer::Completer;
@@ -22,6 +12,16 @@ pub use crate::layout::{ScreenLayout, compute_screen_layout};
 use crate::menu::{Menu, MenuOutcome};
 use crate::prompt::Prompt;
 use crate::validator::{ValidationResult, Validator};
+use crossterm::{
+    cursor::{self, MoveToColumn},
+    event::{
+        self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEvent, KeyEventKind,
+        KeyModifiers,
+    },
+    queue,
+    style::{ContentStyle, Print, Stylize},
+    terminal::{self, Clear, ClearType},
+};
 
 /// Normalises pasted text by converting CRLF and CR line endings to standard LF (`\n`),
 /// preserving valid whitespace (`\n`, `\t`) and printable Unicode characters,
@@ -127,7 +127,7 @@ impl Editor<BufWriter<Stdout>> {
 
 impl<W: Write> Editor<W> {
     /// Create an editor with a custom writer (e.g. `stderr`, `Vec<u8>`, or a custom buffer).
-    pub fn with_writer(writer: W) -> Self {
+    pub fn new_with_writer(writer: W) -> Self {
         Self {
             writer,
             keymap: Keymap::default(),
@@ -145,6 +145,12 @@ impl<W: Write> Editor<W> {
             indent_size: 4,
             terminal_width: None,
         }
+    }
+
+    /// Alias for `new_with_writer`.
+    #[deprecated(note = "Use `Editor::new_with_writer` instead")]
+    pub fn with_writer(writer: W) -> Self {
+        Self::new_with_writer(writer)
     }
 
     /// Set a custom hinter for providing inline ghost text suggestions.
@@ -700,8 +706,9 @@ impl<W: Write> Editor<W> {
                                         previous_cursor_row,
                                         false,
                                     )?;
-                                    let rows_to_move_down =
-                                        final_layout.end_row.saturating_sub(final_layout.cursor_row);
+                                    let rows_to_move_down = final_layout
+                                        .end_row
+                                        .saturating_sub(final_layout.cursor_row);
                                     if rows_to_move_down > 0 {
                                         queue!(
                                             self.writer,
@@ -792,8 +799,7 @@ impl<W: Write> Editor<W> {
                             }
                             EditorAction::MoveRight => {
                                 in_insert_session = false;
-                                if self.edit_mode == EditMode::Vi
-                                    && self.vi_mode == ViMode::Normal
+                                if self.edit_mode == EditMode::Vi && self.vi_mode == ViMode::Normal
                                 {
                                     if line_buffer.cursor() + 1 < line_buffer.len() {
                                         changed = line_buffer.move_right();
@@ -1085,24 +1091,20 @@ impl<W: Write> Editor<W> {
                             }
                             EditorAction::SwitchToNormalMode => {
                                 in_insert_session = false;
-                                if self.edit_mode == EditMode::Vi
-                                    && self.vi_mode != ViMode::Normal
+                                if self.edit_mode == EditMode::Vi && self.vi_mode != ViMode::Normal
                                 {
                                     self.vi_mode = ViMode::Normal;
                                     self.keymap = Keymap::default_vi_normal();
                                     if line_buffer.cursor() > 0 {
                                         line_buffer.move_left();
                                     }
-                                    let _ = queue!(
-                                        self.writer,
-                                        cursor::SetCursorStyle::SteadyBlock
-                                    );
+                                    let _ =
+                                        queue!(self.writer, cursor::SetCursorStyle::SteadyBlock);
                                     changed = true;
                                 }
                             }
                             EditorAction::SwitchToInsertMode => {
-                                if self.edit_mode == EditMode::Vi
-                                    && self.vi_mode != ViMode::Insert
+                                if self.edit_mode == EditMode::Vi && self.vi_mode != ViMode::Insert
                                 {
                                     self.vi_mode = ViMode::Insert;
                                     self.keymap = Keymap::default_vi_insert();
@@ -1416,9 +1418,7 @@ impl<W: Write> Editor<W> {
 
         // 5. Render completion menu lines beneath the buffer if menu is active
         let mut menu_rows = 0;
-        if is_menu_active
-            && let Some(menu) = &self.menu
-        {
+        if is_menu_active && let Some(menu) = &self.menu {
             let lines = menu.render_lines(term_cols, layout.cursor_col);
             for line in &lines {
                 queue!(self.writer, Print("\r\n"), Print(line))?;
@@ -1507,7 +1507,7 @@ mod tests {
         let mut keymap = Keymap::empty();
         keymap.bind(KeyCombo::ctrl('q'), EditorAction::Interrupt);
 
-        let mut editor = Editor::with_writer(buffer).with_keymap(keymap);
+        let mut editor = Editor::new_with_writer(buffer).with_keymap(keymap);
         assert!(editor.keymap().contains(KeyCombo::ctrl('q')));
         assert!(!editor.keymap().contains(KeyCode::Enter));
 
@@ -1520,7 +1520,7 @@ mod tests {
     #[test]
     fn test_render_line_to_buffer() {
         let buffer = Vec::new();
-        let mut editor = Editor::with_writer(buffer);
+        let mut editor = Editor::new_with_writer(buffer);
         let line_buf = LineBuffer::with_content("echo 1".to_string());
         let (layout, _) = editor.render_line(&"> ", &line_buf, 0).unwrap();
         assert_eq!(layout.cursor_row, 0);
@@ -1533,7 +1533,7 @@ mod tests {
     fn test_render_line_with_formatter() {
         let buffer = Vec::new();
         let mut editor =
-            Editor::with_writer(buffer).with_formatter(|s: &str| format!("***{}***", s));
+            Editor::new_with_writer(buffer).with_formatter(|s: &str| format!("***{}***", s));
         let line_buf = LineBuffer::with_content("secret".to_string());
         let (layout, _) = editor.render_line(&"> ", &line_buf, 0).unwrap();
         assert_eq!(layout.cursor_row, 0);
@@ -1544,7 +1544,7 @@ mod tests {
     #[test]
     fn test_render_multiline() {
         let buffer = Vec::new();
-        let mut editor = Editor::with_writer(buffer);
+        let mut editor = Editor::new_with_writer(buffer);
         let line_buf = LineBuffer::with_content("first\nsecond".to_string());
         let (layout, _) = editor.render_line(&"> ", &line_buf, 0).unwrap();
         let out = String::from_utf8(editor.into_writer()).unwrap();
@@ -1557,7 +1557,7 @@ mod tests {
     #[test]
     fn test_render_line_with_soft_wrap_override() {
         let buffer = Vec::new();
-        let mut editor = Editor::with_writer(buffer).with_terminal_width(10);
+        let mut editor = Editor::new_with_writer(buffer).with_terminal_width(10);
         let mut line_buf = LineBuffer::new();
         line_buf.insert_str("123456789"); // 2 + 9 = 11 cols in 10-col terminal
 
@@ -1571,13 +1571,14 @@ mod tests {
     #[test]
     fn test_render_line_with_ghost_text() {
         let buffer = Vec::new();
-        let mut editor = Editor::with_writer(buffer).with_hinter(|line: &str, cursor: usize| {
-            if line == "git c" && cursor == 5 {
-                Some("heckout".to_string())
-            } else {
-                None
-            }
-        });
+        let mut editor =
+            Editor::new_with_writer(buffer).with_hinter(|line: &str, cursor: usize| {
+                if line == "git c" && cursor == 5 {
+                    Some("heckout".to_string())
+                } else {
+                    None
+                }
+            });
 
         let mut line_buf = LineBuffer::new();
         line_buf.insert_str("git c");
@@ -1598,13 +1599,14 @@ mod tests {
     #[test]
     fn test_render_line_suppresses_ghost_text_when_disabled_or_vi_normal() {
         let buffer = Vec::new();
-        let mut editor = Editor::with_writer(buffer).with_hinter(|line: &str, cursor: usize| {
-            if line == "git c" && cursor == 5 {
-                Some("heckout".to_string())
-            } else {
-                None
-            }
-        });
+        let mut editor =
+            Editor::new_with_writer(buffer).with_hinter(|line: &str, cursor: usize| {
+                if line == "git c" && cursor == 5 {
+                    Some("heckout".to_string())
+                } else {
+                    None
+                }
+            });
 
         let mut line_buf = LineBuffer::new();
         line_buf.insert_str("git c");
@@ -1652,7 +1654,7 @@ mod tests {
     #[test]
     fn test_editor_with_completer_and_menu() {
         let buffer = Vec::new();
-        let mut editor = Editor::with_writer(buffer)
+        let mut editor = Editor::new_with_writer(buffer)
             .with_completer(|line: &str, cursor: usize| {
                 if line == "car" && cursor == 3 {
                     (0, vec![Candidate::new("cargo")])
@@ -1697,7 +1699,7 @@ mod tests {
         menu.activate(&mut line_buf, Some(&completer));
         assert!(menu.is_active());
 
-        let mut editor = Editor::with_writer(buffer)
+        let mut editor = Editor::new_with_writer(buffer)
             .with_terminal_width(80)
             .with_hinter(|_line: &str, _cursor: usize| Some("ghost-hint".to_string()))
             .with_menu(menu);
@@ -1731,7 +1733,7 @@ mod tests {
         hist.append("echo 2");
 
         let buffer = Vec::new();
-        let mut editor = Editor::with_writer(buffer).with_history(hist);
+        let mut editor = Editor::new_with_writer(buffer).with_history(hist);
         assert!(editor.history().is_some());
         assert_eq!(editor.history().unwrap().len(), 2);
         assert_eq!(editor.history().unwrap().get(0).as_deref(), Some("echo 1"));
@@ -1744,7 +1746,7 @@ mod tests {
     #[test]
     fn test_render_line_multiline_prompt_redraws_in_place() {
         let buffer = Vec::new();
-        let mut editor = Editor::with_writer(buffer).with_terminal_width(80);
+        let mut editor = Editor::new_with_writer(buffer).with_terminal_width(80);
         let prompt = "\n\x1b[1;34m~/dev/lsh\x1b[0m (main)\n\x1b[35m❯ \x1b[0m";
 
         let mut line_buf = LineBuffer::new();
@@ -1773,7 +1775,7 @@ mod tests {
 
         let buffer = Vec::new();
         let cb = InMemoryClipboard::new();
-        let mut editor = Editor::with_writer(buffer).with_clipboard(cb);
+        let mut editor = Editor::new_with_writer(buffer).with_clipboard(cb);
 
         assert!(editor.clipboard().is_some());
 
@@ -1791,7 +1793,7 @@ mod tests {
     #[test]
     fn test_editor_vi_mode_configuration_and_keymaps() {
         let buffer = Vec::new();
-        let mut editor = Editor::with_writer(buffer);
+        let mut editor = Editor::new_with_writer(buffer);
         assert_eq!(editor.edit_mode(), EditMode::Emacs);
         assert_eq!(editor.vi_mode(), ViMode::Insert);
 
@@ -1927,11 +1929,15 @@ mod tests {
 
         // Emacs keybindings for Undo and Redo
         assert_eq!(
-            editor.keymap().get(KeyCode::Char('_'), KeyModifiers::CONTROL),
+            editor
+                .keymap()
+                .get(KeyCode::Char('_'), KeyModifiers::CONTROL),
             Some(&EditorAction::Undo)
         );
         assert_eq!(
-            editor.keymap().get(KeyCode::Char('z'), KeyModifiers::CONTROL),
+            editor
+                .keymap()
+                .get(KeyCode::Char('z'), KeyModifiers::CONTROL),
             Some(&EditorAction::Undo)
         );
         assert_eq!(
@@ -1948,7 +1954,7 @@ mod tests {
         editor.set_cursor_style(cursor::SetCursorStyle::SteadyBar);
         assert_eq!(editor.cursor_style(), cursor::SetCursorStyle::SteadyBar);
 
-        let editor2 = Editor::with_writer(Vec::<u8>::new())
+        let editor2 = Editor::new_with_writer(Vec::<u8>::new())
             .with_cursor_style(cursor::SetCursorStyle::SteadyBlock);
         assert_eq!(editor2.cursor_style(), cursor::SetCursorStyle::SteadyBlock);
     }

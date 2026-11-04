@@ -20,9 +20,9 @@ Hide
 Type "cargo build --release -q"
 Enter
 Sleep 1s
-Type "export LSH_CONFIG_DIR=./config; export LSH_NERD_ICONS=true; alias lsh=./target/release/lsh"
+Type "export LSH_CONFIG_DIR=./config; export LSH_NERD_ICONS=true"
 Enter
-Type "clear; lsh"
+Type "clear; ./target/release/lsh"
 Enter
 Sleep 1s
 Show

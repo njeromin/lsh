@@ -24,14 +24,16 @@ use lsh_syntax::{
 };
 
 use lsh_sys::signals::{
-    SIGINT, STATUS_SIGINT, TerminalForegroundGuard, get_interrupt_flag, is_interactive_tty,
-    signal_exit_code,
+    ProcessStatus, SIGINT, STATUS_SIGINT, TerminalForegroundGuard, get_interrupt_flag,
+    get_terminal_attributes, is_interactive_tty, reset_child_signals_pre_exec,
+    restore_shell_termios, signal_exit_code, wait_pid_status,
 };
 
 use crate::{
     eval::value::{FunctionValue, Value},
     expand::{self, ExpandCtx},
     io::{IoCtx, IoStreamMode},
+    jobs::{JobManager, JobState},
     plugins::PluginManager,
 };
 
@@ -79,6 +81,8 @@ pub struct Evaluator {
     pub hook_registry: Arc<RwLock<HookRegistry>>,
     pub module_cache: Arc<RwLock<HashMap<PathBuf, Value>>>,
     pub exported_vars: HashSet<String>,
+    pub job_manager: JobManager,
+    pub warned_stopped_jobs: bool,
 }
 
 impl Evaluator {
@@ -97,6 +101,8 @@ impl Evaluator {
             hook_registry: Arc::new(RwLock::new(HookRegistry::new())),
             module_cache: Arc::new(RwLock::new(HashMap::new())),
             exported_vars,
+            job_manager: JobManager::new(),
+            warned_stopped_jobs: false,
         }
     }
 
@@ -563,6 +569,113 @@ impl Evaluator {
                 None,
                 &mut scope_indices,
             );
+        }
+    }
+
+    pub fn reap_and_notify_jobs<W: io::Write>(&mut self, out: &mut W) {
+        let notifications = self.job_manager.reap_jobs();
+        for (id, state, cmd) in notifications {
+            match state {
+                JobState::Done(code) => {
+                    if code == 0 {
+                        let _ = writeln!(out, "[{id}]+  Done                    {cmd}");
+                    } else {
+                        let _ = writeln!(out, "[{id}]+  Exit {code:<18} {cmd}");
+                    }
+                }
+                JobState::Stopped(sig) => {
+                    let _ = writeln!(out, "[{id}]+  Stopped ({sig})         {cmd}");
+                }
+                _ => {}
+            }
+        }
+    }
+
+    pub fn resume_foreground_job<R: io::Read, W: io::Write, WE: io::Write>(
+        &mut self,
+        job_id: usize,
+        ctx: &mut IoCtx<R, W, WE>,
+    ) -> i32 {
+        let Some(job) = self.job_manager.get_job(job_id) else {
+            let _ = writeln!(ctx.err, "fg: job {job_id} not found");
+            return 1;
+        };
+
+        let pgid = job.pgid;
+        let pids = job.pids.clone();
+        let cmd = job.command.clone();
+        #[cfg(unix)]
+        let saved_termios = job.saved_termios;
+
+        let _ = writeln!(ctx.out, "{cmd}");
+
+        #[cfg(unix)]
+        {
+            if let Some(tmodes) = saved_termios {
+                lsh_sys::set_terminal_attributes(&tmodes);
+            }
+
+            let _guard = if is_interactive_tty() {
+                TerminalForegroundGuard::give_to_pgid(pgid)
+            } else {
+                TerminalForegroundGuard::inactive()
+            };
+
+            unsafe {
+                libc::killpg(pgid, libc::SIGCONT);
+            }
+
+            if let Some(j) = self.job_manager.get_job_mut(job_id) {
+                j.state = JobState::Running;
+            }
+
+            let mut remaining_pids = pids;
+            let mut last_code = 0;
+
+            loop {
+                if remaining_pids.is_empty() {
+                    break;
+                }
+
+                match wait_pid_status(-pgid, libc::WUNTRACED) {
+                    Ok((_pid, ProcessStatus::Stopped(sig))) => {
+                        let new_tmodes = get_terminal_attributes();
+                        restore_shell_termios();
+                        drop(_guard);
+                        if let Some(j) = self.job_manager.get_job_mut(job_id) {
+                            j.state = JobState::Stopped(sig);
+                            j.saved_termios = new_tmodes;
+                        }
+                        let _ = writeln!(ctx.err, "\n[{job_id}]+  Stopped                 {cmd}");
+                        return signal_exit_code(sig);
+                    }
+                    Ok((pid, ProcessStatus::Exited(code))) => {
+                        remaining_pids.retain(|&p| p != pid);
+                        last_code = code;
+                    }
+                    Ok((pid, ProcessStatus::Signaled(sig))) => {
+                        remaining_pids.retain(|&p| p != pid);
+                        if sig == SIGINT {
+                            let _ = writeln!(ctx.err);
+                        }
+                        last_code = signal_exit_code(sig);
+                    }
+                    Ok((_, ProcessStatus::StillRunning)) | Ok((_, ProcessStatus::Continued)) => {
+                        continue;
+                    }
+                    Err(_) => {
+                        break;
+                    }
+                }
+            }
+
+            restore_shell_termios();
+            self.job_manager.remove_job(job_id);
+            last_code
+        }
+        #[cfg(not(unix))]
+        {
+            0
         }
     }
 
@@ -1505,6 +1618,18 @@ impl Evaluator {
             return (0, vec![], vec![]);
         }
 
+        let pipeline_cmd_summary = stages
+            .iter()
+            .map(|s| {
+                if s.args.is_empty() {
+                    s.cmd.clone()
+                } else {
+                    format!("{} {}", s.cmd, s.args.join(" "))
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" | ");
+
         let mut children: Vec<std::process::Child> = Vec::with_capacity(total_stages);
         let mut prev_stdout: Option<std::process::ChildStdout> = None;
         let mut leader_pid: i32 = 0;
@@ -1531,6 +1656,9 @@ impl Evaluator {
                     } else {
                         c.process_group(leader_pid);
                     }
+                }
+                unsafe {
+                    c.pre_exec(|| reset_child_signals_pre_exec());
                 }
             }
 
@@ -1669,6 +1797,66 @@ impl Evaluator {
                 }
             }
         });
+
+        #[cfg(unix)]
+        if !capture_output && is_interactive_tty() {
+            let pids: Vec<i32> = children.iter().map(|c| c.id() as i32).collect();
+            let mut remaining_pids = pids.clone();
+            let mut last_code = 0;
+
+            loop {
+                if remaining_pids.is_empty() {
+                    break;
+                }
+
+                match wait_pid_status(-leader_pid, libc::WUNTRACED) {
+                    Ok((_pid, ProcessStatus::Stopped(sig))) => {
+                        let saved_termios = get_terminal_attributes();
+                        restore_shell_termios();
+                        drop(_guard);
+
+                        let job_id = self.job_manager.add_job(
+                            leader_pid,
+                            pids,
+                            pipeline_cmd_summary.clone(),
+                            JobState::Stopped(sig),
+                            saved_termios,
+                        );
+                        use std::io::Write as _;
+                        let _ = writeln!(
+                            io::stderr(),
+                            "\n[{job_id}]+  Stopped                 {pipeline_cmd_summary}"
+                        );
+                        return (signal_exit_code(sig), vec![], vec![]);
+                    }
+                    Ok((pid, ProcessStatus::Exited(code))) => {
+                        if Some(pid) == pids.last().copied() {
+                            last_code = code;
+                        }
+                        remaining_pids.retain(|&p| p != pid);
+                    }
+                    Ok((pid, ProcessStatus::Signaled(sig))) => {
+                        if sig == SIGINT {
+                            use std::io::Write as _;
+                            let _ = writeln!(io::stderr());
+                        }
+                        if Some(pid) == pids.last().copied() {
+                            last_code = signal_exit_code(sig);
+                        }
+                        remaining_pids.retain(|&p| p != pid);
+                    }
+                    Ok((_, ProcessStatus::StillRunning)) | Ok((_, ProcessStatus::Continued)) => {
+                        continue;
+                    }
+                    Err(_) => {
+                        break;
+                    }
+                }
+            }
+
+            restore_shell_termios();
+            return (last_code, captured_out, captured_err);
+        }
 
         let mut last_code = 0;
         for (i, mut child) in children.into_iter().enumerate() {
@@ -1951,6 +2139,297 @@ impl Evaluator {
                 } else {
                     (left_code, left_out, left_err)
                 }
+            }
+            CommandExpr::Background(inner) => {
+                self.evaluate_background_command_expr(inner, scope_indices)
+            }
+        }
+    }
+
+    fn evaluate_background_command_expr(
+        &mut self,
+        inner: &CommandExpr,
+        scope_indices: &mut Vec<usize>,
+    ) -> (i32, Vec<u8>, Vec<u8>) {
+        use std::process::{Command, Stdio};
+
+        match inner {
+            CommandExpr::Call {
+                env_assignments,
+                identifier,
+                args,
+                stdout_redirect,
+            } => {
+                let temp_scope_index = self.make_scope();
+                scope_indices.push(temp_scope_index);
+
+                let mut env_assignment_values = vec![];
+                for (name, value_expr) in env_assignments {
+                    let value = self
+                        .evaluate_expr(value_expr, true, scope_indices)
+                        .to_string();
+                    self.push_var(temp_scope_index, name.clone(), Value::String(value.clone()));
+                    env_assignment_values.push((name.clone(), value));
+                }
+
+                let stdout_redirect_path =
+                    self.resolve_stdout_redirect_path(stdout_redirect, scope_indices);
+
+                let (identifier_val, _receiver) =
+                    self.resolve_callable_target(identifier, scope_indices);
+
+                let identifier_str = identifier_val.to_string();
+                let (res_cmd, res_args) = self.resolve_command(identifier_str);
+                let all_args = self.build_command_args(res_args, args, scope_indices);
+
+                let popped_scope_index = scope_indices
+                    .pop()
+                    .expect("Failed to pop temp env scope index");
+                if popped_scope_index != temp_scope_index {
+                    panic!("Scope stack mismatch");
+                }
+                self.scopes.pop();
+
+                let mut c = Command::new(&res_cmd);
+                c.args(&all_args);
+                c.envs(
+                    env_assignment_values
+                        .iter()
+                        .map(|(k, v)| (k.as_str(), v.as_str())),
+                );
+
+                // Background stdin is null to prevent SIGTTIN
+                c.stdin(Stdio::null());
+
+                if let Some(path) = &stdout_redirect_path {
+                    match File::create(path) {
+                        Ok(file) => {
+                            c.stdout(Stdio::from(file));
+                        }
+                        Err(e) => {
+                            use std::io::Write as _;
+                            let _ = writeln!(io::stderr(), "{e}");
+                            return (-1, vec![], vec![]);
+                        }
+                    }
+                } else {
+                    c.stdout(Stdio::inherit());
+                }
+                c.stderr(Stdio::inherit());
+
+                #[cfg(unix)]
+                {
+                    use std::os::unix::process::CommandExt;
+                    c.process_group(0);
+                    unsafe {
+                        c.pre_exec(|| reset_child_signals_pre_exec());
+                    }
+                }
+
+                match c.spawn() {
+                    Ok(child) => {
+                        let child_pid = child.id() as i32;
+                        let full_cmd = if all_args.is_empty() {
+                            format!("{res_cmd} &")
+                        } else {
+                            format!("{res_cmd} {} &", all_args.join(" "))
+                        };
+
+                        let job_id = self.job_manager.add_job(
+                            child_pid,
+                            vec![child_pid],
+                            full_cmd,
+                            JobState::Running,
+                            None,
+                        );
+
+                        use std::io::Write as _;
+                        let _ = writeln!(io::stderr(), "[{job_id}] {child_pid}");
+                        (0, vec![], vec![])
+                    }
+                    Err(e) => {
+                        use std::io::Write as _;
+                        let _ = writeln!(io::stderr(), "Failed to spawn {res_cmd}: {e}");
+                        (-1, vec![], vec![])
+                    }
+                }
+            }
+            CommandExpr::Pipeline(stages) => {
+                let mut resolved_stages = Vec::new();
+                for stage in stages {
+                    let CommandExpr::Call {
+                        env_assignments,
+                        identifier,
+                        args,
+                        stdout_redirect,
+                    } = stage
+                    else {
+                        use std::io::Write as _;
+                        let _ = writeln!(
+                            io::stderr(),
+                            "Background execution only supports pipelines of external commands."
+                        );
+                        return (-1, vec![], vec![]);
+                    };
+
+                    let temp_scope_index = self.make_scope();
+                    scope_indices.push(temp_scope_index);
+
+                    let mut env_assignment_values = vec![];
+                    for (name, value_expr) in env_assignments {
+                        let value = self
+                            .evaluate_expr(value_expr, true, scope_indices)
+                            .to_string();
+                        self.push_var(temp_scope_index, name.clone(), Value::String(value.clone()));
+                        env_assignment_values.push((name.clone(), value));
+                    }
+
+                    let stdout_redirect_path =
+                        self.resolve_stdout_redirect_path(stdout_redirect, scope_indices);
+
+                    let (identifier_val, _) =
+                        self.resolve_callable_target(identifier, scope_indices);
+                    let popped = scope_indices.pop();
+                    if popped != Some(temp_scope_index) {
+                        panic!("Scope stack mismatch");
+                    }
+                    self.scopes.pop();
+
+                    let identifier_str = identifier_val.to_string();
+                    let (res_cmd, res_args) = self.resolve_command(identifier_str);
+                    let all_args = self.build_command_args(res_args, args, scope_indices);
+
+                    resolved_stages.push(ExternalPipelineStage {
+                        cmd: res_cmd,
+                        args: all_args,
+                        env_assignments: env_assignment_values,
+                        stdout_redirect: stdout_redirect_path,
+                    });
+                }
+
+                let total_stages = resolved_stages.len();
+                if total_stages == 0 {
+                    return (0, vec![], vec![]);
+                }
+
+                let pipeline_cmd_summary = resolved_stages
+                    .iter()
+                    .map(|s| {
+                        if s.args.is_empty() {
+                            s.cmd.clone()
+                        } else {
+                            format!("{} {}", s.cmd, s.args.join(" "))
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" | ")
+                    + " &";
+
+                let mut children: Vec<std::process::Child> = Vec::with_capacity(total_stages);
+                let mut prev_stdout: Option<std::process::ChildStdout> = None;
+                let mut leader_pid: i32 = 0;
+
+                for (i, stage) in resolved_stages.into_iter().enumerate() {
+                    let is_first = i == 0;
+                    let is_last = i + 1 == total_stages;
+
+                    let mut c = Command::new(&stage.cmd);
+                    c.args(stage.args);
+                    c.envs(
+                        stage
+                            .env_assignments
+                            .iter()
+                            .map(|(k, v)| (k.as_str(), v.as_str())),
+                    );
+
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::process::CommandExt;
+                        if is_first {
+                            c.process_group(0);
+                        } else {
+                            c.process_group(leader_pid);
+                        }
+                        unsafe {
+                            c.pre_exec(|| reset_child_signals_pre_exec());
+                        }
+                    }
+
+                    if is_first {
+                        c.stdin(Stdio::null());
+                    } else {
+                        let stdin_source = prev_stdout
+                            .take()
+                            .expect("Previous stage stdout must be available");
+                        c.stdin(Stdio::from(stdin_source));
+                    }
+
+                    if !is_last {
+                        c.stdout(Stdio::piped());
+                    } else if let Some(redirect_path) = stage.stdout_redirect {
+                        match File::create(&redirect_path) {
+                            Ok(file) => {
+                                c.stdout(Stdio::from(file));
+                            }
+                            Err(e) => {
+                                for mut child in children {
+                                    let _ = child.kill();
+                                    let _ = child.wait();
+                                }
+                                use std::io::Write as _;
+                                let _ = writeln!(io::stderr(), "{e}");
+                                return (-1, vec![], vec![]);
+                            }
+                        }
+                    } else {
+                        c.stdout(Stdio::inherit());
+                    }
+
+                    c.stderr(Stdio::inherit());
+
+                    match c.spawn() {
+                        Ok(mut child) => {
+                            if is_first {
+                                leader_pid = child.id() as i32;
+                            }
+                            if !is_last {
+                                prev_stdout = child.stdout.take();
+                            }
+                            children.push(child);
+                        }
+                        Err(e) => {
+                            for mut child in children {
+                                let _ = child.kill();
+                                let _ = child.wait();
+                            }
+                            use std::io::Write as _;
+                            let _ = writeln!(io::stderr(), "{e}");
+                            return (-1, vec![], vec![]);
+                        }
+                    }
+                }
+
+                let pids: Vec<i32> = children.iter().map(|c| c.id() as i32).collect();
+                let job_id = self.job_manager.add_job(
+                    leader_pid,
+                    pids,
+                    pipeline_cmd_summary,
+                    JobState::Running,
+                    None,
+                );
+
+                use std::io::Write as _;
+                let _ = writeln!(io::stderr(), "[{job_id}] {leader_pid}");
+
+                (0, vec![], vec![])
+            }
+            _ => {
+                use std::io::Write as _;
+                let _ = writeln!(
+                    io::stderr(),
+                    "Background execution only supports commands and pipelines."
+                );
+                (-1, vec![], vec![])
             }
         }
     }
@@ -4508,5 +4987,137 @@ mod tests {
             &Value::Number(12.0)
         );
         assert_eq!(eval.get_var(0, "early_ret").unwrap(), &Value::Number(70.0));
+    }
+
+    #[test]
+    fn test_jobs_and_disown_builtins() {
+        let mut eval = Evaluator::new();
+        eval.job_manager.add_job(
+            1234,
+            vec![1234],
+            "sleep 10 &".to_string(),
+            JobState::Running,
+            None,
+        );
+        eval.job_manager.add_job(
+            5678,
+            vec![5678],
+            "vim test.txt".to_string(),
+            JobState::Stopped(20),
+            None,
+        );
+
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let mut ctx = IoCtx {
+            input: io::Cursor::new(Vec::new()),
+            out: &mut out,
+            err: &mut err,
+            input_mode: IoStreamMode::Pipe,
+            out_mode: IoStreamMode::Pipe,
+            err_mode: IoStreamMode::Pipe,
+        };
+
+        let status = crate::builtins::dispatch(
+            crate::builtins::BuiltinKind::Jobs,
+            &mut eval,
+            &mut ctx,
+            vec![],
+        );
+        assert_eq!(status, 0);
+        let out_str = String::from_utf8(out).unwrap();
+        assert!(out_str.contains("sleep 10 &"));
+        assert!(out_str.contains("vim test.txt"));
+
+        // Test disown %1
+        let mut out2 = Vec::new();
+        let mut err2 = Vec::new();
+        let mut ctx2 = IoCtx {
+            input: io::Cursor::new(Vec::new()),
+            out: &mut out2,
+            err: &mut err2,
+            input_mode: IoStreamMode::Pipe,
+            out_mode: IoStreamMode::Pipe,
+            err_mode: IoStreamMode::Pipe,
+        };
+        let status = crate::builtins::dispatch(
+            crate::builtins::BuiltinKind::Disown,
+            &mut eval,
+            &mut ctx2,
+            vec!["%1".to_string()],
+        );
+        assert_eq!(status, 0);
+        assert!(eval.job_manager.get_job(1).is_none());
+        assert!(eval.job_manager.get_job(2).is_some());
+    }
+
+    #[test]
+    fn test_exit_warns_on_stopped_jobs() {
+        let mut eval = Evaluator::new();
+        eval.job_manager.add_job(
+            9999,
+            vec![9999],
+            "vim file.txt".to_string(),
+            JobState::Stopped(20),
+            None,
+        );
+
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let mut ctx = IoCtx {
+            input: io::Cursor::new(Vec::new()),
+            out: &mut out,
+            err: &mut err,
+            input_mode: IoStreamMode::Pipe,
+            out_mode: IoStreamMode::Pipe,
+            err_mode: IoStreamMode::Pipe,
+        };
+
+        // First exit attempt should warn and fail
+        let code = crate::builtins::dispatch(
+            crate::builtins::BuiltinKind::Exit,
+            &mut eval,
+            &mut ctx,
+            vec![],
+        );
+        assert_eq!(code, 1);
+        assert!(eval.warned_stopped_jobs);
+        let err_str = String::from_utf8(err).unwrap();
+        assert!(err_str.contains("There are stopped jobs"));
+    }
+
+    #[test]
+    fn test_kill_builtin() {
+        let mut eval = Evaluator::new();
+        eval.job_manager.add_job(
+            8888,
+            vec![8888],
+            "sleep 100".to_string(),
+            JobState::Stopped(20),
+            None,
+        );
+
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let mut ctx = IoCtx {
+            input: io::Cursor::new(Vec::new()),
+            out: &mut out,
+            err: &mut err,
+            input_mode: IoStreamMode::Pipe,
+            out_mode: IoStreamMode::Pipe,
+            err_mode: IoStreamMode::Pipe,
+        };
+
+        // Test kill -l
+        let code = crate::builtins::dispatch(
+            crate::builtins::BuiltinKind::Kill,
+            &mut eval,
+            &mut ctx,
+            vec!["-l".to_string()],
+        );
+        assert_eq!(code, 0);
+        let out_str = String::from_utf8(out).unwrap();
+        assert!(out_str.contains("SIGKILL"));
+        assert!(out_str.contains("SIGTERM"));
     }
 }

@@ -78,8 +78,117 @@ pub fn init_interactive_terminal() {
             if libc::isatty(libc::STDIN_FILENO) == 1 {
                 let shell_pgid = libc::getpgrp();
                 libc::tcsetpgrp(libc::STDIN_FILENO, shell_pgid);
+                save_shell_termios();
             }
         }
+    }
+}
+
+#[cfg(unix)]
+static SHELL_TERMIOS: OnceLock<libc::termios> = OnceLock::new();
+
+#[cfg(unix)]
+pub fn save_shell_termios() {
+    if is_interactive_tty() {
+        let mut tmodes = std::mem::MaybeUninit::uninit();
+        let ret = unsafe { libc::tcgetattr(libc::STDIN_FILENO, tmodes.as_mut_ptr()) };
+        if ret == 0 {
+            let _ = SHELL_TERMIOS.set(unsafe { tmodes.assume_init() });
+        }
+    }
+}
+
+#[cfg(not(unix))]
+pub fn save_shell_termios() {}
+
+#[cfg(unix)]
+pub fn restore_shell_termios() {
+    if let Some(tmodes) = SHELL_TERMIOS.get() {
+        unsafe {
+            libc::tcsetattr(libc::STDIN_FILENO, libc::TCSADRAIN, tmodes);
+        }
+    }
+}
+
+#[cfg(not(unix))]
+pub fn restore_shell_termios() {}
+
+#[cfg(unix)]
+pub fn get_terminal_attributes() -> Option<libc::termios> {
+    if is_interactive_tty() {
+        let mut tmodes = std::mem::MaybeUninit::uninit();
+        let ret = unsafe { libc::tcgetattr(libc::STDIN_FILENO, tmodes.as_mut_ptr()) };
+        if ret == 0 {
+            return Some(unsafe { tmodes.assume_init() });
+        }
+    }
+    None
+}
+
+#[cfg(not(unix))]
+pub fn get_terminal_attributes() -> Option<()> {
+    None
+}
+
+#[cfg(unix)]
+pub fn set_terminal_attributes(tmodes: &libc::termios) {
+    unsafe {
+        libc::tcsetattr(libc::STDIN_FILENO, libc::TCSADRAIN, tmodes);
+    }
+}
+
+#[cfg(not(unix))]
+pub fn set_terminal_attributes(_tmodes: &()) {}
+
+pub fn reset_child_signals_pre_exec() -> std::io::Result<()> {
+    #[cfg(unix)]
+    unsafe {
+        libc::signal(libc::SIGTSTP, libc::SIG_DFL);
+        libc::signal(libc::SIGTTIN, libc::SIG_DFL);
+        libc::signal(libc::SIGTTOU, libc::SIG_DFL);
+        libc::signal(libc::SIGINT, libc::SIG_DFL);
+        libc::signal(libc::SIGQUIT, libc::SIG_DFL);
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProcessStatus {
+    Exited(i32),
+    Signaled(i32),
+    Stopped(i32),
+    Continued,
+    StillRunning,
+}
+
+pub fn wait_pid_status(pid: i32, flags: i32) -> Result<(i32, ProcessStatus), std::io::Error> {
+    #[cfg(unix)]
+    {
+        let mut status: i32 = 0;
+        let res = unsafe { libc::waitpid(pid, &mut status, flags) };
+        if res < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        if res == 0 {
+            return Ok((0, ProcessStatus::StillRunning));
+        }
+
+        if libc::WIFEXITED(status) {
+            Ok((res, ProcessStatus::Exited(libc::WEXITSTATUS(status))))
+        } else if libc::WIFSIGNALED(status) {
+            Ok((res, ProcessStatus::Signaled(libc::WTERMSIG(status))))
+        } else if libc::WIFSTOPPED(status) {
+            Ok((res, ProcessStatus::Stopped(libc::WSTOPSIG(status))))
+        } else if libc::WIFCONTINUED(status) {
+            Ok((res, ProcessStatus::Continued))
+        } else {
+            Ok((res, ProcessStatus::Exited(1)))
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (pid, flags);
+        Ok((pid, ProcessStatus::Exited(0)))
     }
 }
 

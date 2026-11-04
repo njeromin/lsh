@@ -478,7 +478,10 @@ impl LineBuffer {
     pub fn yank_to_word_end(&self) -> Option<String> {
         if self.cursor < self.content.len() {
             let target = self.word_end_boundary();
-            let end_char_len = self.content[target..].chars().next().map_or(0, |c| c.len_utf8());
+            let end_char_len = self.content[target..]
+                .chars()
+                .next()
+                .map_or(0, |c| c.len_utf8());
             let end = (target + end_char_len).min(self.content.len());
             if end > self.cursor {
                 Some(self.content[self.cursor..end].to_string())
@@ -508,7 +511,10 @@ impl LineBuffer {
             return None;
         }
         let target = self.word_end_boundary();
-        let end_char_len = self.content[target..].chars().next().map_or(0, |c| c.len_utf8());
+        let end_char_len = self.content[target..]
+            .chars()
+            .next()
+            .map_or(0, |c| c.len_utf8());
         let end = (target + end_char_len).min(self.content.len());
         if end > self.cursor {
             let cut: String = self.content.drain(self.cursor..end).collect();
@@ -583,7 +589,8 @@ impl LineBuffer {
             let c_len = c.len_utf8();
             let mut buf = [0u8; 4];
             let s = new_char.encode_utf8(&mut buf);
-            self.content.replace_range(self.cursor..self.cursor + c_len, s);
+            self.content
+                .replace_range(self.cursor..self.cursor + c_len, s);
             true
         } else {
             false

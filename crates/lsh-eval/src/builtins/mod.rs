@@ -3,19 +3,26 @@ use std::io;
 use crate::{eval::Evaluator, io::IoCtx};
 
 pub mod alias;
+pub mod bg;
 pub mod cd;
 pub mod complete;
+pub mod disown;
 pub mod exec;
 pub mod exit;
 pub mod export;
+pub mod fg;
 pub mod fmt_cwd;
+pub mod jobs;
+pub mod kill;
 pub mod plugin;
 pub mod source;
+pub mod wait;
 
 // pub type BuiltinFn<R, W, WE> = fn(&mut Evaluator, &mut lsh::IoCtx<R, W, WE>, Vec<String>);
 
 pub const BUILTIN_NAMES: &[&str] = &[
-    "exit", "source", "exec", "alias", "cd", "fmt-cwd", "complete", "plugin", "export",
+    "exit", "source", "exec", "alias", "cd", "fmt-cwd", "complete", "plugin", "export", "jobs",
+    "fg", "bg", "wait", "disown", "kill",
 ];
 
 pub enum BuiltinKind {
@@ -28,6 +35,12 @@ pub enum BuiltinKind {
     Complete,
     Plugin,
     Export,
+    Jobs,
+    Fg,
+    Bg,
+    Wait,
+    Disown,
+    Kill,
 }
 
 pub struct BuiltinSpec {
@@ -73,6 +86,30 @@ pub fn lookup(name: &str) -> Option<BuiltinSpec> {
             name: "export",
             kind: BuiltinKind::Export,
         }),
+        "jobs" => Some(BuiltinSpec {
+            name: "jobs",
+            kind: BuiltinKind::Jobs,
+        }),
+        "fg" => Some(BuiltinSpec {
+            name: "fg",
+            kind: BuiltinKind::Fg,
+        }),
+        "bg" => Some(BuiltinSpec {
+            name: "bg",
+            kind: BuiltinKind::Bg,
+        }),
+        "wait" => Some(BuiltinSpec {
+            name: "wait",
+            kind: BuiltinKind::Wait,
+        }),
+        "disown" => Some(BuiltinSpec {
+            name: "disown",
+            kind: BuiltinKind::Disown,
+        }),
+        "kill" => Some(BuiltinSpec {
+            name: "kill",
+            kind: BuiltinKind::Kill,
+        }),
         _ => None,
     }
 }
@@ -93,5 +130,11 @@ pub fn dispatch<R: io::Read, W: io::Write, WE: io::Write>(
         BuiltinKind::Complete => complete::complete(eval, ctx, args),
         BuiltinKind::Plugin => plugin::plugin(eval, ctx, args),
         BuiltinKind::Export => export::export(eval, ctx, args),
+        BuiltinKind::Jobs => jobs::jobs(eval, ctx, args),
+        BuiltinKind::Fg => fg::fg(eval, ctx, args),
+        BuiltinKind::Bg => bg::bg(eval, ctx, args),
+        BuiltinKind::Wait => wait::wait(eval, ctx, args),
+        BuiltinKind::Disown => disown::disown(eval, ctx, args),
+        BuiltinKind::Kill => kill::kill(eval, ctx, args),
     }
 }

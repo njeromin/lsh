@@ -1,0 +1,24 @@
+fn greet(who) { return 'hello, ' + $who }
+echo $(greet 'lsh').out.trim()
+if $(which cargo).is_ok() { echo 'cargo detected!' }
+let crates = ['lsh-eval', 'lsh-syntax']
+$crates.push('lsh-terminal')
+for c in $crates { echo "checking $c..." }
+git stash  -
+echo 'structured non-posix shell' -> demo.txt
+cat demo.txt | tr 'a-z' 'A-Z'
+ENV_VAR=scoped echo $ENV_VAR
+rm demo.txt
+exit
+fn greet(who) { return 'hello, ' + $who }
+echo $(greet 'lsh').out.trim()
+if $(which cargo).is_ok() { echo 'cargo detected!' }
+let crates = ['lsh-eval', 'lsh-syntax']
+$crates.push('lsh-terminal')
+for c in $crates { echo "checking $c..." }
+git stash  -
+echo 'structured non-posix shell' -> demo.txt
+cat demo.txt | tr 'a-z' 'A-Z'
+ENV_VAR=scoped echo $ENV_VAR
+rm demo.txt
+exit

@@ -33,6 +33,7 @@ pub enum CommandExpr {
         left: Box<CommandExpr>,
         right: Box<CommandExpr>,
     },
+    Background(Box<CommandExpr>),
 }
 
 #[derive(Debug, Clone)]

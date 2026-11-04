@@ -332,13 +332,22 @@ mod tests {
     #[test]
     fn options_parses_cursor_shape() {
         let mut map = HashMap::new();
-        map.insert("cursor_shape".to_string(), Value::String("block".to_string()));
+        map.insert(
+            "cursor_shape".to_string(),
+            Value::String("block".to_string()),
+        );
         assert_eq!(Options::from(&map).cursor_shape, CursorShape::Block);
 
-        map.insert("cursor_shape".to_string(), Value::String("underline".to_string()));
+        map.insert(
+            "cursor_shape".to_string(),
+            Value::String("underline".to_string()),
+        );
         assert_eq!(Options::from(&map).cursor_shape, CursorShape::Underline);
 
-        map.insert("cursor_shape".to_string(), Value::String("steady_bar".to_string()));
+        map.insert(
+            "cursor_shape".to_string(),
+            Value::String("steady_bar".to_string()),
+        );
         assert_eq!(Options::from(&map).cursor_shape, CursorShape::SteadyBar);
 
         // Alias cursor_style works too

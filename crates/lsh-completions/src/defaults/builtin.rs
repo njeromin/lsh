@@ -92,6 +92,32 @@ pub fn populate_builtin_rules(rules: &mut HashMap<String, CompletionRule>) {
     let export_rule =
         CompletionRule::new().with_description("Set or list exported environment variables");
     rules.insert("export".to_string(), export_rule);
+
+    let mut jobs_rule = CompletionRule::new().with_description("List active shell jobs");
+    jobs_rule.candidates = vec![
+        CandidateSpec::from_raw("-l:List process group IDs and status", CompletionKind::Flag),
+        CandidateSpec::from_raw("-p:List process IDs only", CompletionKind::Flag),
+        CandidateSpec::from_raw("-r:List running jobs only", CompletionKind::Flag),
+        CandidateSpec::from_raw("-s:List stopped jobs only", CompletionKind::Flag),
+    ];
+    rules.insert("jobs".to_string(), jobs_rule);
+
+    let fg_rule = CompletionRule::new().with_description("Bring job to foreground");
+    rules.insert("fg".to_string(), fg_rule);
+
+    let bg_rule = CompletionRule::new().with_description("Resume job in background");
+    rules.insert("bg".to_string(), bg_rule);
+
+    let wait_rule = CompletionRule::new().with_description("Wait for job completion");
+    rules.insert("wait".to_string(), wait_rule);
+
+    let mut disown_rule =
+        CompletionRule::new().with_description("Remove jobs from the shell job table");
+    disown_rule.candidates = vec![
+        CandidateSpec::from_raw("-a:Remove all jobs", CompletionKind::Flag),
+        CandidateSpec::from_raw("-h:Mark job not to receive SIGHUP", CompletionKind::Flag),
+    ];
+    rules.insert("disown".to_string(), disown_rule);
 }
 
 pub use populate_builtin_rules as populate_rules;

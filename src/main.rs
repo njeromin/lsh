@@ -100,6 +100,7 @@ fn interactive_session(
 
     loop {
         reset_interrupted();
+        eval.reap_and_notify_jobs(&mut cerr);
 
         if let Some(opts) = eval.get_var(0, "options") {
             let opts = Options::from(opts);
@@ -144,6 +145,11 @@ fn interactive_session(
                 continue;
             }
             Ok(Signal::CtrlD) => {
+                if eval.job_manager.has_stopped_jobs() && !eval.warned_stopped_jobs {
+                    eval.warned_stopped_jobs = true;
+                    eprintln!("\nThere are stopped jobs.");
+                    continue;
+                }
                 println!();
                 break Ok(());
             }
@@ -152,6 +158,10 @@ fn interactive_session(
                 continue;
             }
         };
+
+        if input != "exit" && !input.starts_with("exit ") {
+            eval.warned_stopped_jobs = false;
+        }
 
         let src_id = src_map.insert("<input>", &input);
 

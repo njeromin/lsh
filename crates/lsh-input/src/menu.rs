@@ -458,7 +458,9 @@ impl Menu for BasicMenu {
             .iter()
             .map(|c| {
                 UnicodeWidthStr::width(c.display.as_str())
-                    + c.description.as_ref().map_or(0, |d| UnicodeWidthStr::width(d.as_str()) + 2)
+                    + c.description
+                        .as_ref()
+                        .map_or(0, |d| UnicodeWidthStr::width(d.as_str()) + 2)
             })
             .max()
             .unwrap_or(20);
@@ -745,8 +747,18 @@ mod tests {
         };
 
         menu.activate(&mut buf, Some(&completer));
-        menu.handle_key(KeyCode::Down, KeyModifiers::NONE, &mut buf, Some(&completer));
-        menu.handle_key(KeyCode::Down, KeyModifiers::NONE, &mut buf, Some(&completer));
+        menu.handle_key(
+            KeyCode::Down,
+            KeyModifiers::NONE,
+            &mut buf,
+            Some(&completer),
+        );
+        menu.handle_key(
+            KeyCode::Down,
+            KeyModifiers::NONE,
+            &mut buf,
+            Some(&completer),
+        );
 
         let lines = menu.render_lines(80, 0);
         let first_len = crate::prompt::strip_ansi(&lines[0]).chars().count();

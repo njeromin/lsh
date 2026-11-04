@@ -100,8 +100,8 @@ impl LshMenu {
 
     fn commit_selected(&mut self, buffer: &mut LineBuffer) {
         if let Some(item) = self.items.get(self.selected) {
-            let is_dir = matches!(item.kind, CompletionKind::Directory)
-                || item.replacement.ends_with('/');
+            let is_dir =
+                matches!(item.kind, CompletionKind::Directory) || item.replacement.ends_with('/');
             let mut replacement = item.replacement.clone();
             if !is_dir && !replacement.ends_with(' ') {
                 replacement.push(' ');
@@ -119,8 +119,8 @@ impl LshMenu {
         let Some(item) = self.items.get(self.selected).cloned() else {
             return false;
         };
-        let is_dir = matches!(item.kind, CompletionKind::Directory)
-            || item.replacement.ends_with('/');
+        let is_dir =
+            matches!(item.kind, CompletionKind::Directory) || item.replacement.ends_with('/');
         if !is_dir {
             return false;
         }
@@ -143,8 +143,9 @@ impl LshMenu {
         buffer.replace_range(start..end, &dir_rep);
         buffer.set_cursor(start + dir_rep.len());
 
-        let (new_start, new_items) =
-            self.completer.get_candidates(buffer.as_str(), buffer.cursor());
+        let (new_start, new_items) = self
+            .completer
+            .get_candidates(buffer.as_str(), buffer.cursor());
         self.start = new_start;
         self.root_items = new_items.clone();
         self.items = new_items;
@@ -187,11 +188,7 @@ impl Menu for LshMenu {
         self.active
     }
 
-    fn activate(
-        &mut self,
-        buffer: &mut LineBuffer,
-        _completer: Option<&dyn lsh_input::Completer>,
-    ) {
+    fn activate(&mut self, buffer: &mut LineBuffer, _completer: Option<&dyn lsh_input::Completer>) {
         let (start, items) = self
             .completer
             .get_candidates(buffer.as_str(), buffer.cursor());
@@ -669,7 +666,11 @@ mod tests {
         assert!(menu.is_active());
         assert_eq!(buffer.as_str(), "car");
         assert_eq!(menu.items().len(), 3);
-        assert!(menu.items().iter().all(|it| it.replacement.starts_with("cargo")));
+        assert!(
+            menu.items()
+                .iter()
+                .all(|it| it.replacement.starts_with("cargo"))
+        );
 
         // Type 'b' -> buffer becomes "carb", items filter to cargo-build via fuzzy match
         let outcome = menu.handle_key(KeyCode::Char('b'), KeyModifiers::NONE, &mut buffer, None);

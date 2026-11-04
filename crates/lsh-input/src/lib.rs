@@ -13,9 +13,9 @@ pub mod prompt;
 pub mod validator;
 
 pub use buffer::LineBuffer;
-pub use clipboard::{Clipboard, InMemoryClipboard, default_clipboard};
 #[cfg(feature = "system-clipboard")]
 pub use clipboard::SystemClipboard;
+pub use clipboard::{Clipboard, InMemoryClipboard, default_clipboard};
 pub use completer::{Candidate, Completer};
 pub use crossterm::cursor::SetCursorStyle;
 pub use edit_mode::{EditMode, ViMode, ViOperator};

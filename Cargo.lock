@@ -327,6 +327,7 @@ version = "0.1.0"
 dependencies = [
  "dirs",
  "glob",
+ "libc",
  "lsh-completions",
  "lsh-syntax",
  "lsh-sys",
