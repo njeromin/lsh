@@ -11,6 +11,7 @@ use crossterm::{
     terminal::{self, Clear, ClearType},
 };
 use crate::buffer::LineBuffer;
+use crate::clipboard::{Clipboard, default_clipboard};
 use crate::completer::Completer;
 use crate::formatter::{StyledText, TextFormatter};
 use crate::hinter::{Hinter, default_next_hint_word};
@@ -91,6 +92,7 @@ pub struct Editor<W: Write = BufWriter<Stdout>> {
     completer: Option<Box<dyn Completer>>,
     menu: Option<Box<dyn Menu>>,
     history: Option<Box<dyn History>>,
+    clipboard: Option<Box<dyn Clipboard>>,
     indent_size: usize,
     terminal_width: Option<usize>,
 }
@@ -108,6 +110,7 @@ impl Editor<BufWriter<Stdout>> {
             completer: None,
             menu: None,
             history: None,
+            clipboard: Some(default_clipboard()),
             indent_size: 4,
             terminal_width: None,
         }
@@ -127,6 +130,7 @@ impl<W: Write> Editor<W> {
             completer: None,
             menu: None,
             history: None,
+            clipboard: Some(default_clipboard()),
             indent_size: 4,
             terminal_width: None,
         }
@@ -215,6 +219,27 @@ impl<W: Write> Editor<W> {
     /// Mutably borrow the active command history, if any.
     pub fn history_mut(&mut self) -> Option<&mut (dyn History + 'static)> {
         self.history.as_deref_mut()
+    }
+
+    /// Set a custom clipboard provider.
+    pub fn with_clipboard(mut self, clipboard: impl Clipboard + 'static) -> Self {
+        self.clipboard = Some(Box::new(clipboard));
+        self
+    }
+
+    /// Dynamically set or clear the clipboard provider.
+    pub fn set_clipboard(&mut self, clipboard: Option<Box<dyn Clipboard>>) {
+        self.clipboard = clipboard;
+    }
+
+    /// Immutably borrow the active clipboard, if any.
+    pub fn clipboard(&self) -> Option<&dyn Clipboard> {
+        self.clipboard.as_deref()
+    }
+
+    /// Mutably borrow the active clipboard, if any.
+    pub fn clipboard_mut(&mut self) -> Option<&mut (dyn Clipboard + 'static)> {
+        self.clipboard.as_deref_mut()
     }
 
     /// Set an explicit terminal column width override (useful for testing or fixed-width rendering).
@@ -595,16 +620,49 @@ impl<W: Write> Editor<W> {
                             EditorAction::Delete => {
                                 changed = line_buffer.delete_next_grapheme();
                             }
-                            EditorAction::DeleteWordLeft => {
-                                changed = line_buffer.delete_word_left();
+                            EditorAction::DeleteWordLeft | EditorAction::CutWordLeft => {
+                                if let Some(cut) = line_buffer.cut_word_left() {
+                                    if let Some(cb) = &mut self.clipboard {
+                                        cb.set(&cut);
+                                    }
+                                    changed = true;
+                                }
                             }
-                            EditorAction::DeleteWordRight => {
-                                changed = line_buffer.delete_word_right();
+                            EditorAction::DeleteWordRight | EditorAction::CutWordRight => {
+                                if let Some(cut) = line_buffer.cut_word_right() {
+                                    if let Some(cb) = &mut self.clipboard {
+                                        cb.set(&cut);
+                                    }
+                                    changed = true;
+                                }
                             }
-                            EditorAction::ClearToStart => {
-                                changed = line_buffer.clear_to_start();
+                            EditorAction::ClearToStart | EditorAction::CutToStart => {
+                                if let Some(cut) = line_buffer.cut_to_start() {
+                                    if let Some(cb) = &mut self.clipboard {
+                                        cb.set(&cut);
+                                    }
+                                    changed = true;
+                                }
                             }
-                            EditorAction::ClearToEnd => changed = line_buffer.clear_to_end(),
+                            EditorAction::ClearToEnd | EditorAction::CutToEnd => {
+                                if let Some(cut) = line_buffer.cut_to_end() {
+                                    if let Some(cb) = &mut self.clipboard {
+                                        cb.set(&cut);
+                                    }
+                                    changed = true;
+                                }
+                            }
+                            EditorAction::Yank => {
+                                if let Some(cb) = &mut self.clipboard
+                                    && let Some(text) = cb.get()
+                                {
+                                    let normalised = normalise_paste(&text);
+                                    if !normalised.is_empty() {
+                                        line_buffer.insert_str(&normalised);
+                                        changed = true;
+                                    }
+                                }
+                            }
                             EditorAction::ClearLine => changed = line_buffer.clear(),
                             EditorAction::ClearScreen => {
                                 queue!(self.writer, Clear(ClearType::All), cursor::MoveTo(0, 0),)?;
@@ -1093,5 +1151,26 @@ mod tests {
         assert!(out.contains("\r\n"));
         // Second render must emit MoveUp(2) to return to row 0 of the prompt
         assert!(out.contains("\x1b[2A"));
+    }
+
+    #[test]
+    fn test_editor_clipboard_cut_and_yank() {
+        use crate::clipboard::InMemoryClipboard;
+
+        let buffer = Vec::new();
+        let cb = InMemoryClipboard::new();
+        let mut editor = Editor::with_writer(buffer).with_clipboard(cb);
+
+        assert!(editor.clipboard().is_some());
+
+        // Check mutable borrow and value storage
+        editor.clipboard_mut().unwrap().set("copied text");
+        assert_eq!(
+            editor.clipboard_mut().unwrap().get().as_deref(),
+            Some("copied text")
+        );
+
+        editor.set_clipboard(None);
+        assert!(editor.clipboard().is_none());
     }
 }

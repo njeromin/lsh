@@ -346,46 +346,67 @@ impl LineBuffer {
         }
     }
 
-    /// Delete backwards to the previous word boundary (Alt+Backspace / Ctrl+W).
-    pub fn delete_word_left(&mut self) -> bool {
+    /// Cuts backwards to the previous word boundary, returning the cut text (Alt+Backspace / Ctrl+W).
+    pub fn cut_word_left(&mut self) -> Option<String> {
         if self.cursor == 0 {
-            return false;
+            return None;
         }
         let target = self.prev_word_boundary();
-        self.content.drain(target..self.cursor);
+        let cut: String = self.content.drain(target..self.cursor).collect();
         self.cursor = target;
-        true
+        Some(cut)
+    }
+
+    /// Delete backwards to the previous word boundary (Alt+Backspace / Ctrl+W).
+    pub fn delete_word_left(&mut self) -> bool {
+        self.cut_word_left().is_some()
+    }
+
+    /// Cuts forwards to the next word boundary, returning the cut text (Alt+D).
+    pub fn cut_word_right(&mut self) -> Option<String> {
+        if self.cursor >= self.content.len() {
+            return None;
+        }
+        let target = self.next_word_boundary();
+        let cut: String = self.content.drain(self.cursor..target).collect();
+        Some(cut)
     }
 
     /// Delete forwards to the next word boundary (Alt+D).
     pub fn delete_word_right(&mut self) -> bool {
-        if self.cursor >= self.content.len() {
-            return false;
+        self.cut_word_right().is_some()
+    }
+
+    /// Cuts text from start of line up to cursor, returning the cut text (Ctrl+U).
+    pub fn cut_to_start(&mut self) -> Option<String> {
+        if self.cursor > 0 {
+            let cut: String = self.content.drain(..self.cursor).collect();
+            self.cursor = 0;
+            Some(cut)
+        } else {
+            None
         }
-        let target = self.next_word_boundary();
-        self.content.drain(self.cursor..target);
-        true
     }
 
     /// Clear text from start of line up to cursor (Ctrl+U).
     pub fn clear_to_start(&mut self) -> bool {
-        if self.cursor > 0 {
-            self.content.drain(..self.cursor);
-            self.cursor = 0;
-            true
+        self.cut_to_start().is_some()
+    }
+
+    /// Cuts text from cursor to end of line, returning the cut text (Ctrl+K).
+    pub fn cut_to_end(&mut self) -> Option<String> {
+        if self.cursor < self.content.len() {
+            let cut = self.content[self.cursor..].to_string();
+            self.content.truncate(self.cursor);
+            Some(cut)
         } else {
-            false
+            None
         }
     }
 
     /// Clear text from cursor to end of line (Ctrl+K).
     pub fn clear_to_end(&mut self) -> bool {
-        if self.cursor < self.content.len() {
-            self.content.truncate(self.cursor);
-            true
-        } else {
-            false
-        }
+        self.cut_to_end().is_some()
     }
 
     /// Clear entire line buffer.
@@ -656,5 +677,28 @@ mod tests {
         // Clamping past bounds
         buf.set_cursor(100);
         assert_eq!(buf.cursor(), 12);
+    }
+
+    #[test]
+    fn test_buffer_cut_operations() {
+        let mut buf = LineBuffer::with_content("hello brave new world".to_string());
+        // Cursor starts at end (21)
+        let cut = buf.cut_word_left();
+        assert_eq!(cut.as_deref(), Some("world"));
+        assert_eq!(buf.as_str(), "hello brave new ");
+
+        buf.set_cursor(0);
+        let cut = buf.cut_word_right();
+        assert_eq!(cut.as_deref(), Some("hello "));
+        assert_eq!(buf.as_str(), "brave new ");
+
+        buf.set_cursor(6); // after "brave "
+        let cut = buf.cut_to_start();
+        assert_eq!(cut.as_deref(), Some("brave "));
+        assert_eq!(buf.as_str(), "new ");
+
+        let cut = buf.cut_to_end();
+        assert_eq!(cut.as_deref(), Some("new "));
+        assert_eq!(buf.as_str(), "");
     }
 }

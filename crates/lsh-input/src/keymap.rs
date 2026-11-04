@@ -94,6 +94,16 @@ pub enum EditorAction {
     ClearToStart,
     /// Clear from cursor to the end of the line (Ctrl+K).
     ClearToEnd,
+    /// Cut from beginning of line up to cursor into the clipboard (Ctrl+U).
+    CutToStart,
+    /// Cut from cursor to the end of the line into the clipboard (Ctrl+K).
+    CutToEnd,
+    /// Cut word before the cursor into the clipboard (Alt+Backspace / Ctrl+W).
+    CutWordLeft,
+    /// Cut word after the cursor into the clipboard (Alt+D).
+    CutWordRight,
+    /// Paste / yank text from the clipboard at cursor position (Ctrl+Y).
+    Yank,
     /// Clear the entire line.
     ClearLine,
     /// Clear the terminal screen and redraw the prompt at top (Ctrl+L).
@@ -187,32 +197,33 @@ impl Keymap {
             EditorAction::MoveWordRight,
         );
 
-        // Deletions
+        // Deletions & killing (cutting to clipboard)
         km.bind(KeyCode::Backspace, EditorAction::Backspace);
         km.bind(KeyCode::Delete, EditorAction::Delete);
-        km.bind(KeyCombo::ctrl('w'), EditorAction::DeleteWordLeft);
-        km.bind(KeyCombo::ctrl('h'), EditorAction::DeleteWordLeft);
+        km.bind(KeyCombo::ctrl('w'), EditorAction::CutWordLeft);
+        km.bind(KeyCombo::ctrl('h'), EditorAction::CutWordLeft);
         km.bind(
             (KeyCode::Backspace, KeyModifiers::ALT),
-            EditorAction::DeleteWordLeft,
+            EditorAction::CutWordLeft,
         );
         km.bind(
             (KeyCode::Backspace, KeyModifiers::CONTROL),
-            EditorAction::DeleteWordLeft,
+            EditorAction::CutWordLeft,
         );
-        km.bind(KeyCombo::alt('d'), EditorAction::DeleteWordRight);
+        km.bind(KeyCombo::alt('d'), EditorAction::CutWordRight);
         km.bind(
             (KeyCode::Delete, KeyModifiers::CONTROL),
-            EditorAction::DeleteWordRight,
+            EditorAction::CutWordRight,
         );
         km.bind(
             (KeyCode::Delete, KeyModifiers::ALT),
-            EditorAction::DeleteWordRight,
+            EditorAction::CutWordRight,
         );
 
-        // Line clearing and screen refresh
-        km.bind(KeyCombo::ctrl('u'), EditorAction::ClearToStart);
-        km.bind(KeyCombo::ctrl('k'), EditorAction::ClearToEnd);
+        // Line clearing, cutting, and clipboard
+        km.bind(KeyCombo::ctrl('u'), EditorAction::CutToStart);
+        km.bind(KeyCombo::ctrl('k'), EditorAction::CutToEnd);
+        km.bind(KeyCombo::ctrl('y'), EditorAction::Yank);
         km.bind(KeyCombo::ctrl('l'), EditorAction::ClearScreen);
 
         km

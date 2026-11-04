@@ -1,4 +1,5 @@
 pub mod buffer;
+pub mod clipboard;
 pub mod completer;
 pub mod editor;
 pub mod formatter;
@@ -11,6 +12,9 @@ pub mod prompt;
 pub mod validator;
 
 pub use buffer::LineBuffer;
+pub use clipboard::{Clipboard, InMemoryClipboard, default_clipboard};
+#[cfg(feature = "system-clipboard")]
+pub use clipboard::SystemClipboard;
 pub use completer::{Candidate, Completer};
 pub use editor::{Editor, Signal, normalise_paste};
 pub use formatter::{StyledText, TextFormatter};
