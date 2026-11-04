@@ -1,6 +1,7 @@
 use std::borrow::Cow;
 
-use lsh_input::{Editor, EditorAction, KeyCombo, Keymap, Prompt, Signal};
+use crossterm::style::{ContentStyle, Stylize};
+use lsh_input::{Editor, EditorAction, KeyCombo, Keymap, Prompt, Signal, StyledText};
 
 /// A custom dynamic prompt showing command count with ANSI colors.
 struct FancyPrompt {
@@ -18,11 +19,14 @@ impl Prompt for FancyPrompt {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("[lsh-input basic example]");
+    println!("[lsh-input interactive demo]");
     println!("  - Dynamic ANSI prompt");
+    println!("  - Live StyledText TextFormatter: keywords in bold green, numbers in yellow");
     println!("  - Standard Emacs editing: Ctrl+A (home), Ctrl+E (end)");
     println!("  - Word navigation: Alt+Left / Alt+B (word left), Alt+Right / Alt+F (word right)");
-    println!("  - Word deletion: Ctrl+W / Alt+Backspace, Alt+D (delete word forward)");
+    println!(
+        "  - Word deletion: Ctrl+Backspace / Ctrl+W / Alt+Backspace, Alt+D (delete word forward)"
+    );
     println!("  - Line deletion: Ctrl+U (delete to start), Ctrl+K (delete to end)");
     println!("  - Custom binding: Ctrl+L (clear entire line)");
     println!("  - Press Ctrl+C to cancel current line, Ctrl+D or type 'exit' to quit.\n");
@@ -31,8 +35,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut keymap = Keymap::default();
     keymap.bind(KeyCombo::ctrl('l'), EditorAction::ClearLine);
 
-    // 2. Initialize the editor
-    let mut editor = Editor::new().with_keymap(keymap);
+    // 2. Initialize the editor with custom keymap and live StyledText TextFormatter
+    let mut editor = Editor::new()
+        .with_keymap(keymap)
+        .with_formatter(|line: &str| {
+            let mut styled = StyledText::new();
+            for word in line.split_inclusive(char::is_whitespace) {
+                let trimmed = word.trim();
+                if matches!(trimmed, "cargo" | "git" | "echo" | "let" | "cd") {
+                    styled.push(ContentStyle::new().green().bold(), word);
+                } else if trimmed.parse::<f64>().is_ok() {
+                    styled.push(ContentStyle::new().yellow(), word);
+                } else {
+                    styled.push(ContentStyle::default(), word);
+                }
+            }
+            styled
+        });
+
     let mut count = 1;
 
     // 3. Interactive loop

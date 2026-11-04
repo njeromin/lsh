@@ -8,6 +8,8 @@ use crossterm::{
     terminal::{self, Clear, ClearType},
 };
 
+use crate::buffer::LineBuffer;
+use crate::formatter::{StyledText, TextFormatter};
 use crate::keymap::{EditorAction, Keymap};
 use crate::prompt::Prompt;
 
@@ -48,6 +50,7 @@ impl Drop for RawModeGuard {
 pub struct Editor<W: Write = BufWriter<Stdout>> {
     writer: W,
     keymap: Keymap,
+    formatter: Option<Box<dyn TextFormatter>>,
 }
 
 impl Editor<BufWriter<Stdout>> {
@@ -56,6 +59,7 @@ impl Editor<BufWriter<Stdout>> {
         Self {
             writer: BufWriter::new(io::stdout()),
             keymap: Keymap::default(),
+            formatter: None,
         }
     }
 }
@@ -66,6 +70,7 @@ impl<W: Write> Editor<W> {
         Self {
             writer,
             keymap: Keymap::default(),
+            formatter: None,
         }
     }
 
@@ -73,6 +78,22 @@ impl<W: Write> Editor<W> {
     pub fn with_keymap(mut self, keymap: Keymap) -> Self {
         self.keymap = keymap;
         self
+    }
+
+    /// Set a custom text formatter.
+    pub fn with_formatter(mut self, formatter: impl TextFormatter + 'static) -> Self {
+        self.formatter = Some(Box::new(formatter));
+        self
+    }
+
+    /// Dynamically set or clear the text formatter.
+    pub fn set_formatter(&mut self, formatter: Option<Box<dyn TextFormatter>>) {
+        self.formatter = formatter;
+    }
+
+    /// Immutably borrow the active formatter, if any.
+    pub fn formatter(&self) -> Option<&dyn TextFormatter> {
+        self.formatter.as_deref()
     }
 
     /// Immutably borrow the active keymap.
@@ -90,13 +111,12 @@ impl<W: Write> Editor<W> {
         let prompt_text = prompt.render();
         let prompt_width = crate::prompt::printable_width(&prompt_text);
 
-        let mut buf = String::new();
-        let mut cursor_pos = 0;
+        let mut line_buffer = LineBuffer::new();
 
         let _guard = RawModeGuard::new(&mut self.writer)?;
 
         // Initial render
-        self.render_line(&prompt_text, prompt_width, &buf, cursor_pos)?;
+        self.render_line(&prompt_text, prompt_width, &line_buffer)?;
 
         loop {
             let event = event::read()?;
@@ -120,93 +140,52 @@ impl<W: Write> Editor<W> {
                             EditorAction::Submit => {
                                 queue!(self.writer, Print("\r\n"))?;
                                 self.writer.flush()?;
-                                return Ok(Signal::Success(buf));
+                                return Ok(Signal::Success(line_buffer.into_string()));
                             }
                             EditorAction::Interrupt => {
                                 queue!(self.writer, Print("^C\r\n"))?;
                                 self.writer.flush()?;
                                 return Ok(Signal::CtrlC);
                             }
-                            EditorAction::Eof if buf.is_empty() => {
+                            EditorAction::Eof if line_buffer.is_empty() => {
                                 queue!(self.writer, Print("\r\n"))?;
                                 self.writer.flush()?;
                                 return Ok(Signal::CtrlD);
                             }
-                            EditorAction::MoveLeft if cursor_pos > 0 => {
-                                cursor_pos -= 1;
-                                changed = true;
+                            EditorAction::MoveLeft => changed = line_buffer.move_left(),
+                            EditorAction::MoveRight => changed = line_buffer.move_right(),
+                            EditorAction::MoveWordLeft => {
+                                changed = line_buffer.move_word_left()
                             }
-                            EditorAction::MoveRight if cursor_pos < buf.len() => {
-                                cursor_pos += 1;
-                                changed = true;
+                            EditorAction::MoveWordRight => {
+                                changed = line_buffer.move_word_right()
                             }
-                            EditorAction::MoveWordLeft if cursor_pos > 0 => {
-                                let new_pos = prev_word_boundary(&buf, cursor_pos);
-                                if new_pos != cursor_pos {
-                                    cursor_pos = new_pos;
-                                    changed = true;
-                                }
+                            EditorAction::MoveHome => changed = line_buffer.move_home(),
+                            EditorAction::MoveEnd => changed = line_buffer.move_end(),
+                            EditorAction::Backspace => {
+                                changed = line_buffer.delete_prev_grapheme()
                             }
-                            EditorAction::MoveWordRight if cursor_pos < buf.len() => {
-                                let new_pos = next_word_boundary(&buf, cursor_pos);
-                                if new_pos != cursor_pos {
-                                    cursor_pos = new_pos;
-                                    changed = true;
-                                }
+                            EditorAction::Delete => {
+                                changed = line_buffer.delete_next_grapheme()
                             }
-                            EditorAction::MoveHome if cursor_pos > 0 => {
-                                cursor_pos = 0;
-                                changed = true;
+                            EditorAction::DeleteWordLeft => {
+                                changed = line_buffer.delete_word_left()
                             }
-                            EditorAction::MoveEnd if cursor_pos < buf.len() => {
-                                cursor_pos = buf.len();
-                                changed = true;
+                            EditorAction::DeleteWordRight => {
+                                changed = line_buffer.delete_word_right()
                             }
-                            EditorAction::Backspace if cursor_pos > 0 => {
-                                cursor_pos -= 1;
-                                buf.remove(cursor_pos);
-                                changed = true;
+                            EditorAction::ClearToStart => {
+                                changed = line_buffer.clear_to_start()
                             }
-                            EditorAction::Delete if cursor_pos < buf.len() => {
-                                buf.remove(cursor_pos);
-                                changed = true;
-                            }
-                            EditorAction::DeleteWordLeft if cursor_pos > 0 => {
-                                let target = prev_word_boundary(&buf, cursor_pos);
-                                buf.drain(target..cursor_pos);
-                                cursor_pos = target;
-                                changed = true;
-                            }
-                            EditorAction::DeleteWordRight if cursor_pos < buf.len() => {
-                                let target = next_word_boundary(&buf, cursor_pos);
-                                buf.drain(cursor_pos..target);
-                                changed = true;
-                            }
-                            EditorAction::ClearToStart if cursor_pos > 0 => {
-                                buf.drain(..cursor_pos);
-                                cursor_pos = 0;
-                                changed = true;
-                            }
-                            EditorAction::ClearToEnd if cursor_pos < buf.len() => {
-                                buf.truncate(cursor_pos);
-                                changed = true;
-                            }
-                            EditorAction::ClearLine => {
-                                if !buf.is_empty() {
-                                    buf.clear();
-                                    cursor_pos = 0;
-                                    changed = true;
-                                }
-                            }
+                            EditorAction::ClearToEnd => changed = line_buffer.clear_to_end(),
+                            EditorAction::ClearLine => changed = line_buffer.clear(),
                             EditorAction::Ignore | EditorAction::Eof => {}
-                            _ => {}
                         }
                     } else {
                         // Unbound printable characters are inserted into the buffer
                         match (code, modifiers) {
                             (KeyCode::Char(c), KeyModifiers::NONE | KeyModifiers::SHIFT) => {
-                                buf.insert(cursor_pos, c);
-                                cursor_pos += 1;
+                                line_buffer.insert_char(c);
                                 changed = true;
                             }
                             _ => {}
@@ -215,13 +194,13 @@ impl<W: Write> Editor<W> {
 
                     // Only redraw if the line buffer or cursor actually changed
                     if changed {
-                        self.render_line(&prompt_text, prompt_width, &buf, cursor_pos)?;
+                        self.render_line(&prompt_text, prompt_width, &line_buffer)?;
                     }
                 }
 
                 // Terminal resize -> re-render line to adjust layout
                 Event::Resize(..) => {
-                    self.render_line(&prompt_text, prompt_width, &buf, cursor_pos)?;
+                    self.render_line(&prompt_text, prompt_width, &line_buffer)?;
                 }
 
                 _ => {}
@@ -234,18 +213,33 @@ impl<W: Write> Editor<W> {
         &mut self,
         prompt_text: &str,
         prompt_width: usize,
-        buffer: &str,
-        cursor_pos: usize,
+        line_buffer: &LineBuffer,
     ) -> io::Result<()> {
+        let styled_text = match &self.formatter {
+            Some(f) => f.format(line_buffer.as_str()),
+            None => StyledText::plain(line_buffer.as_str()),
+        };
+
         queue!(
             self.writer,
             cursor::Hide,
             MoveToColumn(0),
             Clear(ClearType::CurrentLine),
             Print(prompt_text),
-            Print(buffer),
-            // Position cursor: prompt visual width + characters typed before cursor
-            MoveToColumn((prompt_width + cursor_pos) as u16),
+        )?;
+
+        for (style, text) in &styled_text {
+            queue!(
+                self.writer,
+                crossterm::style::PrintStyledContent(style.apply(text))
+            )?;
+        }
+        queue!(self.writer, crossterm::style::ResetColor)?;
+
+        queue!(
+            self.writer,
+            // Position cursor: prompt visual width + visual width of buffer up to cursor
+            MoveToColumn((prompt_width + line_buffer.cursor_visual_width()) as u16),
             cursor::Show,
         )?;
         self.writer.flush()
@@ -271,61 +265,6 @@ impl Default for Editor<BufWriter<Stdout>> {
     fn default() -> Self {
         Self::new()
     }
-}
-
-/// Find previous word boundary before `cursor_pos`.
-fn prev_word_boundary(buf: &str, cursor_pos: usize) -> usize {
-    let prefix = &buf[..cursor_pos];
-    let mut chars = prefix.char_indices().rev().peekable();
-
-    // 1. Skip trailing whitespace
-    while let Some(&(_, c)) = chars.peek() {
-        if c.is_whitespace() {
-            chars.next();
-        } else {
-            break;
-        }
-    }
-
-    // 2. Skip non-whitespace to find start of word
-    while let Some(&(_, c)) = chars.peek() {
-        if !c.is_whitespace() {
-            chars.next();
-        } else {
-            break;
-        }
-    }
-
-    chars.peek().map(|&(idx, _)| idx + 1).unwrap_or(0)
-}
-
-/// Find next word boundary after `cursor_pos`.
-fn next_word_boundary(buf: &str, cursor_pos: usize) -> usize {
-    let suffix = &buf[cursor_pos..];
-    let mut chars = suffix.char_indices().peekable();
-
-    // 1. Skip non-whitespace
-    while let Some(&(_, c)) = chars.peek() {
-        if !c.is_whitespace() {
-            chars.next();
-        } else {
-            break;
-        }
-    }
-
-    // 2. Skip whitespace to find start of next word
-    while let Some(&(_, c)) = chars.peek() {
-        if c.is_whitespace() {
-            chars.next();
-        } else {
-            break;
-        }
-    }
-
-    chars
-        .peek()
-        .map(|&(idx, _)| cursor_pos + idx)
-        .unwrap_or(buf.len())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -375,25 +314,23 @@ mod tests {
     }
 
     #[test]
-    fn test_word_boundaries() {
-        let s = "hello   world  test";
-        // From after "world  " (index 15) -> prev word boundary should be index 8 ("world")
-        assert_eq!(prev_word_boundary(s, 15), 8);
-        // From start of "world" (index 8) -> prev word should be index 0 ("hello")
-        assert_eq!(prev_word_boundary(s, 8), 0);
-
-        // From index 0 -> next word boundary should be index 8 (start of "world")
-        assert_eq!(next_word_boundary(s, 0), 8);
-        // From index 8 -> next word boundary should be index 15 (start of "test")
-        assert_eq!(next_word_boundary(s, 8), 15);
-    }
-
-    #[test]
     fn test_render_line_to_buffer() {
         let buffer = Vec::new();
         let mut editor = Editor::with_writer(buffer);
-        editor.render_line("> ", 2, "echo 1", 6).unwrap();
+        let line_buf = LineBuffer::with_content("echo 1".to_string());
+        editor.render_line("> ", 2, &line_buf).unwrap();
         let out = editor.into_writer();
         assert!(!out.is_empty());
+    }
+
+    #[test]
+    fn test_render_line_with_formatter() {
+        let buffer = Vec::new();
+        let mut editor =
+            Editor::with_writer(buffer).with_formatter(|s: &str| format!("***{}***", s));
+        let line_buf = LineBuffer::with_content("secret".to_string());
+        editor.render_line("> ", 2, &line_buf).unwrap();
+        let out = String::from_utf8(editor.into_writer()).unwrap();
+        assert!(out.contains("***secret***"));
     }
 }

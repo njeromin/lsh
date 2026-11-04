@@ -10,3 +10,4 @@ lsh-eval = { path = "../lsh-eval" }
 crossterm = "0.29.0"
 dirs = "6.0.0"
 unicode-width = "0.2.3"
+unicode-segmentation = "1.12.0"
