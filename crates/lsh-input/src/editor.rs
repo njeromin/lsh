@@ -403,7 +403,6 @@ impl<W: Write> Editor<W> {
         // Initial render
         let (layout, mut current_hint) = self.render_line(&prompt, &line_buffer, 0)?;
         let mut previous_cursor_row = layout.cursor_row;
-        let mut last_end_row = layout.end_row;
 
         loop {
             let event = event::read()?;
@@ -437,7 +436,6 @@ impl<W: Write> Editor<W> {
                                 let (layout, hint) =
                                     self.render_line(&prompt, &line_buffer, previous_cursor_row)?;
                                 previous_cursor_row = layout.cursor_row;
-                                last_end_row = layout.end_row;
                                 current_hint = hint;
                                 continue;
                             }
@@ -669,9 +667,18 @@ impl<W: Write> Editor<W> {
                                 };
 
                                 if is_complete {
-                                    // Move cursor past the last rendered row before submitting
+                                    if let Some(menu) = &mut self.menu {
+                                        menu.dismiss(&mut line_buffer);
+                                    }
+                                    // Cleanly erase any ghost text / menu before moving to next line
+                                    let (final_layout, _) = self.render_line_internal(
+                                        &prompt,
+                                        &line_buffer,
+                                        previous_cursor_row,
+                                        false,
+                                    )?;
                                     let rows_to_move_down =
-                                        last_end_row.saturating_sub(previous_cursor_row);
+                                        final_layout.end_row.saturating_sub(final_layout.cursor_row);
                                     if rows_to_move_down > 0 {
                                         queue!(
                                             self.writer,
@@ -714,8 +721,15 @@ impl<W: Write> Editor<W> {
                                 if let Some(menu) = &mut self.menu {
                                     menu.dismiss(&mut line_buffer);
                                 }
+                                // Cleanly erase any ghost text / menu before printing ^C
+                                let (final_layout, _) = self.render_line_internal(
+                                    &prompt,
+                                    &line_buffer,
+                                    previous_cursor_row,
+                                    false,
+                                )?;
                                 let rows_to_move_down =
-                                    last_end_row.saturating_sub(previous_cursor_row);
+                                    final_layout.end_row.saturating_sub(final_layout.cursor_row);
                                 if rows_to_move_down > 0 {
                                     queue!(
                                         self.writer,
@@ -1221,7 +1235,6 @@ impl<W: Write> Editor<W> {
                                 queue!(self.writer, Clear(ClearType::All), cursor::MoveTo(0, 0),)?;
                                 let (layout, hint) = self.render_line(&prompt, &line_buffer, 0)?;
                                 previous_cursor_row = layout.cursor_row;
-                                last_end_row = layout.end_row;
                                 current_hint = hint;
                                 continue;
                             }
@@ -1267,7 +1280,6 @@ impl<W: Write> Editor<W> {
                         let (layout, hint) =
                             self.render_line(&prompt, &line_buffer, previous_cursor_row)?;
                         previous_cursor_row = layout.cursor_row;
-                        last_end_row = layout.end_row;
                         current_hint = hint;
                     }
                 }
@@ -1285,7 +1297,6 @@ impl<W: Write> Editor<W> {
                         let (layout, hint) =
                             self.render_line(&prompt, &line_buffer, previous_cursor_row)?;
                         previous_cursor_row = layout.cursor_row;
-                        last_end_row = layout.end_row;
                         current_hint = hint;
                     }
                 }
@@ -1295,7 +1306,6 @@ impl<W: Write> Editor<W> {
                     let (layout, hint) =
                         self.render_line(&prompt, &line_buffer, previous_cursor_row)?;
                     previous_cursor_row = layout.cursor_row;
-                    last_end_row = layout.end_row;
                     current_hint = hint;
                 }
 
@@ -1312,6 +1322,16 @@ impl<W: Write> Editor<W> {
         line_buffer: &LineBuffer,
         previous_cursor_row: usize,
     ) -> io::Result<(ScreenLayout, Option<String>)> {
+        self.render_line_internal(prompt, line_buffer, previous_cursor_row, true)
+    }
+
+    fn render_line_internal(
+        &mut self,
+        prompt: &impl Prompt,
+        line_buffer: &LineBuffer,
+        previous_cursor_row: usize,
+        show_ghost_text: bool,
+    ) -> io::Result<(ScreenLayout, Option<String>)> {
         let term_cols = self.terminal_width();
         let prompt_text = prompt.render();
         let prompt_stripped = crate::prompt::strip_ansi(&prompt_text);
@@ -1319,8 +1339,11 @@ impl<W: Write> Editor<W> {
         let indicator_stripped = crate::prompt::strip_ansi(&indicator_text);
 
         // Query ghost text hint if cursor is at the end of the buffer, content is non-empty, and menu is not active
-        let is_menu_active = self.menu.as_ref().is_some_and(|m| m.is_active());
-        let ghost_text = if is_menu_active {
+        let is_menu_active = show_ghost_text && self.menu.as_ref().is_some_and(|m| m.is_active());
+        let ghost_text = if is_menu_active
+            || !show_ghost_text
+            || (self.edit_mode == EditMode::Vi && self.vi_mode == ViMode::Normal)
+        {
             None
         } else if let Some(hinter) = &self.hinter {
             if line_buffer.cursor() == line_buffer.len() && !line_buffer.is_empty() {
@@ -1397,8 +1420,8 @@ impl<W: Write> Editor<W> {
 
         // 5. Render completion menu lines beneath the buffer if menu is active
         let mut menu_rows = 0;
-        if let Some(menu) = &self.menu
-            && menu.is_active()
+        if is_menu_active
+            && let Some(menu) = &self.menu
         {
             let lines = menu.render_lines(term_cols, layout.cursor_col);
             for line in &lines {
@@ -1574,6 +1597,38 @@ mod tests {
 
         let out = String::from_utf8(editor.into_writer()).unwrap();
         assert!(out.contains("heckout"));
+    }
+
+    #[test]
+    fn test_render_line_suppresses_ghost_text_when_disabled_or_vi_normal() {
+        let buffer = Vec::new();
+        let mut editor = Editor::with_writer(buffer).with_hinter(|line: &str, cursor: usize| {
+            if line == "git c" && cursor == 5 {
+                Some("heckout".to_string())
+            } else {
+                None
+            }
+        });
+
+        let mut line_buf = LineBuffer::new();
+        line_buf.insert_str("git c");
+
+        // 1. When show_ghost_text is false (e.g. on submit or interrupt), ghost text is suppressed
+        let (layout, hint) = editor
+            .render_line_internal(&"> ", &line_buf, 0, false)
+            .unwrap();
+        assert_eq!(hint, None);
+        assert_eq!(layout.cursor_col, 7);
+        assert_eq!(layout.end_col, 7);
+
+        // 2. In Vi Normal mode, ghost text is also suppressed even when show_ghost_text is true
+        editor.set_edit_mode(EditMode::Vi);
+        editor.vi_mode = ViMode::Normal;
+        let (layout_vi, hint_vi) = editor
+            .render_line_internal(&"> ", &line_buf, 0, true)
+            .unwrap();
+        assert_eq!(hint_vi, None);
+        assert_eq!(layout_vi.end_col, 7);
     }
 
     #[test]
