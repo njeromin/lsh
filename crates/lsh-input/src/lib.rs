@@ -1,6 +1,7 @@
 pub mod buffer;
 pub mod clipboard;
 pub mod completer;
+pub mod edit_mode;
 pub mod editor;
 pub mod formatter;
 pub mod hinter;
@@ -16,6 +17,7 @@ pub use clipboard::{Clipboard, InMemoryClipboard, default_clipboard};
 #[cfg(feature = "system-clipboard")]
 pub use clipboard::SystemClipboard;
 pub use completer::{Candidate, Completer};
+pub use edit_mode::{EditMode, ViMode, ViOperator};
 pub use editor::{Editor, Signal, normalise_paste};
 pub use formatter::{StyledText, TextFormatter};
 pub use hinter::{Hinter, default_next_hint_word};

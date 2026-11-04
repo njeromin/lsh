@@ -409,6 +409,217 @@ impl LineBuffer {
         self.cut_to_end().is_some()
     }
 
+    /// Cuts the character under the cursor, returning it (Vi 'x').
+    pub fn cut_char_under_cursor(&mut self) -> Option<String> {
+        if self.cursor >= self.content.len() {
+            return None;
+        }
+        let rest = &self.content[self.cursor..];
+        if let Some(c) = rest.chars().next() {
+            let len = c.len_utf8();
+            let s = self.content[self.cursor..self.cursor + len].to_string();
+            self.content.drain(self.cursor..self.cursor + len);
+            if self.cursor > 0 && self.cursor >= self.content.len() {
+                self.cursor = self.content.len().saturating_sub(1);
+            }
+            Some(s)
+        } else {
+            None
+        }
+    }
+
+    /// Cuts the character immediately before the cursor, returning it (Vi 'X').
+    pub fn cut_char_before_cursor(&mut self) -> Option<String> {
+        if self.cursor == 0 {
+            return None;
+        }
+        let prefix = &self.content[..self.cursor];
+        if let Some(c) = prefix.chars().next_back() {
+            let len = c.len_utf8();
+            let start = self.cursor - len;
+            let s = self.content[start..self.cursor].to_string();
+            self.content.drain(start..self.cursor);
+            self.cursor = start;
+            Some(s)
+        } else {
+            None
+        }
+    }
+
+    /// Returns the text from cursor to end of line without removing it (Vi 'y$').
+    pub fn yank_to_end(&self) -> Option<String> {
+        if self.cursor < self.content.len() {
+            Some(self.content[self.cursor..].to_string())
+        } else {
+            None
+        }
+    }
+
+    /// Returns the text from cursor to next word boundary without removing it (Vi 'yw').
+    pub fn yank_word(&self) -> Option<String> {
+        if self.cursor < self.content.len() {
+            let target = self.next_word_boundary();
+            Some(self.content[self.cursor..target].to_string())
+        } else {
+            None
+        }
+    }
+
+    /// Returns the entire buffer content without removing it (Vi 'yy').
+    pub fn yank_line(&self) -> Option<String> {
+        if !self.content.is_empty() {
+            Some(self.content.clone())
+        } else {
+            None
+        }
+    }
+
+    /// Returns the text from cursor to end of word without removing it (Vi 'ye').
+    pub fn yank_to_word_end(&self) -> Option<String> {
+        if self.cursor < self.content.len() {
+            let target = self.word_end_boundary();
+            let end_char_len = self.content[target..].chars().next().map_or(0, |c| c.len_utf8());
+            let end = (target + end_char_len).min(self.content.len());
+            if end > self.cursor {
+                Some(self.content[self.cursor..end].to_string())
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }
+
+    /// Cuts the entire buffer content, returning the cut text (Vi 'dd' or 'cc').
+    pub fn cut_line(&mut self) -> Option<String> {
+        if !self.content.is_empty() {
+            let cut = self.content.clone();
+            self.content.clear();
+            self.cursor = 0;
+            Some(cut)
+        } else {
+            None
+        }
+    }
+
+    /// Cuts forward to the end of the word, returning the cut text (Vi 'de').
+    pub fn cut_to_word_end(&mut self) -> Option<String> {
+        if self.cursor >= self.content.len() {
+            return None;
+        }
+        let target = self.word_end_boundary();
+        let end_char_len = self.content[target..].chars().next().map_or(0, |c| c.len_utf8());
+        let end = (target + end_char_len).min(self.content.len());
+        if end > self.cursor {
+            let cut: String = self.content.drain(self.cursor..end).collect();
+            if self.cursor > 0 && self.cursor >= self.content.len() {
+                self.cursor = self.content.len().saturating_sub(1);
+            }
+            Some(cut)
+        } else {
+            None
+        }
+    }
+
+    /// Paste text after the cursor (Vi 'p').
+    pub fn paste_after(&mut self, text: &str) -> bool {
+        if text.is_empty() {
+            return false;
+        }
+        if self.cursor < self.content.len() {
+            let char_len = self.content[self.cursor..]
+                .chars()
+                .next()
+                .map_or(0, |c| c.len_utf8());
+            let insert_pos = self.cursor + char_len;
+            self.content.insert_str(insert_pos, text);
+            self.cursor = insert_pos + text.len();
+        } else {
+            self.content.push_str(text);
+            self.cursor = self.content.len();
+        }
+        true
+    }
+
+    /// Paste text before the cursor (Vi 'P').
+    pub fn paste_before(&mut self, text: &str) -> bool {
+        if text.is_empty() {
+            return false;
+        }
+        self.content.insert_str(self.cursor, text);
+        self.cursor += text.len();
+        true
+    }
+
+    /// Toggles the case of the character under the cursor and advances cursor by 1 (Vi '~').
+    pub fn toggle_case_at_cursor(&mut self) -> bool {
+        if self.cursor >= self.content.len() {
+            return false;
+        }
+        let rest = &self.content[self.cursor..];
+        if let Some(c) = rest.chars().next() {
+            let toggled: String = if c.is_uppercase() {
+                c.to_lowercase().collect()
+            } else {
+                c.to_uppercase().collect()
+            };
+            let c_len = c.len_utf8();
+            self.content
+                .replace_range(self.cursor..self.cursor + c_len, &toggled);
+            self.cursor = (self.cursor + toggled.len()).min(self.content.len());
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Replaces the character under the cursor with a new character (Vi 'r<char>').
+    pub fn replace_char_at_cursor(&mut self, new_char: char) -> bool {
+        if self.cursor >= self.content.len() {
+            return false;
+        }
+        let rest = &self.content[self.cursor..];
+        if let Some(c) = rest.chars().next() {
+            let c_len = c.len_utf8();
+            let mut buf = [0u8; 4];
+            let s = new_char.encode_utf8(&mut buf);
+            self.content.replace_range(self.cursor..self.cursor + c_len, s);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Move cursor to the end of the current or next word (Vi 'e').
+    pub fn move_word_end(&mut self) -> bool {
+        let target = self.word_end_boundary();
+        if target != self.cursor {
+            self.cursor = target;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Move cursor to first non-whitespace character on current line (Vi '^').
+    pub fn move_to_first_non_whitespace(&mut self) -> bool {
+        let prefix = &self.content[..self.cursor];
+        let line_start = prefix.rfind('\n').map(|i| i + 1).unwrap_or(0);
+        let line = &self.content[line_start..];
+        let first_non_ws = line
+            .char_indices()
+            .find(|(_, c)| !c.is_whitespace() && *c != '\n')
+            .map(|(i, _)| line_start + i)
+            .unwrap_or(line_start);
+
+        if self.cursor != first_non_ws {
+            self.cursor = first_non_ws;
+            true
+        } else {
+            false
+        }
+    }
+
     /// Clear entire line buffer.
     pub fn clear(&mut self) -> bool {
         if !self.content.is_empty() {
@@ -514,6 +725,41 @@ impl LineBuffer {
             .peek()
             .map(|&(idx, _)| self.cursor + idx)
             .unwrap_or(self.content.len())
+    }
+
+    fn word_end_boundary(&self) -> usize {
+        if self.cursor >= self.content.len() {
+            return self.content.len();
+        }
+        let suffix = &self.content[self.cursor..];
+        let mut chars = suffix.char_indices().peekable();
+
+        // Advance past current char
+        chars.next();
+
+        // Skip whitespace
+        while let Some(&(_, c)) = chars.peek() {
+            if c.is_whitespace() {
+                chars.next();
+            } else {
+                break;
+            }
+        }
+
+        // Find end of word
+        let mut last_idx = None;
+        while let Some(&(i, c)) = chars.peek() {
+            if !c.is_whitespace() {
+                last_idx = Some(i);
+                chars.next();
+            } else {
+                break;
+            }
+        }
+
+        last_idx
+            .map(|i| self.cursor + i)
+            .unwrap_or_else(|| self.content.len().saturating_sub(1))
     }
 }
 
@@ -700,5 +946,56 @@ mod tests {
         let cut = buf.cut_to_end();
         assert_eq!(cut.as_deref(), Some("new "));
         assert_eq!(buf.as_str(), "");
+    }
+
+    #[test]
+    fn test_buffer_vim_operations() {
+        let mut buf = LineBuffer::with_content("hello world".to_string());
+        buf.set_cursor(0);
+
+        // move_word_end: "hello" -> cursor moves to index 4 ('o')
+        assert!(buf.move_word_end());
+        assert_eq!(buf.cursor(), 4);
+
+        // toggle_case_at_cursor: 'o' -> 'O'
+        assert!(buf.toggle_case_at_cursor());
+        assert_eq!(buf.as_str(), "hellO world");
+
+        // replace_char_at_cursor
+        buf.set_cursor(0);
+        assert!(buf.replace_char_at_cursor('H'));
+        assert_eq!(buf.as_str(), "HellO world");
+
+        // cut_char_under_cursor ('H')
+        let cut = buf.cut_char_under_cursor();
+        assert_eq!(cut.as_deref(), Some("H"));
+        assert_eq!(buf.as_str(), "ellO world");
+        assert_eq!(buf.cursor(), 0);
+
+        // paste_after / paste_before
+        assert!(buf.paste_before("H"));
+        assert_eq!(buf.as_str(), "HellO world");
+
+        // move_to_first_non_whitespace
+        let mut indented = LineBuffer::with_content("    echo 1".to_string());
+        assert!(indented.move_to_first_non_whitespace());
+        assert_eq!(indented.cursor(), 4);
+
+        // cut_to_word_end and yank_to_word_end
+        let mut word_buf = LineBuffer::with_content("hello world".to_string());
+        word_buf.set_cursor(0);
+        assert_eq!(word_buf.yank_to_word_end().as_deref(), Some("hello"));
+        assert_eq!(word_buf.as_str(), "hello world");
+        let cut_word = word_buf.cut_to_word_end();
+        assert_eq!(cut_word.as_deref(), Some("hello"));
+        assert_eq!(word_buf.as_str(), " world");
+
+        // cut_line and yank_line
+        let mut line_buf = LineBuffer::with_content("full line".to_string());
+        assert_eq!(line_buf.yank_line().as_deref(), Some("full line"));
+        let cut = line_buf.cut_line();
+        assert_eq!(cut.as_deref(), Some("full line"));
+        assert_eq!(line_buf.as_str(), "");
+        assert_eq!(line_buf.cursor(), 0);
     }
 }

@@ -13,6 +13,7 @@ use crossterm::{
 use crate::buffer::LineBuffer;
 use crate::clipboard::{Clipboard, default_clipboard};
 use crate::completer::Completer;
+use crate::edit_mode::{EditMode, ViMode, ViOperator};
 use crate::formatter::{StyledText, TextFormatter};
 use crate::hinter::{Hinter, default_next_hint_word};
 use crate::history::History;
@@ -73,6 +74,7 @@ impl RawModeGuard {
 impl Drop for RawModeGuard {
     fn drop(&mut self) {
         let mut stdout = io::stdout();
+        let _ = queue!(stdout, cursor::SetCursorStyle::DefaultUserShape);
         let _ = queue!(stdout, DisableBracketedPaste);
         if self.enhanced_keyboard {
             let _ = queue!(stdout, event::PopKeyboardEnhancementFlags);
@@ -85,6 +87,8 @@ impl Drop for RawModeGuard {
 pub struct Editor<W: Write = BufWriter<Stdout>> {
     writer: W,
     keymap: Keymap,
+    edit_mode: EditMode,
+    vi_mode: ViMode,
     formatter: Option<Box<dyn TextFormatter>>,
     validator: Option<Box<dyn Validator>>,
     hinter: Option<Box<dyn Hinter>>,
@@ -103,6 +107,8 @@ impl Editor<BufWriter<Stdout>> {
         Self {
             writer: BufWriter::new(io::stdout()),
             keymap: Keymap::default(),
+            edit_mode: EditMode::Emacs,
+            vi_mode: ViMode::Insert,
             formatter: None,
             validator: None,
             hinter: None,
@@ -123,6 +129,8 @@ impl<W: Write> Editor<W> {
         Self {
             writer,
             keymap: Keymap::default(),
+            edit_mode: EditMode::Emacs,
+            vi_mode: ViMode::Insert,
             formatter: None,
             validator: None,
             hinter: None,
@@ -242,6 +250,39 @@ impl<W: Write> Editor<W> {
         self.clipboard.as_deref_mut()
     }
 
+    /// Set the editor edit mode (Emacs or Vi).
+    pub fn with_edit_mode(mut self, mode: EditMode) -> Self {
+        self.edit_mode = mode;
+        if mode == EditMode::Vi {
+            self.keymap = Keymap::default_vi_insert();
+            self.vi_mode = ViMode::Insert;
+        } else {
+            self.keymap = Keymap::default_emacs();
+        }
+        self
+    }
+
+    /// Dynamically update the editor edit mode (Emacs or Vi).
+    pub fn set_edit_mode(&mut self, mode: EditMode) {
+        self.edit_mode = mode;
+        if mode == EditMode::Vi {
+            self.keymap = Keymap::default_vi_insert();
+            self.vi_mode = ViMode::Insert;
+        } else {
+            self.keymap = Keymap::default_emacs();
+        }
+    }
+
+    /// Immutably borrow the active edit mode.
+    pub fn edit_mode(&self) -> EditMode {
+        self.edit_mode
+    }
+
+    /// Get the current Vi mode (Insert or Normal).
+    pub fn vi_mode(&self) -> ViMode {
+        self.vi_mode
+    }
+
     /// Set an explicit terminal column width override (useful for testing or fixed-width rendering).
     pub fn with_terminal_width(mut self, width: usize) -> Self {
         self.terminal_width = Some(width);
@@ -339,8 +380,25 @@ impl<W: Write> Editor<W> {
         let mut history_index: Option<usize> = None;
         let mut saved_buffer: Option<String> = None;
         let mut history_prefix: Option<String> = None;
+        let mut vi_operator: Option<ViOperator> = None;
+        let mut undo_stack: Vec<(String, usize)> = Vec::new();
+        let mut redo_stack: Vec<(String, usize)> = Vec::new();
+        let mut in_insert_session = false;
+
+        macro_rules! save_undo {
+            () => {
+                undo_stack.push((line_buffer.as_str().to_string(), line_buffer.cursor()));
+                redo_stack.clear();
+            };
+        }
 
         let _guard = RawModeGuard::new(&mut self.writer)?;
+
+        if self.edit_mode == EditMode::Vi {
+            self.vi_mode = ViMode::Insert;
+            self.keymap = Keymap::default_vi_insert();
+            let _ = queue!(self.writer, cursor::SetCursorStyle::BlinkingBar);
+        }
 
         // Initial render
         let (layout, mut current_hint) = self.render_line(&prompt, &line_buffer, 0)?;
@@ -391,7 +449,192 @@ impl<W: Write> Editor<W> {
 
                     let mut changed = false;
 
-                    if let Some(action) = self.keymap.get(code, modifiers) {
+                    // If an operator is pending in Vi mode, handle it
+                    if let Some(op) = vi_operator.take() {
+                        in_insert_session = false;
+                        match op {
+                            ViOperator::ReplaceChar => {
+                                if !(matches!(code, KeyCode::Esc)
+                                    || (code == KeyCode::Char('[')
+                                        && modifiers.contains(KeyModifiers::CONTROL)))
+                                    && let (
+                                        KeyCode::Char(c),
+                                        KeyModifiers::NONE | KeyModifiers::SHIFT,
+                                    ) = (code, modifiers)
+                                {
+                                    save_undo!();
+                                    changed = line_buffer.replace_char_at_cursor(c);
+                                }
+                            }
+                            ViOperator::Delete => {
+                                match code {
+                                    KeyCode::Char('d') => {
+                                        save_undo!();
+                                        if let Some(cut) = line_buffer.cut_line() {
+                                            if let Some(cb) = &mut self.clipboard {
+                                                cb.set(&cut);
+                                            }
+                                            changed = true;
+                                        }
+                                    }
+                                    KeyCode::Char('w') => {
+                                        save_undo!();
+                                        if let Some(cut) = line_buffer.cut_word_right() {
+                                            if let Some(cb) = &mut self.clipboard {
+                                                cb.set(&cut);
+                                            }
+                                            if line_buffer.cursor() > 0
+                                                && line_buffer.cursor() >= line_buffer.len()
+                                            {
+                                                line_buffer.move_left();
+                                            }
+                                            changed = true;
+                                        }
+                                    }
+                                    KeyCode::Char('b') => {
+                                        save_undo!();
+                                        if let Some(cut) = line_buffer.cut_word_left() {
+                                            if let Some(cb) = &mut self.clipboard {
+                                                cb.set(&cut);
+                                            }
+                                            changed = true;
+                                        }
+                                    }
+                                    KeyCode::Char('e') => {
+                                        save_undo!();
+                                        if let Some(cut) = line_buffer.cut_to_word_end() {
+                                            if let Some(cb) = &mut self.clipboard {
+                                                cb.set(&cut);
+                                            }
+                                            changed = true;
+                                        }
+                                    }
+                                    KeyCode::Char('$') => {
+                                        save_undo!();
+                                        if let Some(cut) = line_buffer.cut_to_end() {
+                                            if let Some(cb) = &mut self.clipboard {
+                                                cb.set(&cut);
+                                            }
+                                            if line_buffer.cursor() > 0
+                                                && line_buffer.cursor() >= line_buffer.len()
+                                            {
+                                                line_buffer.move_left();
+                                            }
+                                            changed = true;
+                                        }
+                                    }
+                                    KeyCode::Char('0') => {
+                                        save_undo!();
+                                        if let Some(cut) = line_buffer.cut_to_start() {
+                                            if let Some(cb) = &mut self.clipboard {
+                                                cb.set(&cut);
+                                            }
+                                            changed = true;
+                                        }
+                                    }
+                                    _ => {} // Cancelled
+                                }
+                            }
+                            ViOperator::Change => {
+                                let mut enter_insert = false;
+                                match code {
+                                    KeyCode::Char('c') => {
+                                        save_undo!();
+                                        if let Some(cut) = line_buffer.cut_line()
+                                            && let Some(cb) = &mut self.clipboard
+                                        {
+                                            cb.set(&cut);
+                                        }
+                                        enter_insert = true;
+                                    }
+                                    KeyCode::Char('w' | 'e') => {
+                                        save_undo!();
+                                        if let Some(cut) = line_buffer.cut_to_word_end()
+                                            && let Some(cb) = &mut self.clipboard
+                                        {
+                                            cb.set(&cut);
+                                        }
+                                        enter_insert = true;
+                                    }
+                                    KeyCode::Char('b') => {
+                                        save_undo!();
+                                        if let Some(cut) = line_buffer.cut_word_left()
+                                            && let Some(cb) = &mut self.clipboard
+                                        {
+                                            cb.set(&cut);
+                                        }
+                                        enter_insert = true;
+                                    }
+                                    KeyCode::Char('$') => {
+                                        save_undo!();
+                                        if let Some(cut) = line_buffer.cut_to_end()
+                                            && let Some(cb) = &mut self.clipboard
+                                        {
+                                            cb.set(&cut);
+                                        }
+                                        enter_insert = true;
+                                    }
+                                    KeyCode::Char('0') => {
+                                        save_undo!();
+                                        if let Some(cut) = line_buffer.cut_to_start()
+                                            && let Some(cb) = &mut self.clipboard
+                                        {
+                                            cb.set(&cut);
+                                        }
+                                        enter_insert = true;
+                                    }
+                                    _ => {} // Cancelled
+                                }
+                                if enter_insert {
+                                    self.vi_mode = ViMode::Insert;
+                                    self.keymap = Keymap::default_vi_insert();
+                                    let _ =
+                                        queue!(self.writer, cursor::SetCursorStyle::BlinkingBar);
+                                    changed = true;
+                                }
+                            }
+                            ViOperator::Yank => {
+                                match code {
+                                    KeyCode::Char('y') => {
+                                        if let Some(cb) = &mut self.clipboard
+                                            && let Some(text) = line_buffer.yank_line()
+                                        {
+                                            cb.set(&text);
+                                        }
+                                    }
+                                    KeyCode::Char('w') => {
+                                        if let Some(cb) = &mut self.clipboard
+                                            && let Some(text) = line_buffer.yank_word()
+                                        {
+                                            cb.set(&text);
+                                        }
+                                    }
+                                    KeyCode::Char('e') => {
+                                        if let Some(cb) = &mut self.clipboard
+                                            && let Some(text) = line_buffer.yank_to_word_end()
+                                        {
+                                            cb.set(&text);
+                                        }
+                                    }
+                                    KeyCode::Char('$') => {
+                                        if let Some(cb) = &mut self.clipboard
+                                            && let Some(text) = line_buffer.yank_to_end()
+                                        {
+                                            cb.set(&text);
+                                        }
+                                    }
+                                    KeyCode::Char('0') => {
+                                        if let Some(cb) = &mut self.clipboard
+                                            && line_buffer.cursor() > 0
+                                        {
+                                            cb.set(&line_buffer.as_str()[..line_buffer.cursor()]);
+                                        }
+                                    }
+                                    _ => {} // Cancelled
+                                }
+                            }
+                        }
+                    } else if let Some(action) = self.keymap.get(code, modifiers) {
                         match action {
                             EditorAction::Complete => {
                                 if let Some(menu) = &mut self.menu {
@@ -506,9 +749,19 @@ impl<W: Write> Editor<W> {
                                     }
                                 }
                             }
-                            EditorAction::MoveLeft => changed = line_buffer.move_left(),
+                            EditorAction::MoveLeft => {
+                                in_insert_session = false;
+                                changed = line_buffer.move_left();
+                            }
                             EditorAction::MoveRight => {
-                                if !line_buffer.move_right() {
+                                in_insert_session = false;
+                                if self.edit_mode == EditMode::Vi
+                                    && self.vi_mode == ViMode::Normal
+                                {
+                                    if line_buffer.cursor() + 1 < line_buffer.len() {
+                                        changed = line_buffer.move_right();
+                                    }
+                                } else if !line_buffer.move_right() {
                                     // At end of line: accept ghost text if present
                                     if let Some(hint) = &current_hint {
                                         line_buffer.insert_str(hint);
@@ -519,6 +772,7 @@ impl<W: Write> Editor<W> {
                                 }
                             }
                             EditorAction::MoveUp => {
+                                in_insert_session = false;
                                 if line_buffer.move_up() {
                                     changed = true;
                                 } else if let Some(history) = &self.history
@@ -548,6 +802,7 @@ impl<W: Write> Editor<W> {
                                 }
                             }
                             EditorAction::MoveDown => {
+                                in_insert_session = false;
                                 if line_buffer.move_down() {
                                     changed = true;
                                 } else if let Some(history) = &self.history
@@ -582,9 +837,11 @@ impl<W: Write> Editor<W> {
                                 }
                             }
                             EditorAction::MoveWordLeft => {
+                                in_insert_session = false;
                                 changed = line_buffer.move_word_left();
                             }
                             EditorAction::MoveWordRight => {
+                                in_insert_session = false;
                                 if !line_buffer.move_word_right() {
                                     // At end of line: accept next hint word if present
                                     if let Some(hint) = &current_hint {
@@ -598,11 +855,30 @@ impl<W: Write> Editor<W> {
                                         }
                                     }
                                 } else {
+                                    if self.edit_mode == EditMode::Vi
+                                        && self.vi_mode == ViMode::Normal
+                                        && line_buffer.cursor() > 0
+                                        && line_buffer.cursor() == line_buffer.len()
+                                    {
+                                        line_buffer.move_left();
+                                    }
                                     changed = true;
                                 }
                             }
-                            EditorAction::MoveHome => changed = line_buffer.move_home(),
+                            EditorAction::MoveWordEnd => {
+                                in_insert_session = false;
+                                changed = line_buffer.move_word_end();
+                            }
+                            EditorAction::MoveHome => {
+                                in_insert_session = false;
+                                changed = line_buffer.move_home();
+                            }
+                            EditorAction::MoveToFirstNonWhitespace => {
+                                in_insert_session = false;
+                                changed = line_buffer.move_to_first_non_whitespace();
+                            }
                             EditorAction::MoveEnd => {
+                                in_insert_session = false;
                                 if !line_buffer.move_end() {
                                     // Already at end: accept ghost text if present
                                     if let Some(hint) = &current_hint {
@@ -610,17 +886,34 @@ impl<W: Write> Editor<W> {
                                         changed = true;
                                     }
                                 } else {
+                                    if self.edit_mode == EditMode::Vi
+                                        && self.vi_mode == ViMode::Normal
+                                        && line_buffer.cursor() > 0
+                                        && line_buffer.cursor() == line_buffer.len()
+                                    {
+                                        line_buffer.move_left();
+                                    }
                                     changed = true;
                                 }
                             }
                             EditorAction::Backspace => {
+                                if !in_insert_session {
+                                    save_undo!();
+                                    in_insert_session = true;
+                                }
                                 changed =
                                     line_buffer.delete_prev_grapheme_or_dedent(self.indent_size);
                             }
                             EditorAction::Delete => {
+                                if !in_insert_session {
+                                    save_undo!();
+                                    in_insert_session = true;
+                                }
                                 changed = line_buffer.delete_next_grapheme();
                             }
                             EditorAction::DeleteWordLeft | EditorAction::CutWordLeft => {
+                                save_undo!();
+                                in_insert_session = false;
                                 if let Some(cut) = line_buffer.cut_word_left() {
                                     if let Some(cb) = &mut self.clipboard {
                                         cb.set(&cut);
@@ -629,6 +922,8 @@ impl<W: Write> Editor<W> {
                                 }
                             }
                             EditorAction::DeleteWordRight | EditorAction::CutWordRight => {
+                                save_undo!();
+                                in_insert_session = false;
                                 if let Some(cut) = line_buffer.cut_word_right() {
                                     if let Some(cb) = &mut self.clipboard {
                                         cb.set(&cut);
@@ -637,6 +932,8 @@ impl<W: Write> Editor<W> {
                                 }
                             }
                             EditorAction::ClearToStart | EditorAction::CutToStart => {
+                                save_undo!();
+                                in_insert_session = false;
                                 if let Some(cut) = line_buffer.cut_to_start() {
                                     if let Some(cb) = &mut self.clipboard {
                                         cb.set(&cut);
@@ -645,7 +942,29 @@ impl<W: Write> Editor<W> {
                                 }
                             }
                             EditorAction::ClearToEnd | EditorAction::CutToEnd => {
+                                save_undo!();
+                                in_insert_session = false;
                                 if let Some(cut) = line_buffer.cut_to_end() {
+                                    if let Some(cb) = &mut self.clipboard {
+                                        cb.set(&cut);
+                                    }
+                                    changed = true;
+                                }
+                            }
+                            EditorAction::CutChar => {
+                                save_undo!();
+                                in_insert_session = false;
+                                if let Some(cut) = line_buffer.cut_char_under_cursor() {
+                                    if let Some(cb) = &mut self.clipboard {
+                                        cb.set(&cut);
+                                    }
+                                    changed = true;
+                                }
+                            }
+                            EditorAction::CutCharBefore => {
+                                save_undo!();
+                                in_insert_session = false;
+                                if let Some(cut) = line_buffer.cut_char_before_cursor() {
                                     if let Some(cb) = &mut self.clipboard {
                                         cb.set(&cut);
                                     }
@@ -658,12 +977,246 @@ impl<W: Write> Editor<W> {
                                 {
                                     let normalised = normalise_paste(&text);
                                     if !normalised.is_empty() {
+                                        save_undo!();
+                                        in_insert_session = false;
                                         line_buffer.insert_str(&normalised);
                                         changed = true;
                                     }
                                 }
                             }
-                            EditorAction::ClearLine => changed = line_buffer.clear(),
+                            EditorAction::PasteAfter => {
+                                if let Some(cb) = &mut self.clipboard
+                                    && let Some(text) = cb.get()
+                                {
+                                    let normalised = normalise_paste(&text);
+                                    if !normalised.is_empty() {
+                                        save_undo!();
+                                        in_insert_session = false;
+                                        line_buffer.paste_after(&normalised);
+                                        changed = true;
+                                    }
+                                }
+                            }
+                            EditorAction::PasteBefore => {
+                                if let Some(cb) = &mut self.clipboard
+                                    && let Some(text) = cb.get()
+                                {
+                                    let normalised = normalise_paste(&text);
+                                    if !normalised.is_empty() {
+                                        save_undo!();
+                                        in_insert_session = false;
+                                        line_buffer.paste_before(&normalised);
+                                        changed = true;
+                                    }
+                                }
+                            }
+                            EditorAction::YankLine => {
+                                if let Some(cb) = &mut self.clipboard
+                                    && let Some(text) = line_buffer.yank_line()
+                                {
+                                    cb.set(&text);
+                                }
+                            }
+                            EditorAction::ToggleCase => {
+                                save_undo!();
+                                in_insert_session = false;
+                                changed = line_buffer.toggle_case_at_cursor();
+                            }
+                            EditorAction::Undo => {
+                                in_insert_session = false;
+                                if let Some((saved_content, saved_cursor)) = undo_stack.pop() {
+                                    redo_stack.push((
+                                        line_buffer.as_str().to_string(),
+                                        line_buffer.cursor(),
+                                    ));
+                                    line_buffer.replace_range(0..line_buffer.len(), &saved_content);
+                                    line_buffer.set_cursor(saved_cursor.min(line_buffer.len()));
+                                    changed = true;
+                                }
+                            }
+                            EditorAction::Redo => {
+                                in_insert_session = false;
+                                if let Some((saved_content, saved_cursor)) = redo_stack.pop() {
+                                    undo_stack.push((
+                                        line_buffer.as_str().to_string(),
+                                        line_buffer.cursor(),
+                                    ));
+                                    line_buffer.replace_range(0..line_buffer.len(), &saved_content);
+                                    line_buffer.set_cursor(saved_cursor.min(line_buffer.len()));
+                                    changed = true;
+                                }
+                            }
+                            EditorAction::SwitchToNormalMode => {
+                                in_insert_session = false;
+                                if self.edit_mode == EditMode::Vi
+                                    && self.vi_mode != ViMode::Normal
+                                {
+                                    self.vi_mode = ViMode::Normal;
+                                    self.keymap = Keymap::default_vi_normal();
+                                    if line_buffer.cursor() > 0 {
+                                        line_buffer.move_left();
+                                    }
+                                    let _ = queue!(
+                                        self.writer,
+                                        cursor::SetCursorStyle::SteadyBlock
+                                    );
+                                    changed = true;
+                                }
+                            }
+                            EditorAction::SwitchToInsertMode => {
+                                if self.edit_mode == EditMode::Vi
+                                    && self.vi_mode != ViMode::Insert
+                                {
+                                    self.vi_mode = ViMode::Insert;
+                                    self.keymap = Keymap::default_vi_insert();
+                                    let _ = queue!(
+                                        self.writer,
+                                        cursor::SetCursorStyle::BlinkingBar
+                                    );
+                                    changed = true;
+                                }
+                            }
+                            EditorAction::Append => {
+                                if self.edit_mode == EditMode::Vi {
+                                    if line_buffer.cursor() < line_buffer.len() {
+                                        line_buffer.move_right();
+                                    }
+                                    self.vi_mode = ViMode::Insert;
+                                    self.keymap = Keymap::default_vi_insert();
+                                    let _ = queue!(
+                                        self.writer,
+                                        cursor::SetCursorStyle::BlinkingBar
+                                    );
+                                    changed = true;
+                                }
+                            }
+                            EditorAction::AppendEnd => {
+                                if self.edit_mode == EditMode::Vi {
+                                    line_buffer.move_end();
+                                    self.vi_mode = ViMode::Insert;
+                                    self.keymap = Keymap::default_vi_insert();
+                                    let _ = queue!(
+                                        self.writer,
+                                        cursor::SetCursorStyle::BlinkingBar
+                                    );
+                                    changed = true;
+                                }
+                            }
+                            EditorAction::InsertAtFirstNonWhitespace => {
+                                if self.edit_mode == EditMode::Vi {
+                                    line_buffer.move_to_first_non_whitespace();
+                                    self.vi_mode = ViMode::Insert;
+                                    self.keymap = Keymap::default_vi_insert();
+                                    let _ = queue!(
+                                        self.writer,
+                                        cursor::SetCursorStyle::BlinkingBar
+                                    );
+                                    changed = true;
+                                }
+                            }
+                            EditorAction::OpenBelow => {
+                                if self.edit_mode == EditMode::Vi {
+                                    save_undo!();
+                                    line_buffer.move_end();
+                                    let should_indent = self.validator.as_ref().is_some_and(|v| {
+                                        v.should_indent(line_buffer.current_line_prefix())
+                                    });
+                                    line_buffer.insert_newline_preserve_indent(
+                                        should_indent,
+                                        self.indent_size,
+                                    );
+                                    self.vi_mode = ViMode::Insert;
+                                    self.keymap = Keymap::default_vi_insert();
+                                    let _ = queue!(
+                                        self.writer,
+                                        cursor::SetCursorStyle::BlinkingBar
+                                    );
+                                    changed = true;
+                                }
+                            }
+                            EditorAction::OpenAbove => {
+                                if self.edit_mode == EditMode::Vi {
+                                    save_undo!();
+                                    line_buffer.move_home();
+                                    line_buffer.insert_char('\n');
+                                    line_buffer.move_up();
+                                    self.vi_mode = ViMode::Insert;
+                                    self.keymap = Keymap::default_vi_insert();
+                                    let _ = queue!(
+                                        self.writer,
+                                        cursor::SetCursorStyle::BlinkingBar
+                                    );
+                                    changed = true;
+                                }
+                            }
+                            EditorAction::SubstituteChar => {
+                                save_undo!();
+                                if let Some(cut) = line_buffer.cut_char_under_cursor()
+                                    && let Some(cb) = &mut self.clipboard
+                                {
+                                    cb.set(&cut);
+                                }
+                                if self.edit_mode == EditMode::Vi {
+                                    self.vi_mode = ViMode::Insert;
+                                    self.keymap = Keymap::default_vi_insert();
+                                    let _ = queue!(
+                                        self.writer,
+                                        cursor::SetCursorStyle::BlinkingBar
+                                    );
+                                }
+                                changed = true;
+                            }
+                            EditorAction::SubstituteLine => {
+                                save_undo!();
+                                if let Some(cut) = line_buffer.cut_line()
+                                    && let Some(cb) = &mut self.clipboard
+                                {
+                                    cb.set(&cut);
+                                }
+                                if self.edit_mode == EditMode::Vi {
+                                    self.vi_mode = ViMode::Insert;
+                                    self.keymap = Keymap::default_vi_insert();
+                                    let _ = queue!(
+                                        self.writer,
+                                        cursor::SetCursorStyle::BlinkingBar
+                                    );
+                                }
+                                changed = true;
+                            }
+                            EditorAction::ChangeToEnd => {
+                                save_undo!();
+                                if let Some(cut) = line_buffer.cut_to_end()
+                                    && let Some(cb) = &mut self.clipboard
+                                {
+                                    cb.set(&cut);
+                                }
+                                if self.edit_mode == EditMode::Vi {
+                                    self.vi_mode = ViMode::Insert;
+                                    self.keymap = Keymap::default_vi_insert();
+                                    let _ = queue!(
+                                        self.writer,
+                                        cursor::SetCursorStyle::BlinkingBar
+                                    );
+                                }
+                                changed = true;
+                            }
+                            EditorAction::ViDeleteOperator => {
+                                vi_operator = Some(ViOperator::Delete);
+                            }
+                            EditorAction::ViChangeOperator => {
+                                vi_operator = Some(ViOperator::Change);
+                            }
+                            EditorAction::ViYankOperator => {
+                                vi_operator = Some(ViOperator::Yank);
+                            }
+                            EditorAction::ViReplaceCharOperator => {
+                                vi_operator = Some(ViOperator::ReplaceChar);
+                            }
+                            EditorAction::ClearLine => {
+                                save_undo!();
+                                in_insert_session = false;
+                                changed = line_buffer.clear();
+                            }
                             EditorAction::ClearScreen => {
                                 queue!(self.writer, Clear(ClearType::All), cursor::MoveTo(0, 0),)?;
                                 let (layout, hint) = self.render_line(&prompt, &line_buffer, 0)?;
@@ -674,9 +1227,14 @@ impl<W: Write> Editor<W> {
                             }
                             EditorAction::Ignore | EditorAction::Eof => {}
                         }
-                    } else if let (KeyCode::Char(c), KeyModifiers::NONE | KeyModifiers::SHIFT) =
-                        (code, modifiers)
+                    } else if (self.edit_mode != EditMode::Vi || self.vi_mode == ViMode::Insert)
+                        && let (KeyCode::Char(c), KeyModifiers::NONE | KeyModifiers::SHIFT) =
+                            (code, modifiers)
                     {
+                        if !in_insert_session {
+                            save_undo!();
+                            in_insert_session = true;
+                        }
                         // Unbound printable characters are inserted into the buffer
                         let should_dedent = self
                             .validator
@@ -686,6 +1244,9 @@ impl<W: Write> Editor<W> {
                             line_buffer.dedent_line(self.indent_size);
                         }
                         line_buffer.insert_char(c);
+                        if self.edit_mode != EditMode::Vi && (c == ' ' || c == '\t' || c == '\n') {
+                            in_insert_session = false;
+                        }
                         changed = true;
                     }
 
@@ -716,6 +1277,8 @@ impl<W: Write> Editor<W> {
                     if let Some(menu) = &mut self.menu {
                         menu.dismiss(&mut line_buffer);
                     }
+                    save_undo!();
+                    in_insert_session = false;
                     let normalised = normalise_paste(&text);
                     if !normalised.is_empty() {
                         line_buffer.insert_str(&normalised);
@@ -1172,5 +1735,157 @@ mod tests {
 
         editor.set_clipboard(None);
         assert!(editor.clipboard().is_none());
+    }
+
+    #[test]
+    fn test_editor_vi_mode_configuration_and_keymaps() {
+        let buffer = Vec::new();
+        let mut editor = Editor::with_writer(buffer);
+        assert_eq!(editor.edit_mode(), EditMode::Emacs);
+        assert_eq!(editor.vi_mode(), ViMode::Insert);
+
+        // Switch to Vi mode
+        editor.set_edit_mode(EditMode::Vi);
+        assert_eq!(editor.edit_mode(), EditMode::Vi);
+        assert_eq!(editor.vi_mode(), ViMode::Insert);
+
+        // In Vi insert mode, Esc is mapped to SwitchToNormalMode
+        assert_eq!(
+            editor.keymap().get(KeyCode::Esc, KeyModifiers::NONE),
+            Some(&EditorAction::SwitchToNormalMode)
+        );
+
+        // Check normal mode keybindings
+        let normal_km = Keymap::default_vi_normal();
+        assert_eq!(
+            normal_km.get(KeyCode::Char('i'), KeyModifiers::NONE),
+            Some(&EditorAction::SwitchToInsertMode)
+        );
+        assert_eq!(
+            normal_km.get(KeyCode::Char('a'), KeyModifiers::NONE),
+            Some(&EditorAction::Append)
+        );
+        assert_eq!(
+            normal_km.get(KeyCode::Char('A'), KeyModifiers::NONE),
+            Some(&EditorAction::AppendEnd)
+        );
+        assert_eq!(
+            normal_km.get(KeyCode::Char('I'), KeyModifiers::NONE),
+            Some(&EditorAction::InsertAtFirstNonWhitespace)
+        );
+        assert_eq!(
+            normal_km.get(KeyCode::Char('o'), KeyModifiers::NONE),
+            Some(&EditorAction::OpenBelow)
+        );
+        assert_eq!(
+            normal_km.get(KeyCode::Char('O'), KeyModifiers::NONE),
+            Some(&EditorAction::OpenAbove)
+        );
+        assert_eq!(
+            normal_km.get(KeyCode::Char('s'), KeyModifiers::NONE),
+            Some(&EditorAction::SubstituteChar)
+        );
+        assert_eq!(
+            normal_km.get(KeyCode::Char('S'), KeyModifiers::NONE),
+            Some(&EditorAction::SubstituteLine)
+        );
+        assert_eq!(
+            normal_km.get(KeyCode::Char('C'), KeyModifiers::NONE),
+            Some(&EditorAction::ChangeToEnd)
+        );
+        assert_eq!(
+            normal_km.get(KeyCode::Char('d'), KeyModifiers::NONE),
+            Some(&EditorAction::ViDeleteOperator)
+        );
+        assert_eq!(
+            normal_km.get(KeyCode::Char('c'), KeyModifiers::NONE),
+            Some(&EditorAction::ViChangeOperator)
+        );
+        assert_eq!(
+            normal_km.get(KeyCode::Char('y'), KeyModifiers::NONE),
+            Some(&EditorAction::ViYankOperator)
+        );
+        assert_eq!(
+            normal_km.get(KeyCode::Char('r'), KeyModifiers::NONE),
+            Some(&EditorAction::ViReplaceCharOperator)
+        );
+        assert_eq!(
+            normal_km.get(KeyCode::Char('x'), KeyModifiers::NONE),
+            Some(&EditorAction::CutChar)
+        );
+        assert_eq!(
+            normal_km.get(KeyCode::Char('X'), KeyModifiers::NONE),
+            Some(&EditorAction::CutCharBefore)
+        );
+        assert_eq!(
+            normal_km.get(KeyCode::Char('D'), KeyModifiers::NONE),
+            Some(&EditorAction::CutToEnd)
+        );
+        assert_eq!(
+            normal_km.get(KeyCode::Char('~'), KeyModifiers::NONE),
+            Some(&EditorAction::ToggleCase)
+        );
+        assert_eq!(
+            normal_km.get(KeyCode::Char('u'), KeyModifiers::NONE),
+            Some(&EditorAction::Undo)
+        );
+        assert_eq!(
+            normal_km.get(KeyCode::Char('p'), KeyModifiers::NONE),
+            Some(&EditorAction::PasteAfter)
+        );
+        assert_eq!(
+            normal_km.get(KeyCode::Char('P'), KeyModifiers::NONE),
+            Some(&EditorAction::PasteBefore)
+        );
+        assert_eq!(
+            normal_km.get(KeyCode::Char('w'), KeyModifiers::NONE),
+            Some(&EditorAction::MoveWordRight)
+        );
+        assert_eq!(
+            normal_km.get(KeyCode::Char('b'), KeyModifiers::NONE),
+            Some(&EditorAction::MoveWordLeft)
+        );
+        assert_eq!(
+            normal_km.get(KeyCode::Char('e'), KeyModifiers::NONE),
+            Some(&EditorAction::MoveWordEnd)
+        );
+        assert_eq!(
+            normal_km.get(KeyCode::Char('0'), KeyModifiers::NONE),
+            Some(&EditorAction::MoveHome)
+        );
+        assert_eq!(
+            normal_km.get(KeyCode::Char('^'), KeyModifiers::NONE),
+            Some(&EditorAction::MoveToFirstNonWhitespace)
+        );
+        assert_eq!(
+            normal_km.get(KeyCode::Char('$'), KeyModifiers::NONE),
+            Some(&EditorAction::MoveEnd)
+        );
+        assert_eq!(
+            normal_km.get(KeyCode::Char('u'), KeyModifiers::NONE),
+            Some(&EditorAction::Undo)
+        );
+        assert_eq!(
+            normal_km.get(KeyCode::Char('r'), KeyModifiers::CONTROL),
+            Some(&EditorAction::Redo)
+        );
+
+        // Switch back to Emacs
+        editor.set_edit_mode(EditMode::Emacs);
+        assert_eq!(editor.edit_mode(), EditMode::Emacs);
+
+        // Emacs keybindings for Undo and Redo
+        assert_eq!(
+            editor.keymap().get(KeyCode::Char('_'), KeyModifiers::CONTROL),
+            Some(&EditorAction::Undo)
+        );
+        assert_eq!(
+            editor.keymap().get(KeyCode::Char('z'), KeyModifiers::CONTROL),
+            Some(&EditorAction::Undo)
+        );
+        assert_eq!(
+            editor.keymap().get(KeyCode::Char('r'), KeyModifiers::ALT),
+            Some(&EditorAction::Redo)
+        );
     }
 }

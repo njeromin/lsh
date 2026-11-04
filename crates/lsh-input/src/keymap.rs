@@ -104,6 +104,54 @@ pub enum EditorAction {
     CutWordRight,
     /// Paste / yank text from the clipboard at cursor position (Ctrl+Y).
     Yank,
+    /// Paste text from the clipboard after the cursor (Vi 'p').
+    PasteAfter,
+    /// Paste text from the clipboard before the cursor (Vi 'P').
+    PasteBefore,
+    /// Copy the entire line into the clipboard without deleting (Vi 'yy').
+    YankLine,
+    /// Cut the character under the cursor into the clipboard (Vi 'x').
+    CutChar,
+    /// Cut the character before the cursor into the clipboard (Vi 'X').
+    CutCharBefore,
+    /// Move cursor to the end of the current or next word (Vi 'e').
+    MoveWordEnd,
+    /// Move cursor to the first non-whitespace character on the line (Vi '^').
+    MoveToFirstNonWhitespace,
+    /// Toggle case of character under cursor and move right (Vi '~').
+    ToggleCase,
+    /// Undo the last edit action (Vi 'u', Emacs 'Ctrl+_', 'Ctrl+Z').
+    Undo,
+    /// Redo the last undone edit action (Vi 'Ctrl+R', Emacs 'Alt+R', 'Ctrl+Shift+Z').
+    Redo,
+    /// Switch from Insert mode to Normal mode (Vi Esc).
+    SwitchToNormalMode,
+    /// Switch from Normal mode to Insert mode (Vi 'i').
+    SwitchToInsertMode,
+    /// Move cursor right and switch to Insert mode (Vi 'a').
+    Append,
+    /// Move cursor to end of line and switch to Insert mode (Vi 'A').
+    AppendEnd,
+    /// Move cursor to first non-whitespace and switch to Insert mode (Vi 'I').
+    InsertAtFirstNonWhitespace,
+    /// Open a new line below and switch to Insert mode (Vi 'o').
+    OpenBelow,
+    /// Open a new line above and switch to Insert mode (Vi 'O').
+    OpenAbove,
+    /// Cut character under cursor and switch to Insert mode (Vi 's').
+    SubstituteChar,
+    /// Cut entire line and switch to Insert mode (Vi 'S').
+    SubstituteLine,
+    /// Cut to end of line and switch to Insert mode (Vi 'C').
+    ChangeToEnd,
+    /// Vi 'd' operator pending motion or 'd'.
+    ViDeleteOperator,
+    /// Vi 'c' operator pending motion or 'c'.
+    ViChangeOperator,
+    /// Vi 'y' operator pending motion or 'y'.
+    ViYankOperator,
+    /// Vi 'r' operator pending replacement character.
+    ViReplaceCharOperator,
     /// Clear the entire line.
     ClearLine,
     /// Clear the terminal screen and redraw the prompt at top (Ctrl+L).
@@ -226,6 +274,158 @@ impl Keymap {
         km.bind(KeyCombo::ctrl('y'), EditorAction::Yank);
         km.bind(KeyCombo::ctrl('l'), EditorAction::ClearScreen);
 
+        // Undo & redo
+        km.bind(KeyCombo::ctrl('_'), EditorAction::Undo);
+        km.bind(
+            (KeyCode::Char('_'), KeyModifiers::CONTROL | KeyModifiers::SHIFT),
+            EditorAction::Undo,
+        );
+        km.bind(KeyCombo::ctrl('/'), EditorAction::Undo);
+        km.bind(KeyCombo::ctrl('-'), EditorAction::Undo);
+        km.bind(KeyCombo::ctrl('z'), EditorAction::Undo);
+
+        km.bind(KeyCombo::alt('r'), EditorAction::Redo);
+        km.bind(KeyCombo::alt('_'), EditorAction::Redo);
+        km.bind(
+            (KeyCode::Char('_'), KeyModifiers::ALT | KeyModifiers::SHIFT),
+            EditorAction::Redo,
+        );
+        km.bind(
+            (KeyCode::Char('-'), KeyModifiers::ALT | KeyModifiers::SHIFT),
+            EditorAction::Redo,
+        );
+        km.bind(
+            (KeyCode::Char('z'), KeyModifiers::CONTROL | KeyModifiers::SHIFT),
+            EditorAction::Redo,
+        );
+        km.bind(
+            (KeyCode::Char('Z'), KeyModifiers::CONTROL | KeyModifiers::SHIFT),
+            EditorAction::Redo,
+        );
+        km.bind(KeyCombo::ctrl('g'), EditorAction::Redo);
+
+        km
+    }
+
+    /// Create a standard Vi insert mode keymap.
+    pub fn default_vi_insert() -> Self {
+        let mut km = Self::empty();
+
+        // Mode transition to normal mode
+        km.bind(KeyCode::Esc, EditorAction::SwitchToNormalMode);
+        km.bind(KeyCombo::ctrl('['), EditorAction::SwitchToNormalMode);
+
+        // Undo & redo
+        km.bind(KeyCombo::ctrl('_'), EditorAction::Undo);
+        km.bind(KeyCombo::ctrl('/'), EditorAction::Undo);
+        km.bind(KeyCombo::ctrl('z'), EditorAction::Undo);
+        km.bind(KeyCombo::alt('r'), EditorAction::Redo);
+        km.bind(
+            (KeyCode::Char('z'), KeyModifiers::CONTROL | KeyModifiers::SHIFT),
+            EditorAction::Redo,
+        );
+        km.bind(
+            (KeyCode::Char('Z'), KeyModifiers::CONTROL | KeyModifiers::SHIFT),
+            EditorAction::Redo,
+        );
+
+        // Submissions & control
+        km.bind(KeyCode::Enter, EditorAction::Submit);
+        km.bind(
+            (KeyCode::Enter, KeyModifiers::SHIFT),
+            EditorAction::InsertNewline,
+        );
+        km.bind(
+            (KeyCode::Enter, KeyModifiers::ALT),
+            EditorAction::InsertNewline,
+        );
+        km.bind(KeyCombo::ctrl('c'), EditorAction::Interrupt);
+        km.bind(KeyCombo::ctrl('d'), EditorAction::Eof);
+
+        // Completion
+        km.bind(KeyCode::Tab, EditorAction::Complete);
+        km.bind(KeyCode::BackTab, EditorAction::CompletePrevious);
+        km.bind(
+            (KeyCode::Tab, KeyModifiers::SHIFT),
+            EditorAction::CompletePrevious,
+        );
+
+        // Deletions & clipboard
+        km.bind(KeyCode::Backspace, EditorAction::Backspace);
+        km.bind(KeyCode::Delete, EditorAction::Delete);
+        km.bind(KeyCombo::ctrl('w'), EditorAction::CutWordLeft);
+        km.bind(KeyCombo::ctrl('u'), EditorAction::CutToStart);
+        km.bind(KeyCombo::ctrl('k'), EditorAction::CutToEnd);
+        km.bind(KeyCombo::ctrl('y'), EditorAction::Yank);
+
+        // Basic arrow navigation in insert mode
+        km.bind(KeyCode::Left, EditorAction::MoveLeft);
+        km.bind(KeyCode::Right, EditorAction::MoveRight);
+        km.bind(KeyCode::Up, EditorAction::MoveUp);
+        km.bind(KeyCode::Down, EditorAction::MoveDown);
+        km.bind(KeyCode::Home, EditorAction::MoveHome);
+        km.bind(KeyCode::End, EditorAction::MoveEnd);
+
+        km
+    }
+
+    /// Create a standard Vi normal mode keymap.
+    pub fn default_vi_normal() -> Self {
+        let mut km = Self::empty();
+
+        // Mode transitions
+        km.bind(KeyCode::Char('i'), EditorAction::SwitchToInsertMode);
+        km.bind(KeyCode::Char('I'), EditorAction::InsertAtFirstNonWhitespace);
+        km.bind(KeyCode::Char('a'), EditorAction::Append);
+        km.bind(KeyCode::Char('A'), EditorAction::AppendEnd);
+        km.bind(KeyCode::Char('o'), EditorAction::OpenBelow);
+        km.bind(KeyCode::Char('O'), EditorAction::OpenAbove);
+        km.bind(KeyCode::Char('s'), EditorAction::SubstituteChar);
+        km.bind(KeyCode::Char('S'), EditorAction::SubstituteLine);
+        km.bind(KeyCode::Char('C'), EditorAction::ChangeToEnd);
+        km.bind(KeyCode::Esc, EditorAction::SwitchToNormalMode);
+
+        // Submissions & control
+        km.bind(KeyCode::Enter, EditorAction::Submit);
+        km.bind(KeyCombo::ctrl('c'), EditorAction::Interrupt);
+        km.bind(KeyCombo::ctrl('d'), EditorAction::Eof);
+        km.bind(KeyCombo::ctrl('l'), EditorAction::ClearScreen);
+
+        // Navigation
+        km.bind(KeyCode::Char('h'), EditorAction::MoveLeft);
+        km.bind(KeyCode::Left, EditorAction::MoveLeft);
+        km.bind(KeyCode::Char('l'), EditorAction::MoveRight);
+        km.bind(KeyCode::Right, EditorAction::MoveRight);
+        km.bind(KeyCode::Char('k'), EditorAction::MoveUp);
+        km.bind(KeyCode::Up, EditorAction::MoveUp);
+        km.bind(KeyCode::Char('j'), EditorAction::MoveDown);
+        km.bind(KeyCode::Down, EditorAction::MoveDown);
+        km.bind(KeyCode::Char('w'), EditorAction::MoveWordRight);
+        km.bind(KeyCode::Char('b'), EditorAction::MoveWordLeft);
+        km.bind(KeyCode::Char('e'), EditorAction::MoveWordEnd);
+        km.bind(KeyCode::Char('0'), EditorAction::MoveHome);
+        km.bind(KeyCode::Home, EditorAction::MoveHome);
+        km.bind(KeyCode::Char('^'), EditorAction::MoveToFirstNonWhitespace);
+        km.bind(KeyCode::Char('$'), EditorAction::MoveEnd);
+        km.bind(KeyCode::End, EditorAction::MoveEnd);
+
+        // Operators
+        km.bind(KeyCode::Char('d'), EditorAction::ViDeleteOperator);
+        km.bind(KeyCode::Char('c'), EditorAction::ViChangeOperator);
+        km.bind(KeyCode::Char('y'), EditorAction::ViYankOperator);
+        km.bind(KeyCode::Char('r'), EditorAction::ViReplaceCharOperator);
+
+        // Editing & deletion
+        km.bind(KeyCode::Char('x'), EditorAction::CutChar);
+        km.bind(KeyCode::Delete, EditorAction::CutChar);
+        km.bind(KeyCode::Char('X'), EditorAction::CutCharBefore);
+        km.bind(KeyCode::Char('D'), EditorAction::CutToEnd);
+        km.bind(KeyCode::Char('~'), EditorAction::ToggleCase);
+        km.bind(KeyCode::Char('u'), EditorAction::Undo);
+        km.bind(KeyCombo::ctrl('r'), EditorAction::Redo);
+        km.bind(KeyCode::Char('p'), EditorAction::PasteAfter);
+        km.bind(KeyCode::Char('P'), EditorAction::PasteBefore);
+
         km
     }
 
@@ -305,6 +505,35 @@ mod tests {
         assert_eq!(
             km.get(KeyCode::Tab, KeyModifiers::SHIFT),
             Some(&EditorAction::CompletePrevious)
+        );
+
+        // Undo & Redo bindings in Emacs mode
+        assert_eq!(
+            km.get(KeyCode::Char('_'), KeyModifiers::CONTROL),
+            Some(&EditorAction::Undo)
+        );
+        assert_eq!(
+            km.get(KeyCode::Char('z'), KeyModifiers::CONTROL),
+            Some(&EditorAction::Undo)
+        );
+        assert_eq!(
+            km.get(KeyCode::Char('/'), KeyModifiers::CONTROL),
+            Some(&EditorAction::Undo)
+        );
+        assert_eq!(
+            km.get(KeyCode::Char('r'), KeyModifiers::ALT),
+            Some(&EditorAction::Redo)
+        );
+        assert_eq!(
+            km.get(KeyCode::Char('g'), KeyModifiers::CONTROL),
+            Some(&EditorAction::Redo)
+        );
+        assert_eq!(
+            km.get(
+                KeyCode::Char('z'),
+                KeyModifiers::CONTROL | KeyModifiers::SHIFT
+            ),
+            Some(&EditorAction::Redo)
         );
     }
 

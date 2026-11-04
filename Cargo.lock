@@ -369,6 +369,7 @@ dependencies = [
  "lsh-eval",
  "lsh-input",
  "lsh-syntax",
+ "lsh-sys",
  "nu-ansi-term",
 ]
 

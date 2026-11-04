@@ -13,7 +13,7 @@ use lsh_syntax::{
 };
 use lsh_sys::signals::{init_interactive_terminal, reset_interrupted};
 use lsh_terminal::{
-    CompletionType, EditMode, LshCompleter, LshHinter, LshPrompt, Options, SyntaxHighlighter, osc,
+    CompletionType, LshCompleter, LshHinter, LshPrompt, Options, SyntaxHighlighter, osc,
 };
 
 const DEFAULT_PROMPT: &str = "\x1b[35m›\x1b[0m ";
@@ -83,14 +83,17 @@ fn interactive_session(
     let highlighter = SyntaxHighlighter::new();
     let initial_menu = CompletionType::Menu.create_menu(&completer);
 
+    let initial_options = Options::default();
+
     let mut line_editor = Editor::new()
+        .with_edit_mode(initial_options.edit_mode.into())
         .with_history(std::sync::Arc::clone(&history))
         .with_formatter(highlighter)
         .with_completer(completer.clone())
         .with_hinter(hinter)
         .with_validator(validator)
         .with_menu(initial_menu)
-        .with_keymap(EditMode::Default.create_keymap());
+        .with_keymap(initial_options.edit_mode.create_keymap());
 
     let mut last_applied_options: Option<Options> = None;
 
@@ -101,6 +104,7 @@ fn interactive_session(
             let opts = Options::from(opts);
 
             if last_applied_options.as_ref() != Some(&opts) {
+                line_editor.set_edit_mode(opts.edit_mode.into());
                 line_editor.set_keymap(opts.edit_mode.create_keymap());
                 line_editor.set_menu(Some(opts.completion_type.create_menu(&completer)));
                 completer.set_completion_type(opts.completion_type);
@@ -119,6 +123,7 @@ fn interactive_session(
         let cwd_path = current_dir().expect("Failed to get CWD");
         let formatted_cwd = format_cwd(&cwd_path, &home_dir().expect("Failed to get home dir"));
         execute!(io::stdout(), SetTitle(formatted_cwd)).expect("Failed to set tab title");
+        osc::write_7_cwd(&cwd_path);
 
         let prompt_str = get_prompt(eval);
         let prompt = LshPrompt::new(prompt_str);

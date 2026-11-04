@@ -8,6 +8,7 @@ lsh-syntax = { path = "../lsh-syntax" }
 lsh-completions = { path = "../lsh-completions" }
 lsh-eval = { path = "../lsh-eval" }
 lsh-input = { path = "../lsh-input" }
+lsh-sys = { path = "../lsh-sys" }
 crossterm = "0.29.0"
 dirs = "6.0.0"
 nu-ansi-term = "0.50.1"

@@ -72,11 +72,20 @@ impl From<&str> for EditMode {
     }
 }
 
+impl From<EditMode> for lsh_input::EditMode {
+    fn from(mode: EditMode) -> Self {
+        match mode {
+            EditMode::Default | EditMode::Emacs => lsh_input::EditMode::Emacs,
+            EditMode::Vi => lsh_input::EditMode::Vi,
+        }
+    }
+}
+
 impl EditMode {
     pub fn create_keymap(&self) -> lsh_input::Keymap {
         match self {
             EditMode::Default | EditMode::Emacs => lsh_input::Keymap::default_emacs(),
-            EditMode::Vi => lsh_input::Keymap::default_emacs(),
+            EditMode::Vi => lsh_input::Keymap::default_vi_insert(),
         }
     }
 }
