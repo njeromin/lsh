@@ -17,6 +17,7 @@ pub use clipboard::{Clipboard, InMemoryClipboard, default_clipboard};
 #[cfg(feature = "system-clipboard")]
 pub use clipboard::SystemClipboard;
 pub use completer::{Candidate, Completer};
+pub use crossterm::cursor::SetCursorStyle;
 pub use edit_mode::{EditMode, ViMode, ViOperator};
 pub use editor::{Editor, Signal, normalise_paste};
 pub use formatter::{StyledText, TextFormatter};

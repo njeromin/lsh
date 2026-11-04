@@ -87,6 +87,7 @@ fn interactive_session(
 
     let mut line_editor = Editor::new()
         .with_edit_mode(initial_options.edit_mode.into())
+        .with_cursor_style(initial_options.cursor_shape.into())
         .with_history(std::sync::Arc::clone(&history))
         .with_formatter(highlighter)
         .with_completer(completer.clone())
@@ -106,6 +107,7 @@ fn interactive_session(
             if last_applied_options.as_ref() != Some(&opts) {
                 line_editor.set_edit_mode(opts.edit_mode.into());
                 line_editor.set_keymap(opts.edit_mode.create_keymap());
+                line_editor.set_cursor_style(opts.cursor_shape.into());
                 line_editor.set_menu(Some(opts.completion_type.create_menu(&completer)));
                 completer.set_completion_type(opts.completion_type);
                 completer.set_nerd_icons(opts.nerd_icons);
