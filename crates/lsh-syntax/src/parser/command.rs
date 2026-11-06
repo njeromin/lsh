@@ -352,5 +352,4 @@ impl Parser {
         let token = &self.tokens[self.index - 1];
         token.offset + Self::token_source_len(token)
     }
-
 }

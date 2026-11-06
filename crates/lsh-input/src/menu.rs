@@ -211,11 +211,7 @@ impl Menu for BasicMenu {
     }
 
     fn start_position(&self) -> Option<usize> {
-        if self.active {
-            Some(self.start)
-        } else {
-            None
-        }
+        if self.active { Some(self.start) } else { None }
     }
 
     fn activate(&mut self, buffer: &mut LineBuffer, completer: Option<&dyn Completer>) {

@@ -108,9 +108,10 @@ impl<W: Write> Editor<W> {
                 if let Some(menu) = &mut self.menu {
                     menu.dismiss(&mut session.line_buffer);
                 }
-                let should_indent = self.validator.as_ref().is_some_and(|v| {
-                    v.should_indent(session.line_buffer.current_line_prefix())
-                });
+                let should_indent = self
+                    .validator
+                    .as_ref()
+                    .is_some_and(|v| v.should_indent(session.line_buffer.current_line_prefix()));
                 session
                     .line_buffer
                     .insert_newline_preserve_indent(should_indent, self.indent_size);
@@ -149,10 +150,10 @@ impl<W: Write> Editor<W> {
             }
             EditorAction::AcceptGhostTextWord => {
                 if let Some(hint) = current_hint {
-                    let word = self.hinter.as_ref().map_or_else(
-                        || default_next_hint_word(hint),
-                        |h| h.next_hint_word(hint),
-                    );
+                    let word = self
+                        .hinter
+                        .as_ref()
+                        .map_or_else(|| default_next_hint_word(hint), |h| h.next_hint_word(hint));
                     if !word.is_empty() {
                         session.line_buffer.insert_str(word);
                         changed = true;

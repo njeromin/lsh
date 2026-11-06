@@ -28,16 +28,20 @@ impl EditorSession {
     }
 
     pub(crate) fn save_undo(&mut self) {
-        self.undo_stack
-            .push((self.line_buffer.as_str().to_string(), self.line_buffer.cursor()));
+        self.undo_stack.push((
+            self.line_buffer.as_str().to_string(),
+            self.line_buffer.cursor(),
+        ));
         self.redo_stack.clear();
     }
 
     pub(crate) fn undo(&mut self) -> bool {
         self.in_insert_session = false;
         if let Some((saved_content, saved_cursor)) = self.undo_stack.pop() {
-            self.redo_stack
-                .push((self.line_buffer.as_str().to_string(), self.line_buffer.cursor()));
+            self.redo_stack.push((
+                self.line_buffer.as_str().to_string(),
+                self.line_buffer.cursor(),
+            ));
             self.line_buffer
                 .replace_range(0..self.line_buffer.len(), &saved_content);
             self.line_buffer
@@ -51,8 +55,10 @@ impl EditorSession {
     pub(crate) fn redo(&mut self) -> bool {
         self.in_insert_session = false;
         if let Some((saved_content, saved_cursor)) = self.redo_stack.pop() {
-            self.undo_stack
-                .push((self.line_buffer.as_str().to_string(), self.line_buffer.cursor()));
+            self.undo_stack.push((
+                self.line_buffer.as_str().to_string(),
+                self.line_buffer.cursor(),
+            ));
             self.line_buffer
                 .replace_range(0..self.line_buffer.len(), &saved_content);
             self.line_buffer

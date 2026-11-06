@@ -30,11 +30,11 @@ mod vi;
 #[cfg(test)]
 mod tests;
 
-pub use paste::normalise_paste;
-pub use signal::Signal;
 use actions::ActionResult;
+pub use paste::normalise_paste;
 use raw_mode::RawModeGuard;
 use session::EditorSession;
+pub use signal::Signal;
 
 pub struct Editor<W: Write = BufWriter<Stdout>> {
     writer: W,
@@ -435,8 +435,11 @@ impl<W: Write> Editor<W> {
                             MenuOutcome::Consumed
                             | MenuOutcome::Accepted
                             | MenuOutcome::Dismissed => {
-                                let (layout, hint) =
-                                    self.render_line(&prompt, &session.line_buffer, previous_cursor_row)?;
+                                let (layout, hint) = self.render_line(
+                                    &prompt,
+                                    &session.line_buffer,
+                                    previous_cursor_row,
+                                )?;
                                 previous_cursor_row = layout.cursor_row;
                                 current_hint = hint;
                                 continue;

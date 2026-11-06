@@ -847,5 +847,4 @@ impl Parser {
 
         Ok(Expr::AnonymousFunction { params, body })
     }
-
 }

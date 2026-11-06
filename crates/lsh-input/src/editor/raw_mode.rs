@@ -1,10 +1,9 @@
-use std::io::{self, Write};
 use crossterm::{
     cursor,
     event::{self, DisableBracketedPaste, EnableBracketedPaste},
-    queue,
-    terminal,
+    queue, terminal,
 };
+use std::io::{self, Write};
 
 /// RAII guard to ensure terminal raw mode is disabled when exiting `read_line`,
 /// even in the case of errors or panics.

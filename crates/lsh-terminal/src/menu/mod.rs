@@ -189,11 +189,7 @@ impl Menu for LshMenu {
     }
 
     fn start_position(&self) -> Option<usize> {
-        if self.active {
-            Some(self.start)
-        } else {
-            None
-        }
+        if self.active { Some(self.start) } else { None }
     }
 
     fn activate(&mut self, buffer: &mut LineBuffer, _completer: Option<&dyn lsh_input::Completer>) {

@@ -33,8 +33,7 @@ impl<W: Write> Editor<W> {
         match op {
             ViOperator::ReplaceChar => {
                 if !(matches!(code, KeyCode::Esc)
-                    || (code == KeyCode::Char('[')
-                        && modifiers.contains(KeyModifiers::CONTROL)))
+                    || (code == KeyCode::Char('[') && modifiers.contains(KeyModifiers::CONTROL)))
                     && let (KeyCode::Char(c), KeyModifiers::NONE | KeyModifiers::SHIFT) =
                         (code, modifiers)
                 {
