@@ -12,9 +12,8 @@ pub fn lex_input(src_id: usize, input: &str) -> Result<Vec<Token>, Diagnostic> {
 }
 
 pub fn lex_input_lenient(src_id: usize, input: &str) -> Vec<Token> {
-    lex_input_internal(src_id, input, true).unwrap_or_else(|_| {
-        vec![Token::new(TokenKind::EOF, input.len(), 0)]
-    })
+    lex_input_internal(src_id, input, true)
+        .unwrap_or_else(|_| vec![Token::new(TokenKind::EOF, input.len(), 0)])
 }
 
 fn lex_input_internal(src_id: usize, input: &str, lenient: bool) -> Result<Vec<Token>, Diagnostic> {
@@ -78,7 +77,9 @@ fn lex_input_internal(src_id: usize, input: &str, lenient: bool) -> Result<Vec<T
                             tokens.push(Token::new(TokenKind::PlusEquals, offset, 2));
                             chars.next();
                         }
-                        c if is_whitespace(&c) => tokens.push(Token::new(TokenKind::Plus, offset, 1)),
+                        c if is_whitespace(&c) => {
+                            tokens.push(Token::new(TokenKind::Plus, offset, 1))
+                        }
                         _ => {
                             if lex_identifier(&mut tokens, '+', offset, &mut chars).is_none() {
                                 tokens.push(Token::new(TokenKind::Plus, offset, 1));
@@ -102,7 +103,9 @@ fn lex_input_internal(src_id: usize, input: &str, lenient: bool) -> Result<Vec<T
                     tokens.push(Token::new(TokenKind::MinusEquals, offset, 2));
                     chars.next();
                 }
-                Some((_, c)) if is_whitespace(c) => tokens.push(Token::new(TokenKind::Minus, offset, 1)),
+                Some((_, c)) if is_whitespace(c) => {
+                    tokens.push(Token::new(TokenKind::Minus, offset, 1))
+                }
                 Some((_, c)) if c.is_ascii_digit() => {
                     if lex_identifier(&mut tokens, char, offset, &mut chars).is_none() {
                         tokens.push(Token::new(TokenKind::Minus, offset, 1));

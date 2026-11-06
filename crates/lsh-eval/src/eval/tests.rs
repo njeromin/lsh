@@ -1,4 +1,3 @@
-
 use super::*;
 use crate::{IoCtx, IoStreamMode, JobState};
 use lsh_syntax::{
@@ -1569,13 +1568,12 @@ fn test_special_variables_and_bare_dollar() {
 #[test]
 fn test_append_redirection_thin_arrow() {
     let mut eval = Evaluator::new();
-    let tmp_path = std::env::temp_dir().join(format!("lsh_test_thin_arrow_{}.txt", std::process::id()));
+    let tmp_path =
+        std::env::temp_dir().join(format!("lsh_test_thin_arrow_{}.txt", std::process::id()));
     let _ = std::fs::remove_file(&tmp_path);
 
     let path_str = tmp_path.to_str().unwrap();
-    let script = format!(
-        "echo line1 -> {path_str}\necho line2 ->> {path_str}\n"
-    );
+    let script = format!("echo line1 -> {path_str}\necho line2 ->> {path_str}\n");
 
     let prog = Parser::new(0, lexer::lex_input(0, &script).unwrap())
         .parse_program()
