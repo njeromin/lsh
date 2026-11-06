@@ -1,6 +1,12 @@
 use std::collections::HashMap;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
+pub struct Redirect {
+    pub target: Expr,
+    pub append: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum BinaryOp {
     Add,
     Sub,
@@ -16,13 +22,13 @@ pub enum BinaryOp {
     Ge,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum CommandExpr {
     Call {
         env_assignments: Vec<(String, Expr)>,
         identifier: Expr,
         args: Vec<Expr>,
-        stdout_redirect: Option<Expr>,
+        stdout_redirect: Option<Redirect>,
     },
     Pipeline(Vec<CommandExpr>),
     And {
@@ -36,7 +42,7 @@ pub enum CommandExpr {
     Background(Box<CommandExpr>),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
     // Data,
     Number(f64),
@@ -74,7 +80,7 @@ pub enum Expr {
     },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Statement {
     Expr(Expr),
     Command(CommandExpr),

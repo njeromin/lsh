@@ -90,6 +90,10 @@ impl Evaluator {
             vars.extend(scope.vars.keys().cloned());
         }
         vars.extend(self.exported_vars.iter().cloned());
+        vars.insert("?".to_string());
+        vars.insert("$".to_string());
+        vars.insert("!".to_string());
+        vars.insert("#".to_string());
         vars.into_iter().collect()
     }
 
@@ -124,7 +128,22 @@ impl Evaluator {
             }
         }
 
-        None
+        match var_name {
+            "?" => Some(Value::Number(self.last_status as f64)),
+            "$" => Some(Value::Number(std::process::id() as f64)),
+            "!" => {
+                let last_pid = self
+                    .job_manager
+                    .jobs
+                    .values()
+                    .last()
+                    .and_then(|j| j.pids.last().copied());
+                Some(Value::Number(last_pid.unwrap_or(0) as f64))
+            }
+            "#" => Some(Value::Number(0.0)),
+            "*" | "@" => Some(Value::String(String::new())),
+            _ => None,
+        }
     }
 
     pub(crate) fn assign_var(&mut self, var_name: &str, value: Value, scope_indices: &[usize]) {

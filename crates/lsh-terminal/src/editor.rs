@@ -394,7 +394,7 @@ impl LshCompleter {
             return true;
         }
 
-        if cmd.starts_with(|c: char| matches!(c, '$' | '(' | '{' | '[' | '"' | '\'' | '#')) {
+        if cmd.starts_with(['$', '(', '{', '[', '"', '\'', '#']) {
             return true;
         }
 
@@ -406,24 +406,23 @@ impl LshCompleter {
             return true;
         }
 
-        if let Ok(aliases) = self.cached_aliases.read() {
-            if aliases.iter().any(|a| a == cmd) {
-                return true;
-            }
+        if let Ok(aliases) = self.cached_aliases.read()
+            && aliases.iter().any(|a| a == cmd)
+        {
+            return true;
         }
 
-        if let Ok(vars) = self.cached_vars.read() {
-            if vars.iter().any(|v| v == cmd) {
-                return true;
-            }
+        if let Ok(vars) = self.cached_vars.read()
+            && vars.iter().any(|v| v == cmd)
+        {
+            return true;
         }
 
-        if let Ok(binaries) = self.cached_binaries.read() {
-            if binaries.binary_search_by(|b| b.as_str().cmp(cmd)).is_ok()
-                || binaries.iter().any(|b| b == cmd)
-            {
-                return true;
-            }
+        if let Ok(binaries) = self.cached_binaries.read()
+            && (binaries.binary_search_by(|b| b.as_str().cmp(cmd)).is_ok()
+                || binaries.iter().any(|b| b == cmd))
+        {
+            return true;
         }
 
         false

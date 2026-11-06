@@ -2,7 +2,7 @@ use crate::{diagnostics::DiagnosticKind, lexer::lex_input};
 
 use super::{
     Parser,
-    ast::{BinaryOp, CommandExpr, Expr, Statement},
+    ast::{BinaryOp, CommandExpr, Expr, Redirect, Statement},
 };
 
 fn parse_program(input: &str) -> Vec<Statement> {
@@ -441,7 +441,57 @@ fn parses_command_with_stdout_redirection() {
     assert_command_identifier(identifier, "echo");
     assert_eq!(args.len(), 1);
     assert!(matches!(&args[0], Expr::String(s) if s == "hello"));
-    assert!(matches!(stdout_redirect, Some(Expr::String(s)) if s == "out.txt"));
+    assert!(matches!(
+        stdout_redirect,
+        Some(Redirect {
+            target: Expr::String(s),
+            append: false
+        }) if s == "out.txt"
+    ));
+}
+
+#[test]
+fn parses_command_with_stdout_append_redirection_thin_arrow() {
+    let body = parse_program("echo hello ->> out.txt");
+
+    let Statement::Command(CommandExpr::Call {
+        identifier,
+        args,
+        stdout_redirect,
+        ..
+    }) = &body[0]
+    else {
+        panic!("Expected command call statement with append redirection");
+    };
+
+    assert_command_identifier(identifier, "echo");
+    assert_eq!(args.len(), 1);
+    assert!(matches!(&args[0], Expr::String(s) if s == "hello"));
+    assert!(matches!(
+        stdout_redirect,
+        Some(Redirect {
+            target: Expr::String(s),
+            append: true
+        }) if s == "out.txt"
+    ));
+}
+
+#[test]
+fn double_gt_is_not_redirection() {
+    let body = parse_program("echo hello >> out.txt");
+    let Statement::Command(CommandExpr::Call {
+        identifier,
+        args,
+        stdout_redirect,
+        ..
+    }) = &body[0]
+    else {
+        panic!("Expected command call statement");
+    };
+
+    assert_command_identifier(identifier, "echo");
+    assert!(stdout_redirect.is_none());
+    assert_eq!(args.len(), 3);
 }
 
 #[test]
@@ -471,7 +521,13 @@ fn parses_pipeline_with_last_stage_stdout_redirection() {
         panic!("Expected second stage call");
     };
     assert_command_identifier(identifier, "cat");
-    assert!(matches!(stdout_redirect, Some(Expr::String(s)) if s == "out.txt"));
+    assert!(matches!(
+        stdout_redirect,
+        Some(Redirect {
+            target: Expr::String(s),
+            append: false
+        }) if s == "out.txt"
+    ));
 }
 
 #[test]

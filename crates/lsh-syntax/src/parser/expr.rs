@@ -401,6 +401,7 @@ impl Parser {
                                     || self.check_current(&TokenKind::And)
                                     || self.check_current(&TokenKind::Or)
                                     || self.check_current(&TokenKind::ThinArrow)
+                                    || self.check_current(&TokenKind::ThinArrowAppend)
                                 {
                                     should_advance = false;
                                     break;
@@ -675,6 +676,11 @@ impl Parser {
             TokenKind::ThinArrow => {
                 return self.error_here(
                     "Unexpected '->' here. Redirection is only valid after a command.",
+                );
+            }
+            TokenKind::ThinArrowAppend => {
+                return self.error_here(
+                    "Unexpected '->>' here. Redirection is only valid after a command.",
                 );
             }
             TokenKind::FatArrow => {

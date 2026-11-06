@@ -180,7 +180,7 @@ impl JobManager {
             .map(|(&id, _)| id)
             .collect();
         if matches.len() == 1 {
-            return Ok(matches[0]);
+            Ok(matches[0])
         } else if matches.is_empty() {
             Err(format!("{spec}: no such job"))
         } else {

@@ -193,6 +193,18 @@ impl Parser {
                     continue;
                 }
 
+                // Special variables: $?, $$, $!, $#, $*, $@
+                if let Some(&(_, next_c)) = chars.peek()
+                    && matches!(next_c, '?' | '$' | '!' | '#' | '*' | '@')
+                {
+                    chars.next();
+                    if !current_literal.is_empty() {
+                        parts.push(Expr::QuotedString(std::mem::take(&mut current_literal)));
+                    }
+                    parts.push(Expr::Variable(next_c.to_string()));
+                    continue;
+                }
+
                 // Variable substitution: $var
                 if let Some(&(_, next_c)) = chars.peek()
                     && (next_c == '_' || next_c.is_ascii_alphabetic())

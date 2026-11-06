@@ -1,7 +1,7 @@
 use crate::{
     diagnostics::Diagnostic,
     lexer::token::TokenKind,
-    parser::ast::{BinaryOp, CommandExpr, Expr},
+    parser::ast::{BinaryOp, CommandExpr, Expr, Redirect},
 };
 
 use super::Parser;
@@ -95,6 +95,7 @@ impl Parser {
             && !self.check_current(&TokenKind::Or)
             && !self.check_current(&TokenKind::Ampersand)
             && !self.check_current(&TokenKind::ThinArrow)
+            && !self.check_current(&TokenKind::ThinArrowAppend)
             && !terminators.iter().any(|term| self.check_current(term))
         {
             if let Some(arg) = self.parse_command_argument()? {
@@ -109,7 +110,19 @@ impl Parser {
             let Some(target) = self.parse_command_argument()? else {
                 return self.error_here("Expected redirect target after '->'.");
             };
-            Some(target)
+            Some(Redirect {
+                target,
+                append: false,
+            })
+        } else if self.check_current(&TokenKind::ThinArrowAppend) {
+            self.advance(); // Skip '->>'.
+            let Some(target) = self.parse_command_argument()? else {
+                return self.error_here("Expected redirect target after '->>'.");
+            };
+            Some(Redirect {
+                target,
+                append: true,
+            })
         } else {
             None
         };

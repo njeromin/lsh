@@ -130,6 +130,7 @@ impl Parser {
             TokenKind::SlashEquals => "'/='".to_string(),
             TokenKind::FatArrow => "'=>'".to_string(),
             TokenKind::ThinArrow => "'->'".to_string(),
+            TokenKind::ThinArrowAppend => "'->>'".to_string(),
             TokenKind::DollarLeftParen => "'$('".to_string(),
             TokenKind::LeftCurly => "'{'".to_string(),
             TokenKind::RightCurly => "'}'".to_string(),

@@ -1,7 +1,7 @@
 use std::{collections::HashMap, fs::File, io};
 
 use lsh_syntax::{
-    ast::{BinaryOp, CommandExpr, Expr},
+    ast::{BinaryOp, CommandExpr, Expr, Redirect},
     print_error,
 };
 
@@ -22,7 +22,7 @@ struct ExternalPipelineStage {
     cmd: String,
     args: Vec<String>,
     env_assignments: Vec<(String, String)>,
-    stdout_redirect: Option<String>,
+    stdout_redirect: Option<(String, bool)>,
 }
 
 impl Evaluator {
@@ -34,14 +34,25 @@ impl Evaluator {
         Value::object(res)
     }
 
+    fn open_redirect_file(path: &str, append: bool) -> io::Result<File> {
+        if append {
+            std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+        } else {
+            File::create(path)
+        }
+    }
+
     fn resolve_stdout_redirect_path(
         &mut self,
-        stdout_redirect: &Option<Expr>,
+        stdout_redirect: &Option<Redirect>,
         scope_indices: &mut Vec<usize>,
-    ) -> Option<String> {
-        stdout_redirect.as_ref().map(|target_expr| {
+    ) -> Option<(String, bool)> {
+        stdout_redirect.as_ref().map(|redirect| {
             let raw_target = self
-                .evaluate_expr(target_expr, true, scope_indices)
+                .evaluate_expr(&redirect.target, true, scope_indices)
                 .to_string();
             let expanded = expand::expand_arg(
                 raw_target.clone(),
@@ -50,16 +61,17 @@ impl Evaluator {
                     glob: false,
                 },
             );
-            expanded.into_iter().next().unwrap_or(raw_target)
+            let path = expanded.into_iter().next().unwrap_or(raw_target);
+            (path, redirect.append)
         })
     }
 
     fn maybe_redirect_output(
         output: Vec<u8>,
-        stdout_redirect_path: Option<&str>,
+        stdout_redirect: Option<(&str, bool)>,
     ) -> (i32, Vec<u8>, Vec<u8>) {
-        if let Some(path) = stdout_redirect_path {
-            match File::create(path) {
+        if let Some((path, append)) = stdout_redirect {
+            match Self::open_redirect_file(path, append) {
                 Ok(mut file) => {
                     use std::io::Write as _;
                     if let Err(e) = file.write_all(&output) {
@@ -231,8 +243,8 @@ impl Evaluator {
             // Stdout
             if !is_last {
                 c.stdout(Stdio::piped());
-            } else if let Some(redirect_path) = stage.stdout_redirect {
-                match File::create(&redirect_path) {
+            } else if let Some((redirect_path, append)) = stage.stdout_redirect {
+                match Self::open_redirect_file(&redirect_path, append) {
                     Ok(file) => {
                         c.stdout(Stdio::from(file));
                     }
@@ -452,10 +464,10 @@ impl Evaluator {
         env_assignment_values: &[(String, String)],
         input: Vec<u8>,
         capture_output: bool,
-        stdout_redirect_path: Option<&str>,
+        stdout_redirect: Option<(&str, bool)>,
     ) -> (i32, Vec<u8>, Vec<u8>) {
-        if let Some(path) = stdout_redirect_path {
-            let file = match File::create(path) {
+        if let Some((path, append)) = stdout_redirect {
+            let file = match Self::open_redirect_file(path, append) {
                 Ok(file) => file,
                 Err(e) => return (-1, vec![], e.to_string().into_bytes()),
             };
@@ -564,6 +576,9 @@ impl Evaluator {
 
                 let stdout_redirect_path =
                     self.resolve_stdout_redirect_path(stdout_redirect, scope_indices);
+                let redirect_arg = stdout_redirect_path
+                    .as_ref()
+                    .map(|(path, append)| (path.as_str(), *append));
 
                 let result = {
                     let (identifier_val, receiver) =
@@ -574,7 +589,7 @@ impl Evaluator {
                             .call_user_function_with_receiver(func, args, receiver, scope_indices)
                             .to_string()
                             .into_bytes();
-                        Self::maybe_redirect_output(output, stdout_redirect_path.as_deref())
+                        Self::maybe_redirect_output(output, redirect_arg)
                     } else {
                         let identifier_str = identifier_val.to_string();
 
@@ -586,7 +601,7 @@ impl Evaluator {
                                 .call_user_function_with_receiver(&func, args, rec, scope_indices)
                                 .to_string()
                                 .into_bytes();
-                            Self::maybe_redirect_output(output, stdout_redirect_path.as_deref())
+                            Self::maybe_redirect_output(output, redirect_arg)
                         } else if let Some((func, plugin_manifest)) =
                             self.plugin_manager.get_command(&identifier_str)
                         {
@@ -595,7 +610,7 @@ impl Evaluator {
                                 .call_user_function_with_receiver(&func, args, rec, scope_indices)
                                 .to_string()
                                 .into_bytes();
-                            Self::maybe_redirect_output(output, stdout_redirect_path.as_deref())
+                            Self::maybe_redirect_output(output, redirect_arg)
                         } else {
                             let (res_cmd, res_args) = self.resolve_command(identifier_str);
                             let all_args = self.build_command_args(res_args, args, scope_indices);
@@ -605,7 +620,7 @@ impl Evaluator {
                                 env_assignment_values.as_slice(),
                                 input,
                                 capture_output,
-                                stdout_redirect_path.as_deref(),
+                                redirect_arg,
                             )
                         }
                     }
@@ -753,8 +768,8 @@ impl Evaluator {
                 // Background stdin is null to prevent SIGTTIN
                 c.stdin(Stdio::null());
 
-                if let Some(path) = &stdout_redirect_path {
-                    match File::create(path) {
+                if let Some((path, append)) = &stdout_redirect_path {
+                    match Self::open_redirect_file(path, *append) {
                         Ok(file) => {
                             c.stdout(Stdio::from(file));
                         }
@@ -918,8 +933,8 @@ impl Evaluator {
 
                     if !is_last {
                         c.stdout(Stdio::piped());
-                    } else if let Some(redirect_path) = stage.stdout_redirect {
-                        match File::create(&redirect_path) {
+                    } else if let Some((redirect_path, append)) = stage.stdout_redirect {
+                        match Self::open_redirect_file(&redirect_path, append) {
                             Ok(file) => {
                                 c.stdout(Stdio::from(file));
                             }

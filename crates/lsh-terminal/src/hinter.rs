@@ -29,13 +29,13 @@ impl LshHinter {
 }
 
 fn extract_command_from_entry(entry: &str) -> Option<&str> {
-    let mut words = entry.split_whitespace();
-    while let Some(word) = words.next() {
+    for word in entry.split_whitespace() {
         // Skip leading KEY=value environment variable assignments
-        if let Some((key, _)) = word.split_once('=') {
-            if !key.is_empty() && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
-                continue;
-            }
+        if let Some((key, _)) = word.split_once('=')
+            && !key.is_empty()
+            && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        {
+            continue;
         }
         // Extract command root, trimming trailing punctuation/delimiters like '(' or ';'
         let token = word.split('(').next().unwrap_or(word);
@@ -60,10 +60,10 @@ impl Hinter for LshHinter {
                     && entry.starts_with(line)
                     && entry.len() > line.len()
                 {
-                    if let Some(cmd) = extract_command_from_entry(&entry) {
-                        if !self.completer.is_valid_command(cmd) {
-                            continue;
-                        }
+                    if let Some(cmd) = extract_command_from_entry(&entry)
+                        && !self.completer.is_valid_command(cmd)
+                    {
+                        continue;
                     }
                     return Some(entry[line.len()..].to_string());
                 }

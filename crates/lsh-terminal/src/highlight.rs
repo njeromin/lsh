@@ -24,10 +24,7 @@ impl SyntaxHighlighter {
 
     pub fn highlight_styled(&self, line: &str) -> StyledText {
         let mut styled = StyledText::new();
-        let Ok(tokens) = lexer::lex_input(0, line) else {
-            styled.push(ContentStyle::default(), line);
-            return styled;
-        };
+        let tokens = lexer::lex_input_lenient(0, line);
 
         if tokens
             .iter()
@@ -169,7 +166,8 @@ fn token_content_style(
         | TokenKind::Or
         | TokenKind::DollarLeftParen
         | TokenKind::FatArrow
-        | TokenKind::ThinArrow => Some(ContentStyle::new().with(Color::AnsiValue(208))),
+        | TokenKind::ThinArrow
+        | TokenKind::ThinArrowAppend => Some(ContentStyle::new().with(Color::AnsiValue(208))),
         TokenKind::Plus
         | TokenKind::Minus
         | TokenKind::PlusEquals

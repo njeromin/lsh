@@ -182,7 +182,9 @@ impl Evaluator {
                 let args = expand::expand_args(args, ExpandCtx::default());
 
                 if is_secondary {
-                    if let Some(val) = self.scoped_var(word, scope_indices) {
+                    if !matches!(word.as_str(), "?" | "$" | "!" | "#" | "*" | "@")
+                        && let Some(val) = self.scoped_var(word, scope_indices)
+                    {
                         return val;
                     }
                     if word.contains('.') {

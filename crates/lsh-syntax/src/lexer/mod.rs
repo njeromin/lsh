@@ -8,6 +8,16 @@ pub mod token;
 type CharIndexedIter<'a> = Peekable<CharIndices<'a>>;
 
 pub fn lex_input(src_id: usize, input: &str) -> Result<Vec<Token>, Diagnostic> {
+    lex_input_internal(src_id, input, false)
+}
+
+pub fn lex_input_lenient(src_id: usize, input: &str) -> Vec<Token> {
+    lex_input_internal(src_id, input, true).unwrap_or_else(|_| {
+        vec![Token::new(TokenKind::EOF, input.len(), 0)]
+    })
+}
+
+fn lex_input_internal(src_id: usize, input: &str, lenient: bool) -> Result<Vec<Token>, Diagnostic> {
     let mut tokens = vec![];
 
     let mut chars: CharIndexedIter = input.char_indices().peekable();
@@ -81,8 +91,12 @@ pub fn lex_input(src_id: usize, input: &str) -> Result<Vec<Token>, Diagnostic> {
             }
             '-' => match chars.peek() {
                 Some((_, '>')) => {
-                    tokens.push(Token::new(TokenKind::ThinArrow, offset, 2));
                     chars.next();
+                    if chars.next_if(|(_, next_char)| next_char == &'>').is_some() {
+                        tokens.push(Token::new(TokenKind::ThinArrowAppend, offset, 3));
+                    } else {
+                        tokens.push(Token::new(TokenKind::ThinArrow, offset, 2));
+                    }
                 }
                 Some((_, '=')) => {
                     tokens.push(Token::new(TokenKind::MinusEquals, offset, 2));
@@ -109,8 +123,15 @@ pub fn lex_input(src_id: usize, input: &str) -> Result<Vec<Token>, Diagnostic> {
                 }
             }
             '$' => {
-                if let Some(next_char) = chars.peek() {
-                    if next_char.1 == '_' || next_char.1.is_ascii_alphanumeric() {
+                if let Some(&(_, next_char)) = chars.peek() {
+                    if matches!(next_char, '?' | '$' | '!' | '#' | '*' | '@') {
+                        chars.next();
+                        tokens.push(Token::new(
+                            TokenKind::Variable(next_char.to_string()),
+                            offset,
+                            1 + next_char.len_utf8(),
+                        ));
+                    } else if next_char == '_' || next_char.is_ascii_alphanumeric() {
                         let (first_offset, first_var_char) = chars
                             .next()
                             .expect("Failed to get starting character of environment variable.");
@@ -132,26 +153,28 @@ pub fn lex_input(src_id: usize, input: &str) -> Result<Vec<Token>, Diagnostic> {
                             offset,
                             end_offset - offset,
                         ));
-                    } else if next_char.1 == '(' {
+                    } else if next_char == '(' {
                         tokens.push(Token::new(TokenKind::DollarLeftParen, offset, 2));
                         chars.next();
+                    } else if lenient
+                        || next_char.is_whitespace()
+                        || matches!(
+                            next_char,
+                            ';' | '|' | '&' | ')' | '}' | ']' | ',' | '/' | '\\' | '"' | '\'' | '='
+                        )
+                    {
+                        tokens.push(Token::new(TokenKind::String("$".to_string()), offset, 1));
                     } else {
                         return Err(Diagnostic::new(
                             DiagnosticKind::LexError,
                             src_id,
-                            next_char.0,
-                            next_char.0 + next_char.1.len_utf8(),
-                            format!("Unexpected token '{}' after '$'.", next_char.1).as_str(),
+                            offset,
+                            offset + char.len_utf8() + next_char.len_utf8(),
+                            format!("Unexpected token '{next_char}' after '$'.").as_str(),
                         ));
                     }
                 } else {
-                    return Err(Diagnostic::new(
-                        DiagnosticKind::LexError,
-                        src_id,
-                        offset,
-                        offset + char.len_utf8(),
-                        "Unexpected end of input after '$'.",
-                    ));
+                    tokens.push(Token::new(TokenKind::String("$".to_string()), offset, 1));
                 }
             }
             '/' => match chars.peek().copied().map(|(_, c)| c) {
@@ -183,11 +206,13 @@ pub fn lex_input(src_id: usize, input: &str) -> Result<Vec<Token>, Diagnostic> {
             '[' => tokens.push(Token::new(TokenKind::LeftBracket, offset, 1)),
             ']' => tokens.push(Token::new(TokenKind::RightBracket, offset, 1)),
             '\'' => {
-                let (string, len) = lex_single_quoted_string(src_id, input, offset, &mut chars)?;
+                let (string, len) =
+                    lex_single_quoted_string(src_id, input, offset, &mut chars, lenient)?;
                 tokens.push(Token::new(TokenKind::QuotedString(string), offset, len));
             }
             '"' => {
-                let (string, len) = lex_double_quoted_string(src_id, input, offset, &mut chars)?;
+                let (string, len) =
+                    lex_double_quoted_string(src_id, input, offset, &mut chars, lenient)?;
                 tokens.push(Token::new(
                     TokenKind::DoubleQuotedString(string),
                     offset,
@@ -235,15 +260,23 @@ pub fn lex_input(src_id: usize, input: &str) -> Result<Vec<Token>, Diagnostic> {
                 if lex_identifier(&mut tokens, char, offset, &mut chars).is_some() {
                     continue;
                 } else if !is_whitespace(&char) {
-                    // This is the fallback case so if it is not whitespace, then it is an
-                    // unexpected token.
-                    return Err(Diagnostic::new(
-                        DiagnosticKind::LexError,
-                        src_id,
-                        offset,
-                        offset + char.len_utf8(),
-                        format!("Unexpected token '{char}'.").as_str(),
-                    ));
+                    if lenient {
+                        tokens.push(Token::new(
+                            TokenKind::String(char.to_string()),
+                            offset,
+                            char.len_utf8(),
+                        ));
+                    } else {
+                        // This is the fallback case so if it is not whitespace, then it is an
+                        // unexpected token.
+                        return Err(Diagnostic::new(
+                            DiagnosticKind::LexError,
+                            src_id,
+                            offset,
+                            offset + char.len_utf8(),
+                            format!("Unexpected token '{char}'.").as_str(),
+                        ));
+                    }
                 }
             }
         }
@@ -259,6 +292,7 @@ fn lex_single_quoted_string(
     input: &str,
     start_offset: usize,
     chars: &mut CharIndexedIter,
+    lenient: bool,
 ) -> Result<(String, usize), Diagnostic> {
     let mut string = String::new();
     let mut closed = false;
@@ -273,6 +307,11 @@ fn lex_single_quoted_string(
 
         if str_char == '\\' {
             let Some((esc_offset, escaped)) = chars.next() else {
+                if lenient {
+                    string.push('\\');
+                    end_offset = input.len();
+                    break;
+                }
                 return Err(Diagnostic::new(
                     DiagnosticKind::LexError,
                     src_id,
@@ -302,6 +341,9 @@ fn lex_single_quoted_string(
     }
 
     if !closed {
+        if lenient {
+            return Ok((string, input.len().saturating_sub(start_offset)));
+        }
         return Err(Diagnostic::new(
             DiagnosticKind::LexError,
             src_id,
@@ -319,6 +361,7 @@ fn lex_double_quoted_string(
     input: &str,
     start_offset: usize,
     chars: &mut CharIndexedIter,
+    lenient: bool,
 ) -> Result<(String, usize), Diagnostic> {
     let mut string = String::new();
     let mut closed = false;
@@ -340,6 +383,10 @@ fn lex_double_quoted_string(
                 end_offset = esc_offset + escaped.len_utf8();
                 continue;
             } else {
+                if lenient {
+                    end_offset = input.len();
+                    break;
+                }
                 return Err(Diagnostic::new(
                     DiagnosticKind::LexError,
                     src_id,
@@ -405,6 +452,9 @@ fn lex_double_quoted_string(
     }
 
     if !closed {
+        if lenient {
+            return Ok((string, input.len().saturating_sub(start_offset)));
+        }
         return Err(Diagnostic::new(
             DiagnosticKind::LexError,
             src_id,
@@ -809,5 +859,61 @@ mod tests {
         assert_eq!(kinds.len(), 2);
         assert!(matches!(&kinds[0], TokenKind::String(s) if s == "hello"));
         assert!(matches!(&kinds[1], TokenKind::EOF));
+    }
+
+    #[test]
+    fn lexes_bare_dollar() {
+        let kinds = token_kinds("echo $");
+        assert_eq!(kinds.len(), 3);
+        assert!(matches!(&kinds[0], TokenKind::String(s) if s == "echo"));
+        assert!(matches!(&kinds[1], TokenKind::String(s) if s == "$"));
+        assert!(matches!(&kinds[2], TokenKind::EOF));
+
+        let kinds_space = token_kinds("echo $ foo");
+        assert_eq!(kinds_space.len(), 4);
+        assert!(matches!(&kinds_space[0], TokenKind::String(s) if s == "echo"));
+        assert!(matches!(&kinds_space[1], TokenKind::String(s) if s == "$"));
+        assert!(matches!(&kinds_space[2], TokenKind::String(s) if s == "foo"));
+        assert!(matches!(&kinds_space[3], TokenKind::EOF));
+    }
+
+    #[test]
+    fn lexes_special_variables() {
+        let kinds = token_kinds("echo $? $$ $! $# $* $@");
+        assert_eq!(kinds.len(), 8);
+        assert!(matches!(&kinds[0], TokenKind::String(s) if s == "echo"));
+        assert!(matches!(&kinds[1], TokenKind::Variable(s) if s == "?"));
+        assert!(matches!(&kinds[2], TokenKind::Variable(s) if s == "$"));
+        assert!(matches!(&kinds[3], TokenKind::Variable(s) if s == "!"));
+        assert!(matches!(&kinds[4], TokenKind::Variable(s) if s == "#"));
+        assert!(matches!(&kinds[5], TokenKind::Variable(s) if s == "*"));
+        assert!(matches!(&kinds[6], TokenKind::Variable(s) if s == "@"));
+        assert!(matches!(&kinds[7], TokenKind::EOF));
+    }
+
+    #[test]
+    fn lexes_append_redirection_tokens() {
+        let kinds = token_kinds("echo a ->> b");
+        assert_eq!(kinds.len(), 5);
+        assert!(matches!(&kinds[0], TokenKind::String(s) if s == "echo"));
+        assert!(matches!(&kinds[1], TokenKind::String(s) if s == "a"));
+        assert!(matches!(&kinds[2], TokenKind::ThinArrowAppend));
+        assert!(matches!(&kinds[3], TokenKind::String(s) if s == "b"));
+        assert!(matches!(&kinds[4], TokenKind::EOF));
+    }
+
+    #[test]
+    fn lenient_lexer_handles_unclosed_quotes() {
+        let tokens = lex_input_lenient(0, "echo \"hello");
+        assert_eq!(tokens.len(), 3);
+        assert!(matches!(&tokens[0].kind, TokenKind::String(s) if s == "echo"));
+        assert!(matches!(&tokens[1].kind, TokenKind::DoubleQuotedString(s) if s == "hello"));
+        assert!(matches!(&tokens[2].kind, TokenKind::EOF));
+
+        let single_tokens = lex_input_lenient(0, "echo 'world");
+        assert_eq!(single_tokens.len(), 3);
+        assert!(matches!(&single_tokens[0].kind, TokenKind::String(s) if s == "echo"));
+        assert!(matches!(&single_tokens[1].kind, TokenKind::QuotedString(s) if s == "world"));
+        assert!(matches!(&single_tokens[2].kind, TokenKind::EOF));
     }
 }

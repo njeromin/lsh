@@ -1532,3 +1532,59 @@ fn test_kill_builtin() {
     assert!(out_str.contains("SIGKILL"));
     assert!(out_str.contains("SIGTERM"));
 }
+
+#[test]
+fn test_special_variables_and_bare_dollar() {
+    let mut eval = Evaluator::new();
+    eval.last_status = 42;
+
+    let script = r#"
+        let status = $?
+        let pid = $$
+        let dollar = $
+        let msg = "code: $?, pid: $$"
+    "#;
+
+    let prog = Parser::new(0, lexer::lex_input(0, script).unwrap())
+        .parse_program()
+        .unwrap();
+    let res = eval.evaluate(prog);
+    assert_eq!(res, 0);
+
+    assert_eq!(eval.get_var(0, "status").unwrap(), &Value::Number(42.0));
+    assert_eq!(
+        eval.get_var(0, "pid").unwrap(),
+        &Value::Number(std::process::id() as f64)
+    );
+    assert_eq!(
+        eval.get_var(0, "dollar").unwrap(),
+        &Value::String("$".to_string())
+    );
+    assert_eq!(
+        eval.get_var(0, "msg").unwrap(),
+        &Value::String(format!("code: 42, pid: {}", std::process::id()))
+    );
+}
+
+#[test]
+fn test_append_redirection_thin_arrow() {
+    let mut eval = Evaluator::new();
+    let tmp_path = std::env::temp_dir().join(format!("lsh_test_thin_arrow_{}.txt", std::process::id()));
+    let _ = std::fs::remove_file(&tmp_path);
+
+    let path_str = tmp_path.to_str().unwrap();
+    let script = format!(
+        "echo line1 -> {path_str}\necho line2 ->> {path_str}\n"
+    );
+
+    let prog = Parser::new(0, lexer::lex_input(0, &script).unwrap())
+        .parse_program()
+        .unwrap();
+    let status = eval.evaluate(prog);
+    assert_eq!(status, 0);
+
+    let content = std::fs::read_to_string(&tmp_path).expect("Failed to read redirected file");
+    let _ = std::fs::remove_file(&tmp_path);
+
+    assert_eq!(content, "line1\nline2\n");
+}

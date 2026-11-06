@@ -70,7 +70,7 @@ pub fn spawn_proc<R: io::Read + Send, W: io::Write + Send, WE: io::Write + Send>
             c.process_group(0);
         }
         unsafe {
-            c.pre_exec(|| signals::reset_child_signals_pre_exec());
+            c.pre_exec(signals::reset_child_signals_pre_exec);
         }
     }
 
