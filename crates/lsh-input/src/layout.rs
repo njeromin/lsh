@@ -164,6 +164,79 @@ pub fn compute_screen_layout(
     }
 }
 
+/// Computes the visual screen column for a specific byte offset in the buffer.
+pub fn byte_to_screen_col(
+    prompt_stripped: &str,
+    indicator_stripped: &str,
+    line_buffer: &LineBuffer,
+    target_byte: usize,
+    term_cols: usize,
+) -> usize {
+    let term_cols = term_cols.max(1);
+    let mut current_col: usize = 0;
+
+    let target_byte = target_byte.min(line_buffer.len());
+    let mut current_byte_offset: usize = 0;
+
+    let lines: Vec<&str> = line_buffer.as_str().split('\n').collect();
+
+    for (line_idx, line) in lines.iter().enumerate() {
+        if line_idx > 0 {
+            current_col = 0;
+        }
+
+        let prefix = if line_idx == 0 {
+            prompt_stripped
+        } else {
+            indicator_stripped
+        };
+
+        for grapheme in prefix.graphemes(true) {
+            if grapheme == "\n" || grapheme == "\r\n" || grapheme == "\r" {
+                current_col = 0;
+            } else {
+                let w = UnicodeWidthStr::width(grapheme);
+                if current_col >= term_cols {
+                    current_col = 0;
+                }
+                if current_col > 0 && current_col + w > term_cols {
+                    current_col = 0;
+                }
+                current_col += w;
+            }
+        }
+
+        if current_byte_offset >= target_byte {
+            return current_col.min(term_cols.saturating_sub(1));
+        }
+
+        for grapheme in line.graphemes(true) {
+            if current_byte_offset >= target_byte {
+                return current_col.min(term_cols.saturating_sub(1));
+            }
+            let w = UnicodeWidthStr::width(grapheme);
+            if current_col >= term_cols {
+                current_col = 0;
+            }
+            if current_col > 0 && current_col + w > term_cols {
+                current_col = 0;
+            }
+            current_col += w;
+            current_byte_offset += grapheme.len();
+        }
+
+        if current_byte_offset >= target_byte {
+            return current_col.min(term_cols.saturating_sub(1));
+        }
+
+        if line_idx + 1 < lines.len() {
+            current_byte_offset += 1; // '\n'
+        }
+    }
+
+    current_col.min(term_cols.saturating_sub(1))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -259,5 +332,23 @@ mod tests {
         assert_eq!(layout.cursor_col, 13); // 2 + 11 = 13
         assert_eq!(layout.end_row, 2);
         assert_eq!(layout.end_col, 13);
+    }
+
+    #[test]
+    fn test_byte_to_screen_col_anchoring() {
+        let mut line_buf = LineBuffer::new();
+        line_buf.insert_str("cargo bu");
+        // Prompt "> " is width 2
+        // "cargo " is width 6, so "bu" starts at byte 6, which should be col 2 + 6 = 8
+        assert_eq!(byte_to_screen_col("> ", "… ", &line_buf, 6, 80), 8);
+
+        // Even if preview expands to a longer word like "cargo build-something"
+        let mut preview_buf = LineBuffer::new();
+        preview_buf.insert_str("cargo build-something");
+        // Start byte of the token is still 6, so anchor column remains 8!
+        assert_eq!(byte_to_screen_col("> ", "… ", &preview_buf, 6, 80), 8);
+
+        // Start of line (byte 0)
+        assert_eq!(byte_to_screen_col("> ", "… ", &line_buf, 0, 80), 2);
     }
 }

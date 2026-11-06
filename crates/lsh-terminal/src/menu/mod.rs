@@ -188,6 +188,14 @@ impl Menu for LshMenu {
         self.active
     }
 
+    fn start_position(&self) -> Option<usize> {
+        if self.active {
+            Some(self.start)
+        } else {
+            None
+        }
+    }
+
     fn activate(&mut self, buffer: &mut LineBuffer, _completer: Option<&dyn lsh_input::Completer>) {
         let (start, items) = self
             .completer
@@ -259,12 +267,8 @@ impl Menu for LshMenu {
         match (code, modifiers) {
             (KeyCode::Down, _) | (KeyCode::Char('n'), KeyModifiers::CONTROL) => {
                 if !self.items.is_empty() {
-                    if !self.navigated {
-                        self.selected = 0;
-                        self.navigated = true;
-                    } else {
-                        self.selected = (self.selected + 1) % self.items.len();
-                    }
+                    self.selected = (self.selected + 1) % self.items.len();
+                    self.navigated = true;
                     self.update_buffer_preview(buffer);
                 }
                 MenuOutcome::Consumed
@@ -273,32 +277,24 @@ impl Menu for LshMenu {
             | (KeyCode::BackTab, _)
             | (KeyCode::Char('p'), KeyModifiers::CONTROL) => {
                 if !self.items.is_empty() {
-                    if !self.navigated {
-                        self.selected = self.items.len().saturating_sub(1);
-                        self.navigated = true;
+                    self.selected = if self.selected == 0 {
+                        self.items.len().saturating_sub(1)
                     } else {
-                        self.selected = if self.selected == 0 {
-                            self.items.len().saturating_sub(1)
-                        } else {
-                            self.selected - 1
-                        };
-                    }
+                        self.selected - 1
+                    };
+                    self.navigated = true;
                     self.update_buffer_preview(buffer);
                 }
                 MenuOutcome::Consumed
             }
             (KeyCode::Tab, m) if m.contains(KeyModifiers::SHIFT) => {
                 if !self.items.is_empty() {
-                    if !self.navigated {
-                        self.selected = self.items.len().saturating_sub(1);
-                        self.navigated = true;
+                    self.selected = if self.selected == 0 {
+                        self.items.len().saturating_sub(1)
                     } else {
-                        self.selected = if self.selected == 0 {
-                            self.items.len().saturating_sub(1)
-                        } else {
-                            self.selected - 1
-                        };
-                    }
+                        self.selected - 1
+                    };
+                    self.navigated = true;
                     self.update_buffer_preview(buffer);
                 }
                 MenuOutcome::Consumed
@@ -337,27 +333,18 @@ impl Menu for LshMenu {
                 MenuOutcome::Consumed
             }
             (KeyCode::Tab, KeyModifiers::NONE) => {
-                if !self.navigated {
-                    if self.items.len() == 1 {
-                        if self.descend(buffer) {
-                            MenuOutcome::Consumed
-                        } else {
-                            self.commit_selected(buffer);
-                            self.active = false;
-                            MenuOutcome::Accepted
-                        }
-                    } else {
-                        self.selected = 0;
-                        self.navigated = true;
-                        self.update_buffer_preview(buffer);
+                if !self.items.is_empty() {
+                    if self.descend(buffer) {
                         MenuOutcome::Consumed
+                    } else {
+                        self.commit_selected(buffer);
+                        self.active = false;
+                        MenuOutcome::Accepted
                     }
-                } else if self.descend(buffer) {
-                    MenuOutcome::Consumed
                 } else {
-                    self.commit_selected(buffer);
                     self.active = false;
-                    MenuOutcome::Accepted
+                    self.items.clear();
+                    MenuOutcome::PassThrough
                 }
             }
             (KeyCode::Right, KeyModifiers::NONE) if self.navigated => {
@@ -464,19 +451,20 @@ impl Menu for LshMenu {
                     MenuOutcome::PassThrough
                 }
             }
-            (KeyCode::Enter, KeyModifiers::NONE) if self.navigated => {
-                if self.descend(buffer) {
-                    MenuOutcome::Consumed
-                } else {
-                    self.commit_selected(buffer);
-                    self.active = false;
-                    MenuOutcome::Accepted
-                }
-            }
             (KeyCode::Enter, KeyModifiers::NONE) => {
-                self.active = false;
-                self.items.clear();
-                MenuOutcome::PassThrough
+                if !self.items.is_empty() {
+                    if self.descend(buffer) {
+                        MenuOutcome::Consumed
+                    } else {
+                        self.commit_selected(buffer);
+                        self.active = false;
+                        MenuOutcome::Accepted
+                    }
+                } else {
+                    self.active = false;
+                    self.items.clear();
+                    MenuOutcome::PassThrough
+                }
             }
             (KeyCode::Esc, _)
             | (KeyCode::Left, _)
@@ -582,20 +570,15 @@ mod tests {
         assert_eq!(menu.items().len(), 2);
         // Common prefix "git-c" is automatically expanded
         assert_eq!(buffer.as_str(), "git-c");
+        assert_eq!(menu.start_position(), Some(0));
 
-        // Tab navigates to first candidate and previews
-        let outcome = menu.handle_key(KeyCode::Tab, KeyModifiers::NONE, &mut buffer, None);
-        assert_eq!(outcome, MenuOutcome::Consumed);
-        assert_eq!(menu.selected_index(), 0);
-        assert_eq!(buffer.as_str(), "git-clone");
-
-        // Down navigates to next
+        // Down navigates to next candidate and previews it
         let outcome = menu.handle_key(KeyCode::Down, KeyModifiers::NONE, &mut buffer, None);
         assert_eq!(outcome, MenuOutcome::Consumed);
         assert_eq!(menu.selected_index(), 1);
         assert_eq!(buffer.as_str(), "git-commit");
 
-        // Up navigates back to first
+        // Up navigates back to first candidate
         let outcome = menu.handle_key(KeyCode::Up, KeyModifiers::NONE, &mut buffer, None);
         assert_eq!(outcome, MenuOutcome::Consumed);
         assert_eq!(menu.selected_index(), 0);
@@ -603,6 +586,44 @@ mod tests {
 
         // Enter accepts candidate with trailing space
         let outcome = menu.handle_key(KeyCode::Enter, KeyModifiers::NONE, &mut buffer, None);
+        assert_eq!(outcome, MenuOutcome::Accepted);
+        assert!(!menu.is_active());
+        assert_eq!(buffer.as_str(), "git-clone ");
+    }
+
+    #[test]
+    fn enter_immediately_commits_highlighted_candidate() {
+        let helper = LineEditorHelper::new();
+        helper.set_binaries(vec!["git-clone".to_string(), "git-commit".to_string()]);
+
+        let mut menu = LshMenu::new("completion_menu", helper);
+        let mut buffer = LineBuffer::new();
+        buffer.insert_str("git-");
+
+        menu.activate(&mut buffer, None);
+        assert!(menu.is_active());
+
+        // Enter immediately accepts the highlighted candidate #0 without requiring navigation
+        let outcome = menu.handle_key(KeyCode::Enter, KeyModifiers::NONE, &mut buffer, None);
+        assert_eq!(outcome, MenuOutcome::Accepted);
+        assert!(!menu.is_active());
+        assert_eq!(buffer.as_str(), "git-clone ");
+    }
+
+    #[test]
+    fn tab_immediately_commits_highlighted_candidate() {
+        let helper = LineEditorHelper::new();
+        helper.set_binaries(vec!["git-clone".to_string(), "git-commit".to_string()]);
+
+        let mut menu = LshMenu::new("completion_menu", helper);
+        let mut buffer = LineBuffer::new();
+        buffer.insert_str("git-");
+
+        menu.activate(&mut buffer, None);
+        assert!(menu.is_active());
+
+        // Tab immediately accepts the highlighted candidate #0
+        let outcome = menu.handle_key(KeyCode::Tab, KeyModifiers::NONE, &mut buffer, None);
         assert_eq!(outcome, MenuOutcome::Accepted);
         assert!(!menu.is_active());
         assert_eq!(buffer.as_str(), "git-clone ");
@@ -618,8 +639,8 @@ mod tests {
         buffer.insert_str("cargo-");
 
         menu.activate(&mut buffer, None);
-        menu.handle_key(KeyCode::Tab, KeyModifiers::NONE, &mut buffer, None);
-        assert_eq!(buffer.as_str(), "cargo-build");
+        menu.handle_key(KeyCode::Down, KeyModifiers::NONE, &mut buffer, None);
+        assert!(buffer.as_str().starts_with("cargo-"));
 
         // Esc dismisses and reverts buffer
         let outcome = menu.handle_key(KeyCode::Esc, KeyModifiers::NONE, &mut buffer, None);
@@ -760,11 +781,11 @@ mod tests {
 
         menu.activate(&mut buffer, None);
 
-        // Navigate with Down -> previews the first candidate ("cat")
+        // Navigate with Down -> advances to next candidate ("cargo") and previews it
         menu.handle_key(KeyCode::Down, KeyModifiers::NONE, &mut buffer, None);
-        assert_eq!(buffer.as_str(), "cat");
+        assert_eq!(buffer.as_str(), "cargo");
 
-        // Type 'r' -> reverts preview of "cat", appends 'r' to "ca" -> "car"
+        // Type 'r' -> reverts preview of "cargo", appends 'r' to "ca" -> "car"
         let outcome = menu.handle_key(KeyCode::Char('r'), KeyModifiers::NONE, &mut buffer, None);
         assert_eq!(outcome, MenuOutcome::Consumed);
         assert!(menu.is_active());

@@ -39,6 +39,11 @@ pub trait Menu: Send + Sync {
 
     /// Dismisses the menu, reverting any temporary preview in the buffer.
     fn dismiss(&mut self, buffer: &mut LineBuffer);
+
+    /// Returns the start byte offset in the buffer for the item being replaced, if active.
+    fn start_position(&self) -> Option<usize> {
+        None
+    }
 }
 
 impl<M: Menu + ?Sized> Menu for Box<M> {
@@ -66,6 +71,10 @@ impl<M: Menu + ?Sized> Menu for Box<M> {
 
     fn dismiss(&mut self, buffer: &mut LineBuffer) {
         (**self).dismiss(buffer);
+    }
+
+    fn start_position(&self) -> Option<usize> {
+        (**self).start_position()
     }
 }
 
@@ -199,6 +208,14 @@ impl Default for BasicMenu {
 impl Menu for BasicMenu {
     fn is_active(&self) -> bool {
         self.active
+    }
+
+    fn start_position(&self) -> Option<usize> {
+        if self.active {
+            Some(self.start)
+        } else {
+            None
+        }
     }
 
     fn activate(&mut self, buffer: &mut LineBuffer, completer: Option<&dyn Completer>) {
@@ -339,7 +356,7 @@ impl Menu for BasicMenu {
 
             // Accept / Commit
             (KeyCode::Enter, _) => {
-                if self.navigated {
+                if !self.candidates.is_empty() {
                     self.commit_selected(buffer);
                     self.active = false;
                     MenuOutcome::Accepted
@@ -656,6 +673,31 @@ mod tests {
         );
         assert_eq!(outcome, MenuOutcome::Accepted);
         assert_eq!(buf.as_str(), "cat ");
+        assert!(!menu.is_active());
+    }
+
+    #[test]
+    fn test_menu_accept_commit_without_prior_navigation() {
+        let mut menu = BasicMenu::default();
+        let mut buf = LineBuffer::new();
+        buf.insert_str("ca");
+
+        let completer =
+            |_line: &str, _cursor: usize| (0, vec![Candidate::new("cargo"), Candidate::new("cat")]);
+
+        menu.activate(&mut buf, Some(&completer));
+        assert!(menu.is_active());
+        assert_eq!(menu.start_position(), Some(0));
+
+        // Enter immediately accepts candidate #0 ("cargo") without requiring Down arrow first
+        let outcome = menu.handle_key(
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+            &mut buf,
+            Some(&completer),
+        );
+        assert_eq!(outcome, MenuOutcome::Accepted);
+        assert_eq!(buf.as_str(), "cargo");
         assert!(!menu.is_active());
     }
 

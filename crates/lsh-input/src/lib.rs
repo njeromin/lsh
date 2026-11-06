@@ -24,7 +24,7 @@ pub use formatter::{StyledText, TextFormatter};
 pub use hinter::{Hinter, default_next_hint_word};
 pub use history::{DefaultHistory, History};
 pub use keymap::{EditorAction, KeyCombo, Keymap};
-pub use layout::{ScreenLayout, compute_screen_layout};
+pub use layout::{ScreenLayout, byte_to_screen_col, compute_screen_layout};
 pub use menu::{BasicMenu, Menu, MenuOutcome};
 pub use prompt::{Prompt, printable_width, strip_ansi};
 pub use validator::{DefaultValidator, DelimiterValidator, ValidationResult, Validator};
