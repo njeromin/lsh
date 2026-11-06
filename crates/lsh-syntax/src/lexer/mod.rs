@@ -78,7 +78,7 @@ fn lex_input_internal(src_id: usize, input: &str, lenient: bool) -> Result<Vec<T
                             tokens.push(Token::new(TokenKind::PlusEquals, offset, 2));
                             chars.next();
                         }
-                        ' ' => tokens.push(Token::new(TokenKind::Plus, offset, 1)),
+                        c if is_whitespace(&c) => tokens.push(Token::new(TokenKind::Plus, offset, 1)),
                         _ => {
                             if lex_identifier(&mut tokens, '+', offset, &mut chars).is_none() {
                                 tokens.push(Token::new(TokenKind::Plus, offset, 1));
@@ -102,7 +102,7 @@ fn lex_input_internal(src_id: usize, input: &str, lenient: bool) -> Result<Vec<T
                     tokens.push(Token::new(TokenKind::MinusEquals, offset, 2));
                     chars.next();
                 }
-                Some((_, ' ')) => tokens.push(Token::new(TokenKind::Minus, offset, 1)),
+                Some((_, c)) if is_whitespace(c) => tokens.push(Token::new(TokenKind::Minus, offset, 1)),
                 Some((_, c)) if c.is_ascii_digit() => {
                     if lex_identifier(&mut tokens, char, offset, &mut chars).is_none() {
                         tokens.push(Token::new(TokenKind::Minus, offset, 1));
@@ -478,7 +478,6 @@ fn is_ident_char(c: char) -> bool {
                 | '>'
                 | '<'
                 | '!'
-                | '+'
                 | '$'
                 | '{'
                 | '}'
@@ -585,6 +584,16 @@ fn push_identifier_or_number(
     if !has_escapes {
         if ident_string == "/" {
             tokens.push(Token::new(TokenKind::Slash, offset, len));
+            return;
+        }
+
+        if ident_string == "+" {
+            tokens.push(Token::new(TokenKind::Plus, offset, len));
+            return;
+        }
+
+        if ident_string == "-" {
+            tokens.push(Token::new(TokenKind::Minus, offset, len));
             return;
         }
 
@@ -915,5 +924,49 @@ mod tests {
         assert!(matches!(&single_tokens[0].kind, TokenKind::String(s) if s == "echo"));
         assert!(matches!(&single_tokens[1].kind, TokenKind::QuotedString(s) if s == "world"));
         assert!(matches!(&single_tokens[2].kind, TokenKind::EOF));
+    }
+
+    #[test]
+    fn lexes_plus_and_minus_symmetrically_in_identifiers() {
+        let minus_kinds = token_kinds("chmod -x file");
+        assert_eq!(minus_kinds.len(), 4);
+        assert!(matches!(&minus_kinds[0], TokenKind::String(s) if s == "chmod"));
+        assert!(matches!(&minus_kinds[1], TokenKind::String(s) if s == "-x"));
+        assert!(matches!(&minus_kinds[2], TokenKind::String(s) if s == "file"));
+        assert!(matches!(&minus_kinds[3], TokenKind::EOF));
+
+        let plus_kinds = token_kinds("chmod +x file");
+        assert_eq!(plus_kinds.len(), 4);
+        assert!(matches!(&plus_kinds[0], TokenKind::String(s) if s == "chmod"));
+        assert!(matches!(&plus_kinds[1], TokenKind::String(s) if s == "+x"));
+        assert!(matches!(&plus_kinds[2], TokenKind::String(s) if s == "file"));
+        assert!(matches!(&plus_kinds[3], TokenKind::EOF));
+
+        let cpp_kinds = token_kinds("c++ main.cpp");
+        assert_eq!(cpp_kinds.len(), 3);
+        assert!(matches!(&cpp_kinds[0], TokenKind::String(s) if s == "c++"));
+        assert!(matches!(&cpp_kinds[1], TokenKind::String(s) if s == "main.cpp"));
+        assert!(matches!(&cpp_kinds[2], TokenKind::EOF));
+
+        let tail_kinds = token_kinds("tail +1 file");
+        assert_eq!(tail_kinds.len(), 4);
+        assert!(matches!(&tail_kinds[0], TokenKind::String(s) if s == "tail"));
+        assert!(matches!(&tail_kinds[1], TokenKind::String(s) if s == "+1"));
+        assert!(matches!(&tail_kinds[2], TokenKind::String(s) if s == "file"));
+        assert!(matches!(&tail_kinds[3], TokenKind::EOF));
+
+        let expr_plus = token_kinds("1 + 2");
+        assert_eq!(expr_plus.len(), 4);
+        assert!(matches!(&expr_plus[0], TokenKind::Number(n) if *n == 1.0));
+        assert!(matches!(&expr_plus[1], TokenKind::Plus));
+        assert!(matches!(&expr_plus[2], TokenKind::Number(n) if *n == 2.0));
+        assert!(matches!(&expr_plus[3], TokenKind::EOF));
+
+        let expr_minus = token_kinds("1 - 2");
+        assert_eq!(expr_minus.len(), 4);
+        assert!(matches!(&expr_minus[0], TokenKind::Number(n) if *n == 1.0));
+        assert!(matches!(&expr_minus[1], TokenKind::Minus));
+        assert!(matches!(&expr_minus[2], TokenKind::Number(n) if *n == 2.0));
+        assert!(matches!(&expr_minus[3], TokenKind::EOF));
     }
 }
