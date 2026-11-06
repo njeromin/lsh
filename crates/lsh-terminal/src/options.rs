@@ -132,10 +132,24 @@ impl From<EditMode> for lsh_input::EditMode {
 
 impl EditMode {
     pub fn create_keymap(&self) -> lsh_input::Keymap {
-        match self {
+        let mut keymap = match self {
             EditMode::Default | EditMode::Emacs => lsh_input::Keymap::default_emacs(),
             EditMode::Vi => lsh_input::Keymap::default_vi_insert(),
-        }
+        };
+        keymap.bind(
+            lsh_input::KeyCombo::ctrl('c'),
+            lsh_input::EditorAction::ClearLine,
+        );
+        keymap
+    }
+
+    pub fn create_vi_normal_keymap(&self) -> lsh_input::Keymap {
+        let mut keymap = lsh_input::Keymap::default_vi_normal();
+        keymap.bind(
+            lsh_input::KeyCombo::ctrl('c'),
+            lsh_input::EditorAction::ClearLine,
+        );
+        keymap
     }
 }
 
@@ -300,6 +314,27 @@ mod tests {
         let default_mode = EditMode::Default.create_keymap();
         let emacs_mode = EditMode::Emacs.create_keymap();
         assert_eq!(default_mode, emacs_mode);
+        assert_eq!(
+            default_mode.get(
+                crossterm::event::KeyCode::Char('c'),
+                crossterm::event::KeyModifiers::CONTROL,
+            ),
+            Some(&lsh_input::EditorAction::ClearLine)
+        );
+        assert_eq!(
+            EditMode::Vi.create_keymap().get(
+                crossterm::event::KeyCode::Char('c'),
+                crossterm::event::KeyModifiers::CONTROL,
+            ),
+            Some(&lsh_input::EditorAction::ClearLine)
+        );
+        assert_eq!(
+            EditMode::Vi.create_vi_normal_keymap().get(
+                crossterm::event::KeyCode::Char('c'),
+                crossterm::event::KeyModifiers::CONTROL,
+            ),
+            Some(&lsh_input::EditorAction::ClearLine)
+        );
     }
 
     #[test]

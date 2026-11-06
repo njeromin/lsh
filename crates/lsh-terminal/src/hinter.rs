@@ -28,6 +28,25 @@ impl LshHinter {
     }
 }
 
+fn extract_command_from_entry(entry: &str) -> Option<&str> {
+    let mut words = entry.split_whitespace();
+    while let Some(word) = words.next() {
+        // Skip leading KEY=value environment variable assignments
+        if let Some((key, _)) = word.split_once('=') {
+            if !key.is_empty() && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+                continue;
+            }
+        }
+        // Extract command root, trimming trailing punctuation/delimiters like '(' or ';'
+        let token = word.split('(').next().unwrap_or(word);
+        let trimmed = token.trim_matches(|c: char| c == ';' || c == '&' || c == '|');
+        if !trimmed.is_empty() {
+            return Some(trimmed);
+        }
+    }
+    None
+}
+
 impl Hinter for LshHinter {
     fn hint(&self, line: &str, cursor: usize) -> Option<String> {
         if line.chars().count() < self.min_chars || cursor != line.len() {
@@ -41,6 +60,11 @@ impl Hinter for LshHinter {
                     && entry.starts_with(line)
                     && entry.len() > line.len()
                 {
+                    if let Some(cmd) = extract_command_from_entry(&entry) {
+                        if !self.completer.is_valid_command(cmd) {
+                            continue;
+                        }
+                    }
                     return Some(entry[line.len()..].to_string());
                 }
             }
@@ -89,5 +113,25 @@ mod tests {
         let hinter = LshHinter::new(completer);
         let hint = hinter.hint("car", 3);
         assert_eq!(hint.as_deref(), Some("go"));
+    }
+
+    #[test]
+    fn test_hinter_skips_invalid_command_in_history() {
+        let completer = LshCompleter::new();
+        completer.set_binaries(vec!["clear".to_string(), "ls".to_string()]);
+
+        let mut history = DefaultHistory::new(10);
+        history.append("clearls"); // Typo!
+        history.append("clear");
+
+        let hinter = LshHinter::new(completer).with_history(history);
+
+        // Typing "clear" should NOT suggest "ls" from the invalid "clearls" typo
+        let hint = hinter.hint("clear", 5);
+        assert_eq!(hint, None);
+
+        // Typing "clea" should skip "clearls" and suggest "r" from "clear"
+        let hint = hinter.hint("clea", 4);
+        assert_eq!(hint.as_deref(), Some("r"));
     }
 }

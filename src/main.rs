@@ -94,7 +94,8 @@ fn interactive_session(
         .with_hinter(hinter)
         .with_validator(validator)
         .with_menu(initial_menu)
-        .with_keymap(initial_options.edit_mode.create_keymap());
+        .with_keymap(initial_options.edit_mode.create_keymap())
+        .with_vi_normal_keymap(initial_options.edit_mode.create_vi_normal_keymap());
 
     let mut last_applied_options: Option<Options> = None;
 
@@ -108,6 +109,7 @@ fn interactive_session(
             if last_applied_options.as_ref() != Some(&opts) {
                 line_editor.set_edit_mode(opts.edit_mode.into());
                 line_editor.set_keymap(opts.edit_mode.create_keymap());
+                line_editor.set_vi_normal_keymap(Some(opts.edit_mode.create_vi_normal_keymap()));
                 line_editor.set_cursor_style(opts.cursor_shape.into());
                 line_editor.set_menu(Some(opts.completion_type.create_menu(&completer)));
                 completer.set_completion_type(opts.completion_type);

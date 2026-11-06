@@ -344,7 +344,9 @@ impl LshCompleter {
         *self.cached_vars.write().unwrap() = vars;
     }
 
-    pub fn set_binaries(&self, binaries: Vec<String>) {
+    pub fn set_binaries(&self, mut binaries: Vec<String>) {
+        binaries.sort();
+        binaries.dedup();
         *self.cached_binaries.write().unwrap() = binaries;
     }
 
@@ -366,6 +368,66 @@ impl LshCompleter {
     }
 
     pub fn reset_prompt_marks(&self) {}
+
+    pub fn is_valid_command(&self, cmd: &str) -> bool {
+        if cmd.is_empty() {
+            return false;
+        }
+
+        if matches!(
+            cmd,
+            "let"
+                | "if"
+                | "else"
+                | "while"
+                | "for"
+                | "in"
+                | "break"
+                | "continue"
+                | "fn"
+                | "return"
+                | "typeof"
+                | "true"
+                | "false"
+                | "null"
+        ) {
+            return true;
+        }
+
+        if cmd.starts_with(|c: char| matches!(c, '$' | '(' | '{' | '[' | '"' | '\'' | '#')) {
+            return true;
+        }
+
+        if cmd.contains('/') || cmd.contains('\\') || cmd.starts_with('.') || cmd.starts_with('~') {
+            return true;
+        }
+
+        if BUILTIN_NAMES.contains(&cmd) {
+            return true;
+        }
+
+        if let Ok(aliases) = self.cached_aliases.read() {
+            if aliases.iter().any(|a| a == cmd) {
+                return true;
+            }
+        }
+
+        if let Ok(vars) = self.cached_vars.read() {
+            if vars.iter().any(|v| v == cmd) {
+                return true;
+            }
+        }
+
+        if let Ok(binaries) = self.cached_binaries.read() {
+            if binaries.binary_search_by(|b| b.as_str().cmp(cmd)).is_ok()
+                || binaries.iter().any(|b| b == cmd)
+            {
+                return true;
+            }
+        }
+
+        false
+    }
 
     pub fn get_candidates(&self, line: &str, pos: usize) -> (usize, Vec<CompletionItem>) {
         match classify_completion_context(line, pos) {

@@ -87,6 +87,8 @@ impl Drop for RawModeGuard {
 pub struct Editor<W: Write = BufWriter<Stdout>> {
     writer: W,
     keymap: Keymap,
+    vi_insert_keymap: Option<Keymap>,
+    vi_normal_keymap: Option<Keymap>,
     edit_mode: EditMode,
     vi_mode: ViMode,
     cursor_style: cursor::SetCursorStyle,
@@ -108,6 +110,8 @@ impl Editor<BufWriter<Stdout>> {
         Self {
             writer: BufWriter::new(io::stdout()),
             keymap: Keymap::default(),
+            vi_insert_keymap: None,
+            vi_normal_keymap: None,
             edit_mode: EditMode::Emacs,
             vi_mode: ViMode::Insert,
             cursor_style: cursor::SetCursorStyle::BlinkingBar,
@@ -131,6 +135,8 @@ impl<W: Write> Editor<W> {
         Self {
             writer,
             keymap: Keymap::default(),
+            vi_insert_keymap: None,
+            vi_normal_keymap: None,
             edit_mode: EditMode::Emacs,
             vi_mode: ViMode::Insert,
             cursor_style: cursor::SetCursorStyle::BlinkingBar,
@@ -337,6 +343,18 @@ impl<W: Write> Editor<W> {
         self.indent_size
     }
 
+    fn vi_insert_keymap(&self) -> Keymap {
+        self.vi_insert_keymap
+            .clone()
+            .unwrap_or_else(Keymap::default_vi_insert)
+    }
+
+    fn vi_normal_keymap(&self) -> Keymap {
+        self.vi_normal_keymap
+            .clone()
+            .unwrap_or_else(Keymap::default_vi_normal)
+    }
+
     /// Set the indentation size dynamically.
     pub fn set_indent_size(&mut self, size: usize) {
         self.indent_size = size;
@@ -344,7 +362,16 @@ impl<W: Write> Editor<W> {
 
     /// Set a custom keymap.
     pub fn with_keymap(mut self, keymap: Keymap) -> Self {
+        if self.edit_mode == EditMode::Vi {
+            self.vi_insert_keymap = Some(keymap.clone());
+        }
         self.keymap = keymap;
+        self
+    }
+
+    /// Set a custom keymap for Vi normal mode.
+    pub fn with_vi_normal_keymap(mut self, keymap: Keymap) -> Self {
+        self.vi_normal_keymap = Some(keymap);
         self
     }
 
@@ -392,7 +419,15 @@ impl<W: Write> Editor<W> {
 
     /// Dynamically update the active keymap.
     pub fn set_keymap(&mut self, keymap: Keymap) {
+        if self.edit_mode == EditMode::Vi {
+            self.vi_insert_keymap = Some(keymap.clone());
+        }
         self.keymap = keymap;
+    }
+
+    /// Dynamically set or clear the Vi normal mode keymap.
+    pub fn set_vi_normal_keymap(&mut self, keymap: Option<Keymap>) {
+        self.vi_normal_keymap = keymap;
     }
 
     /// Read a line of input with the given prompt.
@@ -425,7 +460,7 @@ impl<W: Write> Editor<W> {
             }
             EditMode::Vi => {
                 self.vi_mode = ViMode::Insert;
-                self.keymap = Keymap::default_vi_insert();
+                self.keymap = self.vi_insert_keymap();
                 let _ = queue!(self.writer, self.cursor_style);
             }
         }
@@ -478,9 +513,14 @@ impl<W: Write> Editor<W> {
                     let mut changed = false;
 
                     // If an operator is pending in Vi mode, handle it
+                    let mut operator_handled = false;
                     if let Some(op) = vi_operator.take() {
                         in_insert_session = false;
-                        match op {
+                        if modifiers.contains(KeyModifiers::CONTROL) || code == KeyCode::Esc {
+                            // Cancelled by control key or Escape; fall through to keymap
+                        } else {
+                            operator_handled = true;
+                            match op {
                             ViOperator::ReplaceChar => {
                                 if !(matches!(code, KeyCode::Esc)
                                     || (code == KeyCode::Char('[')
@@ -615,7 +655,7 @@ impl<W: Write> Editor<W> {
                                 }
                                 if enter_insert {
                                     self.vi_mode = ViMode::Insert;
-                                    self.keymap = Keymap::default_vi_insert();
+                                    self.keymap = self.vi_insert_keymap();
                                     let _ = queue!(self.writer, self.cursor_style);
                                     changed = true;
                                 }
@@ -661,7 +701,11 @@ impl<W: Write> Editor<W> {
                                 }
                             }
                         }
-                    } else if let Some(action) = self.keymap.get(code, modifiers) {
+                        }
+                    }
+
+                    if !operator_handled {
+                        if let Some(action) = self.keymap.get(code, modifiers) {
                         match action {
                             EditorAction::Complete => {
                                 if let Some(menu) = &mut self.menu {
@@ -1094,7 +1138,7 @@ impl<W: Write> Editor<W> {
                                 if self.edit_mode == EditMode::Vi && self.vi_mode != ViMode::Normal
                                 {
                                     self.vi_mode = ViMode::Normal;
-                                    self.keymap = Keymap::default_vi_normal();
+                                    self.keymap = self.vi_normal_keymap();
                                     if line_buffer.cursor() > 0 {
                                         line_buffer.move_left();
                                     }
@@ -1107,7 +1151,7 @@ impl<W: Write> Editor<W> {
                                 if self.edit_mode == EditMode::Vi && self.vi_mode != ViMode::Insert
                                 {
                                     self.vi_mode = ViMode::Insert;
-                                    self.keymap = Keymap::default_vi_insert();
+                                    self.keymap = self.vi_insert_keymap();
                                     let _ = queue!(self.writer, self.cursor_style);
                                     changed = true;
                                 }
@@ -1118,7 +1162,7 @@ impl<W: Write> Editor<W> {
                                         line_buffer.move_right();
                                     }
                                     self.vi_mode = ViMode::Insert;
-                                    self.keymap = Keymap::default_vi_insert();
+                                    self.keymap = self.vi_insert_keymap();
                                     let _ = queue!(self.writer, self.cursor_style);
                                     changed = true;
                                 }
@@ -1127,7 +1171,7 @@ impl<W: Write> Editor<W> {
                                 if self.edit_mode == EditMode::Vi {
                                     line_buffer.move_end();
                                     self.vi_mode = ViMode::Insert;
-                                    self.keymap = Keymap::default_vi_insert();
+                                    self.keymap = self.vi_insert_keymap();
                                     let _ = queue!(self.writer, self.cursor_style);
                                     changed = true;
                                 }
@@ -1136,7 +1180,7 @@ impl<W: Write> Editor<W> {
                                 if self.edit_mode == EditMode::Vi {
                                     line_buffer.move_to_first_non_whitespace();
                                     self.vi_mode = ViMode::Insert;
-                                    self.keymap = Keymap::default_vi_insert();
+                                    self.keymap = self.vi_insert_keymap();
                                     let _ = queue!(self.writer, self.cursor_style);
                                     changed = true;
                                 }
@@ -1153,7 +1197,7 @@ impl<W: Write> Editor<W> {
                                         self.indent_size,
                                     );
                                     self.vi_mode = ViMode::Insert;
-                                    self.keymap = Keymap::default_vi_insert();
+                                    self.keymap = self.vi_insert_keymap();
                                     let _ = queue!(self.writer, self.cursor_style);
                                     changed = true;
                                 }
@@ -1165,7 +1209,7 @@ impl<W: Write> Editor<W> {
                                     line_buffer.insert_char('\n');
                                     line_buffer.move_up();
                                     self.vi_mode = ViMode::Insert;
-                                    self.keymap = Keymap::default_vi_insert();
+                                    self.keymap = self.vi_insert_keymap();
                                     let _ = queue!(self.writer, self.cursor_style);
                                     changed = true;
                                 }
@@ -1179,7 +1223,7 @@ impl<W: Write> Editor<W> {
                                 }
                                 if self.edit_mode == EditMode::Vi {
                                     self.vi_mode = ViMode::Insert;
-                                    self.keymap = Keymap::default_vi_insert();
+                                    self.keymap = self.vi_insert_keymap();
                                     let _ = queue!(self.writer, self.cursor_style);
                                 }
                                 changed = true;
@@ -1193,7 +1237,7 @@ impl<W: Write> Editor<W> {
                                 }
                                 if self.edit_mode == EditMode::Vi {
                                     self.vi_mode = ViMode::Insert;
-                                    self.keymap = Keymap::default_vi_insert();
+                                    self.keymap = self.vi_insert_keymap();
                                     let _ = queue!(self.writer, self.cursor_style);
                                 }
                                 changed = true;
@@ -1207,7 +1251,7 @@ impl<W: Write> Editor<W> {
                                 }
                                 if self.edit_mode == EditMode::Vi {
                                     self.vi_mode = ViMode::Insert;
-                                    self.keymap = Keymap::default_vi_insert();
+                                    self.keymap = self.vi_insert_keymap();
                                     let _ = queue!(self.writer, self.cursor_style);
                                 }
                                 changed = true;
@@ -1225,9 +1269,22 @@ impl<W: Write> Editor<W> {
                                 vi_operator = Some(ViOperator::ReplaceChar);
                             }
                             EditorAction::ClearLine => {
+                                if let Some(menu) = &mut self.menu {
+                                    menu.dismiss(&mut line_buffer);
+                                }
                                 save_undo!();
                                 in_insert_session = false;
-                                changed = line_buffer.clear();
+                                line_buffer.clear();
+                                if self.edit_mode == EditMode::Vi && self.vi_mode != ViMode::Insert {
+                                    self.vi_mode = ViMode::Insert;
+                                    self.keymap = self.vi_insert_keymap();
+                                    let _ = queue!(self.writer, self.cursor_style);
+                                }
+                                vi_operator = None;
+                                history_index = None;
+                                saved_buffer = None;
+                                history_prefix = None;
+                                changed = true;
                             }
                             EditorAction::ClearScreen => {
                                 queue!(self.writer, Clear(ClearType::All), cursor::MoveTo(0, 0),)?;
@@ -1259,6 +1316,7 @@ impl<W: Write> Editor<W> {
                             in_insert_session = false;
                         }
                         changed = true;
+                    }
                     }
 
                     // Reset history navigation if buffer was modified by an action other than up/down
