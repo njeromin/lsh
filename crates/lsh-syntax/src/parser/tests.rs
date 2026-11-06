@@ -1,4 +1,3 @@
-
 use crate::{diagnostics::DiagnosticKind, lexer::lex_input};
 
 use super::{
