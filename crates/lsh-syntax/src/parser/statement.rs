@@ -102,37 +102,27 @@ impl Parser {
                 {
                     let pre_assign_index = self.index;
                     self.advance(); // Skip '=' or compound assignment operator.
-                    if let Ok(value) = self.parse_expr() {
-                        let statement_ends = self.check_current(&TokenKind::Semicolon)
-                            || self.check_current(&TokenKind::NewLine)
-                            || self.check_current(&TokenKind::EOF)
-                            || self.check_current(&TokenKind::RightCurly);
-
-                        if statement_ends {
-                            let target = match expr {
-                                Expr::Call { target, args } if args.is_empty() => match *target {
-                                    Expr::Word(name) => Expr::Variable(name),
-                                    other => other,
-                                },
+                    if let Ok(value) = self.parse_expr()
+                        && self.is_statement_end()
+                    {
+                        let target = match expr {
+                            Expr::Call { target, args } if args.is_empty() => match *target {
+                                Expr::Word(name) => Expr::Variable(name),
                                 other => other,
-                            };
-                            return Ok(match compound_op {
-                                Some(op) => Statement::CompoundAssign { target, op, value },
-                                None => Statement::Assign { target, value },
-                            });
-                        }
+                            },
+                            other => other,
+                        };
+                        return Ok(match compound_op {
+                            Some(op) => Statement::CompoundAssign { target, op, value },
+                            None => Statement::Assign { target, value },
+                        });
                     }
                     self.index = pre_assign_index;
                 }
 
                 // If it's a Call and the statement ends here, treat it as an expression statement.
                 // Otherwise, backtrack and parse command operators (&&, ||, |, ...).
-                let statement_ends = self.check_current(&TokenKind::Semicolon)
-                    || self.check_current(&TokenKind::NewLine)
-                    || self.check_current(&TokenKind::EOF)
-                    || self.check_current(&TokenKind::RightCurly);
-
-                if matches!(expr, Expr::Call { .. }) && statement_ends {
+                if matches!(expr, Expr::Call { .. }) && self.is_statement_end() {
                     self.match_token(&[TokenKind::Semicolon]);
                     return Ok(Statement::Expr(expr));
                 }
@@ -163,22 +153,20 @@ impl Parser {
         Ok(Statement::Let { name, value: expr })
     }
 
+    pub(crate) fn parse_block_or_single_statement(&mut self) -> Result<Vec<Statement>, Diagnostic> {
+        Ok(match self.parse_statement()? {
+            Statement::Block(stmts) => stmts,
+            stmt => vec![stmt],
+        })
+    }
+
     fn parse_if(&mut self) -> Result<Statement, Diagnostic> {
         self.advance(); // Advance past 'if'.
 
         let condition = self.parse_expr()?;
-
-        let then_branch = match self.parse_statement()? {
-            Statement::Block(stmts) => stmts,
-            stmt => vec![stmt],
-        };
-
+        let then_branch = self.parse_block_or_single_statement()?;
         let else_branch = if self.match_token(&[TokenKind::Else]) {
-            let branch = match self.parse_statement()? {
-                Statement::Block(stmts) => stmts,
-                stmt => vec![stmt],
-            };
-            Some(branch)
+            Some(self.parse_block_or_single_statement()?)
         } else {
             None
         };
@@ -194,11 +182,7 @@ impl Parser {
         self.advance();
 
         let condition = self.parse_expr()?;
-
-        let body = match self.parse_statement()? {
-            Statement::Block(stmts) => stmts,
-            stmt => vec![stmt],
-        };
+        let body = self.parse_block_or_single_statement()?;
 
         Ok(Statement::While { condition, body })
     }
@@ -232,10 +216,7 @@ impl Parser {
             self.consume(&TokenKind::RightParen, "Expected ')' after for condition.")?;
         }
 
-        let body = match self.parse_statement()? {
-            Statement::Block(stmts) => stmts,
-            stmt => vec![stmt],
-        };
+        let body = self.parse_block_or_single_statement()?;
 
         Ok(Statement::For {
             variable,
@@ -250,39 +231,8 @@ impl Parser {
         let target = self.parse_target()?;
 
         self.consume(&TokenKind::LeftParen, "Expected '(' after function target")?;
-
-        let mut params = vec![];
-
-        if !self.check_current(&TokenKind::RightParen) {
-            loop {
-                match &self.current().kind {
-                    TokenKind::String(p) => params.push(p.clone()),
-                    other => {
-                        return self.error_here(format!(
-                            "Expected parameter name, found {}.",
-                            Self::token_kind_label(other)
-                        ));
-                    }
-                }
-                self.advance();
-
-                if self.check_current(&TokenKind::Comma) {
-                    self.advance(); // Skip comma and continue.
-                } else {
-                    break;
-                }
-            }
-        }
-
-        self.consume(
-            &TokenKind::RightParen,
-            "Expected ')' after function parameters",
-        )?;
-
-        let body = match self.parse_statement()? {
-            Statement::Block(stmts) => stmts,
-            stmt => vec![stmt],
-        };
+        let params = self.parse_param_list("Expected ')' after function parameters")?;
+        let body = self.parse_block_or_single_statement()?;
 
         Ok(Statement::FunctionDeclaration {
             target,
@@ -294,11 +244,7 @@ impl Parser {
     fn parse_return(&mut self) -> Result<Statement, Diagnostic> {
         self.advance(); // Skip `return`.
 
-        let value = if self.check_current(&TokenKind::Semicolon)
-            || self.check_current(&TokenKind::NewLine)
-            || self.check_current(&TokenKind::RightCurly)
-            || self.check_current(&TokenKind::EOF)
-        {
+        let value = if self.is_statement_end() {
             None
         } else {
             Some(self.parse_expr()?)

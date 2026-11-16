@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use crate::{
     diagnostics::Diagnostic,
     lexer::token::TokenKind,
-    parser::ast::{BinaryOp, Expr, Statement, UnaryOp},
+    parser::ast::{BinaryOp, Expr, UnaryOp},
 };
 
 use super::Parser;
@@ -156,136 +156,88 @@ impl Parser {
         self.parse_target_on_current(expr)
     }
 
-    fn parse_target_on_current(&mut self, mut expr: Expr) -> Result<Expr, Diagnostic> {
-        loop {
-            if self.check_current(&TokenKind::LeftBracket) {
-                self.advance(); // Skip '['.
-
-                let index_expr = self.parse_expr()?;
-
-                self.consume(
-                    &TokenKind::RightBracket,
-                    "Expected ']' after object index expression.",
-                )?;
-
-                expr = Expr::Index {
-                    object: Box::new(expr),
-                    index: Box::new(index_expr),
-                };
-            } else if self.check_current(&TokenKind::Dot) {
-                self.advance(); // Skip '.'.
-                let key = match &self.current().kind {
-                    TokenKind::String(s) => s.clone(),
-                    other => {
-                        return self.error_here(format!(
-                            "Expected identifier after '.', found {}.",
-                            Self::token_kind_label(other)
-                        ));
-                    }
-                };
-                self.advance();
-
-                expr = Expr::Index {
-                    object: Box::new(expr),
-                    index: Box::new(Expr::String(key)),
-                };
-            } else {
-                break;
+    fn parse_index_or_dot_postfix(
+        &mut self,
+        expr: Expr,
+        require_contiguous_bracket: bool,
+    ) -> Result<Option<Expr>, Diagnostic> {
+        if self.check_current(&TokenKind::LeftBracket) {
+            if require_contiguous_bracket && !self.is_contiguous_with_prev() {
+                return Ok(None);
             }
+
+            self.advance(); // Skip '['.
+            let index_expr = self.parse_expr()?;
+            self.consume(
+                &TokenKind::RightBracket,
+                "Expected ']' after object index expression.",
+            )?;
+
+            return Ok(Some(Expr::Index {
+                object: Box::new(expr),
+                index: Box::new(index_expr),
+            }));
         }
 
+        if self.check_current(&TokenKind::Dot) {
+            self.advance(); // Skip '.'.
+            let key = match &self.current().kind {
+                TokenKind::String(s) => s.clone(),
+                other => {
+                    return self.error_here(format!(
+                        "Expected identifier after '.', found {}.",
+                        Self::token_kind_label(other)
+                    ));
+                }
+            };
+            self.advance();
+
+            return Ok(Some(Expr::Index {
+                object: Box::new(expr),
+                index: Box::new(Expr::String(key)),
+            }));
+        }
+
+        Ok(None)
+    }
+
+    fn parse_target_on_current(&mut self, mut expr: Expr) -> Result<Expr, Diagnostic> {
+        while let Some(next_expr) = self.parse_index_or_dot_postfix(expr.clone(), false)? {
+            expr = next_expr;
+        }
         Ok(expr)
     }
 
     pub(crate) fn parse_postfix_on_current(&mut self, mut expr: Expr) -> Result<Expr, Diagnostic> {
         loop {
-            if self.check_current(&TokenKind::LeftBracket) {
-                // Ensure no whitespace between expression and '[' for it to be an index.
-                let prev_token = &self.tokens[self.index - 1];
-                let current_token = self.current();
-
-                if current_token.offset != prev_token.offset + Self::token_source_len(prev_token) {
+            if self.check_current(&TokenKind::LeftParen) {
+                // Ensure no whitespace between identifier and '(' for it to be a call.
+                if !self.is_contiguous_with_prev() {
                     break;
                 }
 
-                self.advance(); // Skip '['.
+                self.advance(); // Skip '('.
 
-                let index_expr = self.parse_expr()?;
-
-                self.consume(
-                    &TokenKind::RightBracket,
-                    "Expected ']' after object index expression.",
-                )?;
-
-                expr = Expr::Index {
-                    object: Box::new(expr),
-                    index: Box::new(index_expr),
-                };
-            } else if self.check_current(&TokenKind::LeftParen) {
-                // Ensure no whitespace between identifier and '(' for it to be a call.
-                let prev_token = &self.tokens[self.index - 1];
-                let current_token = self.current();
-
-                if current_token.offset == prev_token.offset + Self::token_source_len(prev_token) {
-                    self.advance(); // Skip '('.
-
-                    let mut args = vec![];
-                    if !self.check_current(&TokenKind::RightParen) {
-                        loop {
-                            args.push(self.parse_expr()?);
-                            if self.check_current(&TokenKind::Comma) {
-                                self.advance();
-                            } else {
-                                break;
-                            }
+                let mut args = vec![];
+                if !self.check_current(&TokenKind::RightParen) {
+                    loop {
+                        args.push(self.parse_expr()?);
+                        if self.check_current(&TokenKind::Comma) {
+                            self.advance();
+                        } else {
+                            break;
                         }
                     }
-
-                    self.consume(&TokenKind::RightParen, "Expected ')' after arguments.")?;
-
-                    expr = Expr::Call {
-                        target: Box::new(expr),
-                        args,
-                    };
-                } else {
-                    break;
                 }
-            } else if self.check_current(&TokenKind::Dot) {
-                self.advance(); // Skip '.'.
-                let key = match &self.current().kind {
-                    TokenKind::String(s) => s.clone(),
-                    other => {
-                        return self.error_here(format!(
-                            "Expected identifier after '.', found {}.",
-                            Self::token_kind_label(other)
-                        ));
-                    }
-                };
-                self.advance();
 
-                expr = Expr::Index {
-                    object: Box::new(expr),
-                    index: Box::new(Expr::String(key)),
-                };
-            } else if let TokenKind::String(member_access) = &self.current().kind {
-                if member_access.starts_with('.') {
-                    // `.foo.bar` is syntax sugar for `["foo"]["bar"]`.
-                    let member_access = member_access.clone();
-                    self.advance();
+                self.consume(&TokenKind::RightParen, "Expected ')' after arguments.")?;
 
-                    for key in member_access
-                        .split('.')
-                        .skip(1)
-                        .filter(|part| !part.is_empty())
-                    {
-                        expr = Expr::Index {
-                            object: Box::new(expr),
-                            index: Box::new(Expr::String(key.to_string())),
-                        };
-                    }
-                } else {
-                    break;
-                }
+                expr = Expr::Call {
+                    target: Box::new(expr),
+                    args,
+                };
+            } else if let Some(next_expr) = self.parse_index_or_dot_postfix(expr.clone(), true)? {
+                expr = next_expr;
             } else {
                 break;
             }
@@ -526,44 +478,23 @@ impl Parser {
     }
 
     fn parse_anonymous_function(&mut self) -> Result<Expr, Diagnostic> {
-        let mut params = vec![];
-
-        if self.check_current(&TokenKind::LeftParen) {
+        let params = if self.check_current(&TokenKind::LeftParen) {
             self.advance(); // Skip '('.
-            if !self.check_current(&TokenKind::RightParen) {
-                loop {
-                    match &self.current().kind {
-                        TokenKind::String(p) => params.push(p.clone()),
-                        other => {
-                            return self.error_here(format!(
-                                "Expected parameter name, found {}.",
-                                Self::token_kind_label(other)
-                            ));
-                        }
-                    }
-                    self.advance();
-
-                    if self.check_current(&TokenKind::Comma) {
-                        self.advance();
-                    } else {
-                        break;
-                    }
-                }
-            }
-            self.consume(&TokenKind::RightParen, "Expected ')' after parameters.")?;
+            self.parse_param_list("Expected ')' after parameters.")?
         } else {
             // Single parameter without parens: x => ...
-            match &self.current().kind {
-                TokenKind::String(p) => params.push(p.clone()),
+            let param = match &self.current().kind {
+                TokenKind::String(p) => p.clone(),
                 other => {
                     return self.error_here(format!(
                         "Expected parameter name, found {}.",
                         Self::token_kind_label(other)
                     ));
                 }
-            }
+            };
             self.advance();
-        }
+            vec![param]
+        };
 
         self.consume(&TokenKind::FatArrow, "Expected '=>' after parameters.")?;
 
@@ -573,10 +504,7 @@ impl Parser {
             );
         }
 
-        let body = match self.parse_statement()? {
-            Statement::Block(stmts) => stmts,
-            stmt => vec![stmt],
-        };
+        let body = self.parse_block_or_single_statement()?;
 
         Ok(Expr::AnonymousFunction { params, body })
     }

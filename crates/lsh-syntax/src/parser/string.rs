@@ -1,11 +1,69 @@
+use std::{iter::Peekable, str::CharIndices};
+
 use crate::{
     diagnostics::{Diagnostic, DiagnosticKind},
+    lexer::resolve_basic_escape,
     parser::ast::Expr,
 };
 
 use super::Parser;
 
 impl Parser {
+    fn scan_balanced_delimited(
+        chars: &mut Peekable<CharIndices<'_>>,
+        open: char,
+        close: char,
+    ) -> Option<usize> {
+        let mut depth = 1usize;
+
+        while let Some((inner_idx, inner_ch)) = chars.next() {
+            if inner_ch == '\\' {
+                chars.next();
+                continue;
+            }
+            if inner_ch == '"' || inner_ch == '\'' {
+                let quote = inner_ch;
+                while let Some((_, qc)) = chars.next() {
+                    if qc == '\\' {
+                        chars.next();
+                        continue;
+                    }
+                    if qc == quote {
+                        break;
+                    }
+                }
+                continue;
+            }
+            if inner_ch == open {
+                depth += 1;
+            } else if inner_ch == close {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(inner_idx);
+                }
+            }
+        }
+
+        None
+    }
+
+    fn lex_and_parse_embedded(
+        src_id: usize,
+        snippet: &str,
+        offset_shift: usize,
+        parse_fn: impl FnOnce(&mut Parser) -> Result<Expr, Diagnostic>,
+    ) -> Result<Expr, Diagnostic> {
+        let shift_diag = |mut diag: Diagnostic| {
+            diag.source.start += offset_shift;
+            diag.source.end += offset_shift;
+            diag
+        };
+
+        let tokens = crate::lexer::lex_input(src_id, snippet).map_err(shift_diag)?;
+        let mut parser = Parser::new(src_id, tokens);
+        parse_fn(&mut parser).map_err(shift_diag)
+    }
+
     pub fn parse_interpolated_string(
         src_id: usize,
         raw: &str,
@@ -28,17 +86,9 @@ impl Parser {
                     ));
                 };
                 match next_ch {
-                    'n' => current_literal.push('\n'),
-                    'r' => current_literal.push('\r'),
-                    't' => current_literal.push('\t'),
-                    '0' => current_literal.push('\0'),
-                    '\\' => current_literal.push('\\'),
                     '"' => current_literal.push('"'),
-                    '\'' => current_literal.push('\''),
                     '$' => current_literal.push('$'),
-                    other => {
-                        current_literal.push(other);
-                    }
+                    other => current_literal.push(resolve_basic_escape(other)),
                 }
                 continue;
             }
@@ -46,66 +96,23 @@ impl Parser {
             if ch == '$' {
                 if let Some(&(_, '(')) = chars.peek() {
                     chars.next(); // consume '('
-                    let sub_start_idx = idx; // starts at '$'
-
-                    let mut paren_depth = 1usize;
-                    let mut expr_end_idx = None;
-
-                    while let Some((inner_idx, inner_ch)) = chars.next() {
-                        if inner_ch == '\\' {
-                            chars.next();
-                            continue;
-                        }
-                        if inner_ch == '"' || inner_ch == '\'' {
-                            let quote = inner_ch;
-                            while let Some((_, qc)) = chars.next() {
-                                if qc == '\\' {
-                                    chars.next();
-                                    continue;
-                                }
-                                if qc == quote {
-                                    break;
-                                }
-                            }
-                            continue;
-                        }
-                        if inner_ch == '(' {
-                            paren_depth += 1;
-                        } else if inner_ch == ')' {
-                            paren_depth -= 1;
-                            if paren_depth == 0 {
-                                expr_end_idx = Some(inner_idx);
-                                break;
-                            }
-                        }
-                    }
-
-                    let Some(sub_end_idx) = expr_end_idx else {
+                    let Some(sub_end_idx) = Self::scan_balanced_delimited(&mut chars, '(', ')')
+                    else {
                         return Err(Diagnostic::new(
                             DiagnosticKind::ParseError,
                             src_id,
-                            content_base + sub_start_idx,
+                            content_base + idx,
                             content_base + raw.len(),
                             "Unterminated command substitution in string interpolation.",
                         ));
                     };
 
-                    let cmd_raw_with_dollar = &raw[sub_start_idx..=sub_end_idx];
-
-                    let tokens = crate::lexer::lex_input(src_id, cmd_raw_with_dollar).map_err(
-                        |mut diag| {
-                            diag.source.start += content_base + sub_start_idx;
-                            diag.source.end += content_base + sub_start_idx;
-                            diag
-                        },
+                    let parsed_expr = Self::lex_and_parse_embedded(
+                        src_id,
+                        &raw[idx..=sub_end_idx],
+                        content_base + idx,
+                        |p| p.parse_primary(),
                     )?;
-
-                    let mut parser = Parser::new(src_id, tokens);
-                    let parsed_expr = parser.parse_primary().map_err(|mut diag| {
-                        diag.source.start += content_base + sub_start_idx;
-                        diag.source.end += content_base + sub_start_idx;
-                        diag
-                    })?;
 
                     if !current_literal.is_empty() {
                         parts.push(Expr::QuotedString(std::mem::take(&mut current_literal)));
@@ -116,46 +123,13 @@ impl Parser {
 
                 if let Some(&(_, '{')) = chars.peek() {
                     chars.next(); // consume '{'
-                    let sub_start_idx = idx; // starts at '$'
                     let expr_start_idx = idx + 2; // after '${'
-
-                    let mut brace_depth = 1usize;
-                    let mut expr_end_idx = None;
-
-                    while let Some((inner_idx, inner_ch)) = chars.next() {
-                        if inner_ch == '\\' {
-                            chars.next();
-                            continue;
-                        }
-                        if inner_ch == '"' || inner_ch == '\'' {
-                            let quote = inner_ch;
-                            while let Some((_, qc)) = chars.next() {
-                                if qc == '\\' {
-                                    chars.next();
-                                    continue;
-                                }
-                                if qc == quote {
-                                    break;
-                                }
-                            }
-                            continue;
-                        }
-                        if inner_ch == '{' {
-                            brace_depth += 1;
-                        } else if inner_ch == '}' {
-                            brace_depth -= 1;
-                            if brace_depth == 0 {
-                                expr_end_idx = Some(inner_idx);
-                                break;
-                            }
-                        }
-                    }
-
-                    let Some(sub_end_idx) = expr_end_idx else {
+                    let Some(sub_end_idx) = Self::scan_balanced_delimited(&mut chars, '{', '}')
+                    else {
                         return Err(Diagnostic::new(
                             DiagnosticKind::ParseError,
                             src_id,
-                            content_base + sub_start_idx,
+                            content_base + idx,
                             content_base + raw.len(),
                             "Unterminated expression substitution in string interpolation.",
                         ));
@@ -166,25 +140,18 @@ impl Parser {
                         return Err(Diagnostic::new(
                             DiagnosticKind::ParseError,
                             src_id,
-                            content_base + sub_start_idx,
+                            content_base + idx,
                             content_base + sub_end_idx + 1,
                             "Empty expression in string interpolation.",
                         ));
                     }
 
-                    let tokens =
-                        crate::lexer::lex_input(src_id, expr_str).map_err(|mut diag| {
-                            diag.source.start += content_base + expr_start_idx;
-                            diag.source.end += content_base + expr_start_idx;
-                            diag
-                        })?;
-
-                    let mut parser = Parser::new(src_id, tokens);
-                    let parsed_expr = parser.parse_expr().map_err(|mut diag| {
-                        diag.source.start += content_base + expr_start_idx;
-                        diag.source.end += content_base + expr_start_idx;
-                        diag
-                    })?;
+                    let parsed_expr = Self::lex_and_parse_embedded(
+                        src_id,
+                        expr_str,
+                        content_base + expr_start_idx,
+                        |p| p.parse_expr(),
+                    )?;
 
                     if !current_literal.is_empty() {
                         parts.push(Expr::QuotedString(std::mem::take(&mut current_literal)));

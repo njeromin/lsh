@@ -79,14 +79,10 @@ impl Parser {
             ));
         };
 
-        if self.check_current(&TokenKind::LeftParen) {
-            let previous_token = &self.tokens[self.index - 1];
-            let current_token = self.current();
-            if current_token.offset
-                == previous_token.offset + Self::token_source_len(previous_token)
-            {
-                return self.error_here("Command names cannot be immediately followed by '(' - did you mean a function call?");
-            }
+        if self.check_current(&TokenKind::LeftParen) && self.is_contiguous_with_prev() {
+            return self.error_here(
+                "Command names cannot be immediately followed by '(' - did you mean a function call?",
+            );
         }
 
         let mut args = vec![];
@@ -105,24 +101,16 @@ impl Parser {
             break;
         }
 
-        let stdout_redirect = if self.check_current(&TokenKind::ThinArrow) {
-            self.advance(); // Skip '->'.
+        let stdout_redirect = if self.check_current(&TokenKind::ThinArrow)
+            || self.check_current(&TokenKind::ThinArrowAppend)
+        {
+            let append = self.check_current(&TokenKind::ThinArrowAppend);
+            let arrow = if append { "->>" } else { "->" };
+            self.advance(); // Skip '->' or '->>'.
             let Some(target) = self.parse_command_argument()? else {
-                return self.error_here("Expected redirect target after '->'.");
+                return self.error_here(format!("Expected redirect target after '{arrow}'."));
             };
-            Some(Redirect {
-                target,
-                append: false,
-            })
-        } else if self.check_current(&TokenKind::ThinArrowAppend) {
-            self.advance(); // Skip '->>'.
-            let Some(target) = self.parse_command_argument()? else {
-                return self.error_here("Expected redirect target after '->>'.");
-            };
-            Some(Redirect {
-                target,
-                append: true,
-            })
+            Some(Redirect { target, append })
         } else {
             None
         };
@@ -190,17 +178,13 @@ impl Parser {
     }
 
     fn parse_command_argument(&mut self) -> Result<Option<Expr>, Diagnostic> {
-        let Some((mut expr, mut end_offset)) = self.parse_command_arg_part()? else {
+        let Some(mut expr) = self.parse_command_arg_part()? else {
             return Ok(None);
         };
 
         // Concatenate adjacent (no-whitespace) command parts into a single argument.
-        while self
-            .tokens
-            .get(self.index)
-            .is_some_and(|token| token.offset == end_offset)
-        {
-            let Some((right_expr, right_end_offset)) = self.parse_command_arg_part()? else {
+        while self.is_contiguous_with_prev() {
+            let Some(right_expr) = self.parse_command_arg_part()? else {
                 break;
             };
 
@@ -209,55 +193,44 @@ impl Parser {
                 left: Box::new(expr),
                 right: Box::new(right_expr),
             };
-            end_offset = right_end_offset;
         }
 
         Ok(Some(expr))
     }
 
-    fn parse_command_arg_part(&mut self) -> Result<Option<(Expr, usize)>, Diagnostic> {
-        if self.check_current(&TokenKind::LeftParen) {
+    fn parse_command_arg_part(&mut self) -> Result<Option<Expr>, Diagnostic> {
+        if self.check_current(&TokenKind::LeftParen) && self.is_contiguous_with_prev() {
             // If it's identifier( it's not a command argument part.
-            let prev_token = &self.tokens[self.index - 1];
-            let current_token = self.current();
-            if current_token.offset == prev_token.offset + Self::token_source_len(prev_token) {
-                return Ok(None);
-            }
+            return Ok(None);
         }
 
         if let Some(compound_arg) = self.try_parse_command_equals_compound_arg() {
-            let end_offset = self.end_offset_of_last_consumed_token();
-            return Ok(Some((compound_arg, end_offset)));
+            return Ok(Some(compound_arg));
         }
 
         if let TokenKind::DoubleQuotedString(s) = &self.current().kind {
             let token = self.current().to_owned();
             let parsed = Self::parse_interpolated_string(self.src_id, s, token.offset)?;
             self.advance();
-            let end_offset = token.offset + Self::token_source_len(&token);
-            return Ok(Some((parsed, end_offset)));
+            return Ok(Some(parsed));
         }
 
         if let Some(literal) = Self::token_kind_to_command_literal(&self.current().kind) {
-            let token = self.current().to_owned();
             self.advance();
-            let end_offset = token.offset + Self::token_source_len(&token);
-            return Ok(Some((literal, end_offset)));
+            return Ok(Some(literal));
         }
 
         if let TokenKind::Variable(var) = &self.current().kind {
             let var_name = var.clone();
             self.advance(); // Move to token after variable.
             let sub_expr = self.parse_postfix_on_current(Expr::Variable(var_name))?;
-            let end_offset = self.end_offset_of_last_consumed_token();
-            return Ok(Some((sub_expr, end_offset)));
+            return Ok(Some(sub_expr));
         }
 
         if self.check_current(&TokenKind::DollarLeftParen) {
             let sub_expr = self.parse_primary()?;
             let sub_expr = self.parse_postfix_on_current(sub_expr)?;
-            let end_offset = self.end_offset_of_last_consumed_token();
-            return Ok(Some((sub_expr, end_offset)));
+            return Ok(Some(sub_expr));
         }
 
         Ok(None)
@@ -298,16 +271,26 @@ impl Parser {
         }
     }
 
+    fn token_kind_to_word_str(kind: &TokenKind) -> Option<String> {
+        match kind {
+            TokenKind::For => Some("for".to_string()),
+            TokenKind::In => Some("in".to_string()),
+            TokenKind::Break => Some("break".to_string()),
+            TokenKind::Continue => Some("continue".to_string()),
+            TokenKind::LeftBracket => Some("[".to_string()),
+            TokenKind::RightBracket => Some("]".to_string()),
+            TokenKind::LeftCurly => Some("{".to_string()),
+            TokenKind::RightCurly => Some("}".to_string()),
+            _ => None,
+        }
+    }
+
     fn token_kind_to_command_literal(kind: &TokenKind) -> Option<Expr> {
         match kind {
             TokenKind::String(s) => Some(Expr::String(s.clone())),
             TokenKind::QuotedString(s) => Some(Expr::QuotedString(s.clone())),
             TokenKind::Number(n) => Some(Expr::Number(*n)),
             TokenKind::Bool(b) => Some(Expr::Bool(*b)),
-            TokenKind::For => Some(Expr::String("for".to_string())),
-            TokenKind::In => Some(Expr::String("in".to_string())),
-            TokenKind::Break => Some(Expr::String("break".to_string())),
-            TokenKind::Continue => Some(Expr::String("continue".to_string())),
             // Treat punctuation/operator tokens as literal string arguments in command context.
             TokenKind::Comma => Some(Expr::String(",".to_string())),
             TokenKind::Dot => Some(Expr::String(".".to_string())),
@@ -319,11 +302,7 @@ impl Parser {
             TokenKind::Not => Some(Expr::String("!".to_string())),
             TokenKind::GreaterThan => Some(Expr::String(">".to_string())),
             TokenKind::LessThan => Some(Expr::String("<".to_string())),
-            TokenKind::LeftBracket => Some(Expr::String("[".to_string())),
-            TokenKind::RightBracket => Some(Expr::String("]".to_string())),
-            TokenKind::LeftCurly => Some(Expr::String("{".to_string())),
-            TokenKind::RightCurly => Some(Expr::String("}".to_string())),
-            _ => None,
+            other => Self::token_kind_to_word_str(other).map(Expr::String),
         }
     }
 
@@ -332,15 +311,7 @@ impl Parser {
             TokenKind::String(s) | TokenKind::QuotedString(s) => Some(s.clone()),
             TokenKind::Number(n) => Some(n.to_string()),
             TokenKind::Bool(b) => Some(b.to_string()),
-            TokenKind::For => Some("for".to_string()),
-            TokenKind::In => Some("in".to_string()),
-            TokenKind::Break => Some("break".to_string()),
-            TokenKind::Continue => Some("continue".to_string()),
-            TokenKind::LeftBracket => Some("[".to_string()),
-            TokenKind::RightBracket => Some("]".to_string()),
-            TokenKind::LeftCurly => Some("{".to_string()),
-            TokenKind::RightCurly => Some("}".to_string()),
-            _ => None,
+            other => Self::token_kind_to_word_str(other),
         }
     }
 
@@ -355,14 +326,5 @@ impl Parser {
         }
 
         chars.all(|c| c == '_' || c.is_ascii_alphanumeric())
-    }
-
-    fn end_offset_of_last_consumed_token(&self) -> usize {
-        if self.index == 0 {
-            return self.current().offset;
-        }
-
-        let token = &self.tokens[self.index - 1];
-        token.offset + Self::token_source_len(token)
     }
 }

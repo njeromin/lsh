@@ -228,20 +228,11 @@ fn lex_input_internal(src_id: usize, input: &str, lenient: bool) -> Result<Vec<T
                     tokens.push(Token::new(TokenKind::NewLine, offset, 1));
                 }
             }
-            '\\' => match chars.peek() {
-                Some((_, '\n')) => {
-                    chars.next();
+            '\\' => {
+                if consume_line_continuation(&mut chars) {
                     continue;
                 }
-                Some((_, '\r')) => {
-                    chars.next();
-                    if chars.peek().is_some_and(|(_, c)| *c == '\n') {
-                        chars.next();
-                    }
-                    continue;
-                }
-                Some(_) => {
-                    let (esc_offset, esc_char) = chars.next().unwrap();
+                if let Some((esc_offset, esc_char)) = chars.next() {
                     let ident_string = String::from(esc_char);
                     let end_offset = esc_offset + esc_char.len_utf8();
                     let has_escapes = true;
@@ -254,11 +245,10 @@ fn lex_input_internal(src_id: usize, input: &str, lenient: bool) -> Result<Vec<T
                         has_escapes,
                         &mut chars,
                     );
-                }
-                None => {
+                } else {
                     tokens.push(Token::new(TokenKind::String("\\".to_string()), offset, 1));
                 }
-            },
+            }
             _ => {
                 if lex_identifier(&mut tokens, char, offset, &mut chars).is_some() {
                     continue;
@@ -324,15 +314,7 @@ fn lex_single_quoted_string(
                 ));
             };
 
-            let resolved = match escaped {
-                'n' => '\n',
-                'r' => '\r',
-                't' => '\t',
-                '\\' => '\\',
-                '\'' => '\'',
-                '0' => '\0',
-                other => other,
-            };
+            let resolved = resolve_basic_escape(escaped);
 
             string.push(resolved);
             end_offset = esc_offset + escaped.len_utf8();
@@ -519,6 +501,35 @@ fn lex_identifier(
     None
 }
 
+fn consume_line_continuation(chars: &mut CharIndexedIter) -> bool {
+    match chars.peek() {
+        Some((_, '\n')) => {
+            chars.next();
+            true
+        }
+        Some((_, '\r')) => {
+            chars.next();
+            if chars.peek().is_some_and(|(_, c)| *c == '\n') {
+                chars.next();
+            }
+            true
+        }
+        _ => false,
+    }
+}
+
+pub(crate) fn resolve_basic_escape(escaped: char) -> char {
+    match escaped {
+        'n' => '\n',
+        'r' => '\r',
+        't' => '\t',
+        '0' => '\0',
+        '\\' => '\\',
+        '\'' => '\'',
+        other => other,
+    }
+}
+
 fn lex_identifier_rest(
     tokens: &mut Vec<Token>,
     start_offset: usize,
@@ -531,32 +542,17 @@ fn lex_identifier_rest(
         if peek_char == '\\' {
             chars.next(); // Consume '\\'
             has_escapes = true;
-            match chars.peek() {
-                Some((_, '\n')) => {
-                    chars.next(); // Consume line continuation
-                    continue;
-                }
-                Some((_, '\r')) => {
-                    chars.next(); // Consume '\r'
-                    if chars.peek().is_some_and(|(_, c)| *c == '\n') {
-                        chars.next(); // Consume '\n'
-                    }
-                    continue;
-                }
-                Some((esc_offset, esc_char)) => {
-                    let esc_char = *esc_char;
-                    let esc_offset = *esc_offset;
-                    chars.next(); // Consume escaped character
-                    ident_string.push(esc_char);
-                    end_offset = esc_offset + esc_char.len_utf8();
-                    continue;
-                }
-                None => {
-                    ident_string.push('\\');
-                    end_offset = peek_offset + 1;
-                    break;
-                }
+            if consume_line_continuation(chars) {
+                continue;
             }
+            if let Some((esc_offset, esc_char)) = chars.next() {
+                ident_string.push(esc_char);
+                end_offset = esc_offset + esc_char.len_utf8();
+                continue;
+            }
+            ident_string.push('\\');
+            end_offset = peek_offset + 1;
+            break;
         }
 
         if is_ident_char(peek_char) {

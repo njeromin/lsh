@@ -78,14 +78,7 @@ fn line_col_from_offset(source: &str, offset: usize) -> (usize, usize) {
 }
 
 fn line_text_at_offset(source: &str, offset: usize) -> String {
-    let clamped_offset = offset.min(source.len());
-    let line_start = source[..clamped_offset]
-        .rfind('\n')
-        .map_or(0, |idx| idx + 1);
-    let line_end = source[clamped_offset..]
-        .find('\n')
-        .map_or(source.len(), |idx| clamped_offset + idx);
-
+    let (line_start, line_end) = line_bounds_at_offset(source, offset);
     source[line_start..line_end].to_string()
 }
 

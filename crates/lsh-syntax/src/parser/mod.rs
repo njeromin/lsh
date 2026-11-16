@@ -190,6 +190,53 @@ impl Parser {
     pub(crate) fn token_source_len(token: &Token) -> usize {
         token.len
     }
+
+    pub(crate) fn is_contiguous_with_prev(&self) -> bool {
+        let Some(prev_idx) = self.index.checked_sub(1) else {
+            return false;
+        };
+        let Some(current) = self.tokens.get(self.index) else {
+            return false;
+        };
+        let prev = &self.tokens[prev_idx];
+        current.offset == prev.offset + Self::token_source_len(prev)
+    }
+
+    pub(crate) fn is_statement_end(&self) -> bool {
+        self.check_current(&TokenKind::Semicolon)
+            || self.check_current(&TokenKind::NewLine)
+            || self.check_current(&TokenKind::RightCurly)
+            || self.check_current(&TokenKind::EOF)
+    }
+
+    pub(crate) fn parse_param_list(
+        &mut self,
+        missing_rparen_msg: &str,
+    ) -> Result<Vec<String>, Diagnostic> {
+        let mut params = vec![];
+        if !self.check_current(&TokenKind::RightParen) {
+            loop {
+                match &self.current().kind {
+                    TokenKind::String(p) => params.push(p.clone()),
+                    other => {
+                        return self.error_here(format!(
+                            "Expected parameter name, found {}.",
+                            Self::token_kind_label(other)
+                        ));
+                    }
+                }
+                self.advance();
+
+                if self.check_current(&TokenKind::Comma) {
+                    self.advance();
+                } else {
+                    break;
+                }
+            }
+        }
+        self.consume(&TokenKind::RightParen, missing_rparen_msg)?;
+        Ok(params)
+    }
 }
 
 #[cfg(test)]
