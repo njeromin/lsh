@@ -311,14 +311,17 @@ fn parses_command_with_command_substitution_argument() {
 }
 
 #[test]
-fn parses_member_access_on_command_substitution_in_expr_call_arg() {
+fn parses_member_access_on_command_substitution_in_command_arg() {
     let body = parse_program("echo $(cat /etc/hosts).out");
 
-    let Statement::Expr(Expr::Call { target, args }) = &body[0] else {
-        panic!("Expected expression call statement");
+    let Statement::Command(CommandExpr::Call {
+        identifier, args, ..
+    }) = &body[0]
+    else {
+        panic!("Expected command call statement");
     };
 
-    assert!(matches!(target.as_ref(), Expr::Word(word) if word == "echo"));
+    assert_command_identifier(identifier, "echo");
     assert_eq!(args.len(), 1);
 
     let Expr::Index { object, index } = &args[0] else {
@@ -339,6 +342,50 @@ fn parses_member_access_on_command_substitution_in_expr_call_arg() {
     };
     assert_command_identifier(sub_id, "cat");
     assert!(matches!(&sub_args[0], Expr::String(s) if s == "/etc/hosts"));
+}
+
+#[test]
+fn parses_expression_args_inside_command_calls() {
+    let body = parse_program(r#"echo $s.trim() $multiply(4, 5) $parts[0] $parts[1]"#);
+    assert_eq!(body.len(), 1);
+
+    let Statement::Command(CommandExpr::Call {
+        identifier, args, ..
+    }) = &body[0]
+    else {
+        panic!("Expected command call statement");
+    };
+
+    assert_command_identifier(identifier, "echo");
+    assert_eq!(args.len(), 4);
+    assert!(matches!(&args[0], Expr::Call { .. }));
+    assert!(matches!(
+        &args[1],
+        Expr::Call { target, args }
+            if matches!(target.as_ref(), Expr::Variable(v) if v == "multiply")
+            && args.len() == 2
+    ));
+    assert!(matches!(&args[2], Expr::Index { .. }));
+    assert!(matches!(&args[3], Expr::Index { .. }));
+}
+
+#[test]
+fn parses_expression_call_statement_separately_from_commands() {
+    let body = parse_program("add(1, 2)\nadd 1 2");
+    assert_eq!(body.len(), 2);
+
+    assert!(matches!(
+        &body[0],
+        Statement::Expr(Expr::Call { target, args })
+            if matches!(target.as_ref(), Expr::Word(w) if w == "add")
+            && args.len() == 2
+    ));
+    assert!(matches!(
+        &body[1],
+        Statement::Command(CommandExpr::Call { identifier, args, .. })
+            if matches!(identifier, Expr::String(s) if s == "add")
+            && args.len() == 2
+    ));
 }
 
 #[test]

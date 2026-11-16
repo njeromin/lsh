@@ -1717,3 +1717,26 @@ fn test_runtime_errors_do_not_panic_and_clean_up_scopes() {
     let err2 = eval.try_evaluate_program(prog2).unwrap_err();
     assert!(matches!(err2, crate::eval::EvalError::InvalidIndex(_)));
 }
+
+#[test]
+fn test_command_with_trailing_expression_call_and_index_args() {
+    let mut eval = Evaluator::new();
+    let script = r#"
+        fn mul(a, b) {
+            return $a * $b
+        }
+        let s = "  hi  "
+        let parts = ["alpha", "beta"]
+        let out = $(echo $s.trim() $mul(4, 5) $parts[0] $parts[1]).out.trim()
+    "#;
+
+    let prog = Parser::new(0, lexer::lex_input(0, script).unwrap())
+        .parse_program()
+        .unwrap();
+    let status = eval.evaluate(prog);
+    assert_eq!(status, 0);
+    assert_eq!(
+        eval.get_var(0, "out"),
+        Some(&Value::String("hi 20 alpha beta".to_string()))
+    );
+}
