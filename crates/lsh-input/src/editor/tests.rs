@@ -1,4 +1,5 @@
 use super::*;
+use crate::BasicMenu;
 use crate::buffer::LineBuffer;
 use crate::completer::Candidate;
 use crate::keymap::{EditorAction, KeyCombo};
@@ -488,4 +489,46 @@ fn test_signal_methods() {
     assert!(!ctrl_d.is_ctrl_c());
     assert!(ctrl_d.is_ctrl_d());
     assert_eq!(ctrl_d.into_success(), None);
+}
+
+#[test]
+fn test_menu_dismiss_on_left_home_end_moves_cursor() {
+    let mut menu = BasicMenu::default();
+    let mut buf = LineBuffer::new();
+    buf.insert_str("cargo bu");
+
+    let completer =
+        |_line: &str, _cursor: usize| (6, vec![Candidate::new("build"), Candidate::new("builder")]);
+
+    menu.activate(&mut buf, Some(&completer));
+    assert!(menu.is_active());
+
+    // Left arrow passes through, dismissing menu and allowing cursor to move left
+    let outcome = menu.handle_key(
+        KeyCode::Left,
+        KeyModifiers::NONE,
+        &mut buf,
+        Some(&completer),
+    );
+    assert_eq!(outcome, MenuOutcome::PassThrough);
+    assert!(!menu.is_active());
+
+    // Home passes through, dismissing menu and allowing cursor to jump to start
+    menu.activate(&mut buf, Some(&completer));
+    assert!(menu.is_active());
+    let outcome = menu.handle_key(
+        KeyCode::Home,
+        KeyModifiers::NONE,
+        &mut buf,
+        Some(&completer),
+    );
+    assert_eq!(outcome, MenuOutcome::PassThrough);
+    assert!(!menu.is_active());
+
+    // End passes through, dismissing menu and allowing cursor to jump to end
+    menu.activate(&mut buf, Some(&completer));
+    assert!(menu.is_active());
+    let outcome = menu.handle_key(KeyCode::End, KeyModifiers::NONE, &mut buf, Some(&completer));
+    assert_eq!(outcome, MenuOutcome::PassThrough);
+    assert!(!menu.is_active());
 }

@@ -279,12 +279,8 @@ impl Menu for BasicMenu {
             | (KeyCode::Tab, KeyModifiers::NONE)
             | (KeyCode::Char('n'), KeyModifiers::CONTROL) => {
                 if !self.candidates.is_empty() {
-                    if !self.navigated {
-                        self.selected = 0;
-                        self.navigated = true;
-                    } else {
-                        self.selected = (self.selected + 1) % self.candidates.len();
-                    }
+                    self.selected = (self.selected + 1) % self.candidates.len();
+                    self.navigated = true;
                     self.preview_selected(buffer);
                 }
                 MenuOutcome::Consumed
@@ -296,16 +292,12 @@ impl Menu for BasicMenu {
             | (KeyCode::Tab, KeyModifiers::SHIFT)
             | (KeyCode::Char('p'), KeyModifiers::CONTROL) => {
                 if !self.candidates.is_empty() {
-                    if !self.navigated {
-                        self.selected = self.candidates.len().saturating_sub(1);
-                        self.navigated = true;
+                    self.selected = if self.selected == 0 {
+                        self.candidates.len() - 1
                     } else {
-                        self.selected = if self.selected == 0 {
-                            self.candidates.len() - 1
-                        } else {
-                            self.selected - 1
-                        };
-                    }
+                        self.selected - 1
+                    };
+                    self.navigated = true;
                     self.preview_selected(buffer);
                 }
                 MenuOutcome::Consumed
@@ -332,39 +324,9 @@ impl Menu for BasicMenu {
                 MenuOutcome::Consumed
             }
 
-            // Home / End in menu
-            (KeyCode::Home, _) => {
+            // Accept / Commit: Enter or Right arrow
+            (KeyCode::Enter, KeyModifiers::NONE) | (KeyCode::Right, KeyModifiers::NONE) => {
                 if !self.candidates.is_empty() {
-                    self.selected = 0;
-                    self.navigated = true;
-                    self.preview_selected(buffer);
-                }
-                MenuOutcome::Consumed
-            }
-            (KeyCode::End, _) => {
-                if !self.candidates.is_empty() {
-                    self.selected = self.candidates.len().saturating_sub(1);
-                    self.navigated = true;
-                    self.preview_selected(buffer);
-                }
-                MenuOutcome::Consumed
-            }
-
-            // Accept / Commit
-            (KeyCode::Enter, _) => {
-                if !self.candidates.is_empty() {
-                    self.commit_selected(buffer);
-                    self.active = false;
-                    MenuOutcome::Accepted
-                } else {
-                    self.active = false;
-                    MenuOutcome::PassThrough
-                }
-            }
-
-            // Right arrow commits if navigated
-            (KeyCode::Right, _) => {
-                if self.navigated {
                     self.commit_selected(buffer);
                     self.active = false;
                     MenuOutcome::Accepted
@@ -640,17 +602,22 @@ mod tests {
         menu.activate(&mut buf, Some(&completer));
         assert!(menu.is_active());
 
-        // Navigating down selects "cargo"
+        // Navigating down (or Tab) cycles from index 0 ("cargo") to index 1 ("cat")
+        let outcome = menu.handle_key(KeyCode::Tab, KeyModifiers::NONE, &mut buf, Some(&completer));
+        assert_eq!(outcome, MenuOutcome::Consumed);
+        assert_eq!(buf.as_str(), "cat");
+
+        // Shift+Tab cycles back to "cargo"
         let outcome = menu.handle_key(
-            KeyCode::Down,
-            KeyModifiers::NONE,
+            KeyCode::BackTab,
+            KeyModifiers::SHIFT,
             &mut buf,
             Some(&completer),
         );
         assert_eq!(outcome, MenuOutcome::Consumed);
         assert_eq!(buf.as_str(), "cargo");
 
-        // Next item selects "cat"
+        // Down cycles to "cat"
         let outcome = menu.handle_key(
             KeyCode::Down,
             KeyModifiers::NONE,
@@ -695,6 +662,22 @@ mod tests {
         assert_eq!(outcome, MenuOutcome::Accepted);
         assert_eq!(buf.as_str(), "cargo");
         assert!(!menu.is_active());
+
+        // Right arrow also immediately accepts candidate #0 ("cargo")
+        let mut buf = LineBuffer::new();
+        buf.insert_str("ca");
+        menu.activate(&mut buf, Some(&completer));
+        assert!(menu.is_active());
+
+        let outcome = menu.handle_key(
+            KeyCode::Right,
+            KeyModifiers::NONE,
+            &mut buf,
+            Some(&completer),
+        );
+        assert_eq!(outcome, MenuOutcome::Accepted);
+        assert_eq!(buf.as_str(), "cargo");
+        assert!(!menu.is_active());
     }
 
     #[test]
@@ -713,7 +696,7 @@ mod tests {
             &mut buf,
             Some(&completer),
         );
-        assert_eq!(buf.as_str(), "cargo");
+        assert_eq!(buf.as_str(), "cat");
 
         // Esc reverts to original "ca"
         let outcome = menu.handle_key(KeyCode::Esc, KeyModifiers::NONE, &mut buf, Some(&completer));
@@ -816,5 +799,70 @@ mod tests {
                 assert!(stripped.ends_with('│'));
             }
         }
+    }
+
+    #[test]
+    fn test_menu_left_home_end_dismiss_and_pass_through() {
+        let mut menu = BasicMenu::default();
+        let mut buf = LineBuffer::new();
+        buf.insert_str("ca");
+
+        let completer =
+            |_line: &str, _cursor: usize| (0, vec![Candidate::new("cargo"), Candidate::new("cat")]);
+
+        menu.activate(&mut buf, Some(&completer));
+        menu.handle_key(
+            KeyCode::Down,
+            KeyModifiers::NONE,
+            &mut buf,
+            Some(&completer),
+        );
+        assert_eq!(buf.as_str(), "cat");
+
+        // Left reverts preview and passes through
+        let outcome = menu.handle_key(
+            KeyCode::Left,
+            KeyModifiers::NONE,
+            &mut buf,
+            Some(&completer),
+        );
+        assert_eq!(outcome, MenuOutcome::PassThrough);
+        assert!(!menu.is_active());
+        assert_eq!(buf.as_str(), "ca");
+
+        // Test Home
+        menu.activate(&mut buf, Some(&completer));
+        menu.handle_key(
+            KeyCode::Down,
+            KeyModifiers::NONE,
+            &mut buf,
+            Some(&completer),
+        );
+        assert_eq!(buf.as_str(), "cat");
+
+        let outcome = menu.handle_key(
+            KeyCode::Home,
+            KeyModifiers::NONE,
+            &mut buf,
+            Some(&completer),
+        );
+        assert_eq!(outcome, MenuOutcome::PassThrough);
+        assert!(!menu.is_active());
+        assert_eq!(buf.as_str(), "ca");
+
+        // Test End
+        menu.activate(&mut buf, Some(&completer));
+        menu.handle_key(
+            KeyCode::Down,
+            KeyModifiers::NONE,
+            &mut buf,
+            Some(&completer),
+        );
+        assert_eq!(buf.as_str(), "cat");
+
+        let outcome = menu.handle_key(KeyCode::End, KeyModifiers::NONE, &mut buf, Some(&completer));
+        assert_eq!(outcome, MenuOutcome::PassThrough);
+        assert!(!menu.is_active());
+        assert_eq!(buf.as_str(), "ca");
     }
 }

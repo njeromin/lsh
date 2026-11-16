@@ -421,6 +421,9 @@ impl<W: Write> Editor<W> {
                         continue;
                     }
 
+                    // Check if menu is active before delegating
+                    let was_menu_active = self.menu.as_ref().is_some_and(|m| m.is_active());
+
                     // Delegate to active menu first if menu is open
                     if let Some(menu) = &mut self.menu
                         && menu.is_active()
@@ -488,7 +491,12 @@ impl<W: Write> Editor<W> {
                         }
                     }
 
-                    // Only redraw if the line buffer or cursor actually changed
+                    let is_menu_active = self.menu.as_ref().is_some_and(|m| m.is_active());
+                    if was_menu_active && !is_menu_active {
+                        changed = true;
+                    }
+
+                    // Only redraw if the line buffer or cursor actually changed, or menu state changed
                     if changed {
                         let (layout, hint) =
                             self.render_line(&prompt, &session.line_buffer, previous_cursor_row)?;

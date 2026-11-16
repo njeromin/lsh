@@ -261,7 +261,9 @@ impl Menu for LshMenu {
         _completer: Option<&dyn lsh_input::Completer>,
     ) -> MenuOutcome {
         match (code, modifiers) {
-            (KeyCode::Down, _) | (KeyCode::Char('n'), KeyModifiers::CONTROL) => {
+            (KeyCode::Down, _)
+            | (KeyCode::Tab, KeyModifiers::NONE)
+            | (KeyCode::Char('n'), KeyModifiers::CONTROL) => {
                 if !self.items.is_empty() {
                     self.selected = (self.selected + 1) % self.items.len();
                     self.navigated = true;
@@ -312,23 +314,7 @@ impl Menu for LshMenu {
                 }
                 MenuOutcome::Consumed
             }
-            (KeyCode::Home, _) => {
-                if !self.items.is_empty() {
-                    self.selected = 0;
-                    self.navigated = true;
-                    self.update_buffer_preview(buffer);
-                }
-                MenuOutcome::Consumed
-            }
-            (KeyCode::End, _) => {
-                if !self.items.is_empty() {
-                    self.selected = self.items.len().saturating_sub(1);
-                    self.navigated = true;
-                    self.update_buffer_preview(buffer);
-                }
-                MenuOutcome::Consumed
-            }
-            (KeyCode::Tab, KeyModifiers::NONE) => {
+            (KeyCode::Enter, KeyModifiers::NONE) | (KeyCode::Right, KeyModifiers::NONE) => {
                 if !self.items.is_empty() {
                     if self.descend(buffer) {
                         MenuOutcome::Consumed
@@ -342,19 +328,6 @@ impl Menu for LshMenu {
                     self.items.clear();
                     MenuOutcome::PassThrough
                 }
-            }
-            (KeyCode::Right, KeyModifiers::NONE) if self.navigated => {
-                if self.descend(buffer) {
-                    MenuOutcome::Consumed
-                } else {
-                    self.commit_selected(buffer);
-                    self.active = false;
-                    MenuOutcome::Accepted
-                }
-            }
-            (KeyCode::Right, KeyModifiers::NONE) => {
-                self.dismiss(buffer);
-                MenuOutcome::PassThrough
             }
             (KeyCode::Char('/'), KeyModifiers::NONE) => {
                 if self.navigated && self.descend(buffer) {
@@ -379,12 +352,22 @@ impl Menu for LshMenu {
             }
             (KeyCode::Char(' '), KeyModifiers::NONE) => {
                 if self.navigated {
-                    self.commit_selected(buffer);
+                    if let Some(item) = self.items.get(self.selected) {
+                        let mut rep = item.replacement.clone();
+                        if !rep.ends_with(' ') {
+                            rep.push(' ');
+                        }
+                        let rep_len = rep.len();
+                        let start = self.start;
+                        let end = (start + self.current_replacement_len).min(buffer.len());
+                        buffer.replace_range(start..end, &rep);
+                        buffer.set_cursor(start + rep_len);
+                        self.current_replacement_len = rep_len;
+                    }
                     self.active = false;
                     MenuOutcome::Accepted
                 } else {
-                    self.active = false;
-                    self.items.clear();
+                    self.dismiss(buffer);
                     MenuOutcome::PassThrough
                 }
             }
@@ -447,24 +430,11 @@ impl Menu for LshMenu {
                     MenuOutcome::PassThrough
                 }
             }
-            (KeyCode::Enter, KeyModifiers::NONE) => {
-                if !self.items.is_empty() {
-                    if self.descend(buffer) {
-                        MenuOutcome::Consumed
-                    } else {
-                        self.commit_selected(buffer);
-                        self.active = false;
-                        MenuOutcome::Accepted
-                    }
-                } else {
-                    self.active = false;
-                    self.items.clear();
-                    MenuOutcome::PassThrough
-                }
+            (KeyCode::Left, _) => {
+                self.dismiss(buffer);
+                MenuOutcome::PassThrough
             }
-            (KeyCode::Esc, _)
-            | (KeyCode::Left, _)
-            | (KeyCode::Char('g'), KeyModifiers::CONTROL) => {
+            (KeyCode::Esc, _) | (KeyCode::Char('g'), KeyModifiers::CONTROL) => {
                 self.dismiss(buffer);
                 MenuOutcome::Dismissed
             }
@@ -588,11 +558,11 @@ mod tests {
     }
 
     #[test]
-    fn enter_immediately_commits_highlighted_candidate() {
+    fn enter_and_right_arrow_immediately_commit_highlighted_candidate() {
         let helper = LineEditorHelper::new();
         helper.set_binaries(vec!["git-clone".to_string(), "git-commit".to_string()]);
 
-        let mut menu = LshMenu::new("completion_menu", helper);
+        let mut menu = LshMenu::new("completion_menu", helper.clone());
         let mut buffer = LineBuffer::new();
         buffer.insert_str("git-");
 
@@ -604,10 +574,23 @@ mod tests {
         assert_eq!(outcome, MenuOutcome::Accepted);
         assert!(!menu.is_active());
         assert_eq!(buffer.as_str(), "git-clone ");
+
+        // Right arrow also immediately accepts the highlighted candidate #0
+        let mut menu = LshMenu::new("completion_menu", helper);
+        let mut buffer = LineBuffer::new();
+        buffer.insert_str("git-");
+
+        menu.activate(&mut buffer, None);
+        assert!(menu.is_active());
+
+        let outcome = menu.handle_key(KeyCode::Right, KeyModifiers::NONE, &mut buffer, None);
+        assert_eq!(outcome, MenuOutcome::Accepted);
+        assert!(!menu.is_active());
+        assert_eq!(buffer.as_str(), "git-clone ");
     }
 
     #[test]
-    fn tab_immediately_commits_highlighted_candidate() {
+    fn tab_and_shift_tab_cycle_candidates() {
         let helper = LineEditorHelper::new();
         helper.set_binaries(vec!["git-clone".to_string(), "git-commit".to_string()]);
 
@@ -617,9 +600,24 @@ mod tests {
 
         menu.activate(&mut buffer, None);
         assert!(menu.is_active());
+        assert_eq!(menu.selected_index(), 0);
 
-        // Tab immediately accepts the highlighted candidate #0
+        // Tab cycles forward to candidate #1 and previews it
         let outcome = menu.handle_key(KeyCode::Tab, KeyModifiers::NONE, &mut buffer, None);
+        assert_eq!(outcome, MenuOutcome::Consumed);
+        assert!(menu.is_active());
+        assert_eq!(menu.selected_index(), 1);
+        assert_eq!(buffer.as_str(), "git-commit");
+
+        // Shift+Tab cycles backward to candidate #0 and previews it
+        let outcome = menu.handle_key(KeyCode::BackTab, KeyModifiers::SHIFT, &mut buffer, None);
+        assert_eq!(outcome, MenuOutcome::Consumed);
+        assert!(menu.is_active());
+        assert_eq!(menu.selected_index(), 0);
+        assert_eq!(buffer.as_str(), "git-clone");
+
+        // Right arrow accepts the currently selected candidate
+        let outcome = menu.handle_key(KeyCode::Right, KeyModifiers::NONE, &mut buffer, None);
         assert_eq!(outcome, MenuOutcome::Accepted);
         assert!(!menu.is_active());
         assert_eq!(buffer.as_str(), "git-clone ");
@@ -697,8 +695,8 @@ mod tests {
         assert_eq!(menu.items().len(), 1);
         assert_eq!(menu.items()[0].replacement, "cargo-build");
 
-        // Tab commits the single match
-        let outcome = menu.handle_key(KeyCode::Tab, KeyModifiers::NONE, &mut buffer, None);
+        // Enter commits the single match
+        let outcome = menu.handle_key(KeyCode::Enter, KeyModifiers::NONE, &mut buffer, None);
         assert_eq!(outcome, MenuOutcome::Accepted);
         assert!(!menu.is_active());
         assert_eq!(buffer.as_str(), "cargo-build ");
@@ -788,5 +786,105 @@ mod tests {
         assert_eq!(buffer.as_str(), "car");
         assert_eq!(menu.items().len(), 1);
         assert_eq!(menu.items()[0].replacement, "cargo");
+    }
+
+    #[test]
+    fn left_arrow_dismisses_menu_and_passes_through() {
+        let helper = LineEditorHelper::new();
+        helper.set_binaries(vec!["cargo".to_string(), "cat".to_string()]);
+
+        let mut menu = LshMenu::new("completion_menu", helper);
+        let mut buffer = LineBuffer::new();
+        buffer.insert_str("ca");
+
+        menu.activate(&mut buffer, None);
+        assert!(menu.is_active());
+
+        // Left arrow dismisses menu with PassThrough so editor can move cursor left
+        let outcome = menu.handle_key(KeyCode::Left, KeyModifiers::NONE, &mut buffer, None);
+        assert_eq!(outcome, MenuOutcome::PassThrough);
+        assert!(!menu.is_active());
+        assert_eq!(buffer.as_str(), "ca");
+    }
+
+    #[test]
+    fn home_and_end_dismiss_menu_and_pass_through() {
+        let helper = LineEditorHelper::new();
+        helper.set_binaries(vec!["cargo".to_string(), "cat".to_string()]);
+
+        let mut menu = LshMenu::new("completion_menu", helper);
+        let mut buffer = LineBuffer::new();
+        buffer.insert_str("ca");
+
+        menu.activate(&mut buffer, None);
+        // Navigate to preview "cargo"
+        menu.handle_key(KeyCode::Down, KeyModifiers::NONE, &mut buffer, None);
+        assert_eq!(buffer.as_str(), "cargo");
+
+        // Home dismisses menu, reverts preview, and passes through to editor
+        let outcome = menu.handle_key(KeyCode::Home, KeyModifiers::NONE, &mut buffer, None);
+        assert_eq!(outcome, MenuOutcome::PassThrough);
+        assert!(!menu.is_active());
+        assert_eq!(buffer.as_str(), "ca");
+
+        // Re-activate and test End
+        menu.activate(&mut buffer, None);
+        menu.handle_key(KeyCode::Down, KeyModifiers::NONE, &mut buffer, None);
+        assert_eq!(buffer.as_str(), "cargo");
+
+        let outcome = menu.handle_key(KeyCode::End, KeyModifiers::NONE, &mut buffer, None);
+        assert_eq!(outcome, MenuOutcome::PassThrough);
+        assert!(!menu.is_active());
+        assert_eq!(buffer.as_str(), "ca");
+    }
+
+    #[test]
+    fn space_when_navigated_commits_with_space_including_directories() {
+        let helper = LineEditorHelper::new();
+
+        let mut menu = LshMenu::new("completion_menu", helper);
+        let mut buffer = LineBuffer::new();
+        buffer.insert_str("cd s");
+
+        // Simulate active menu with a directory candidate
+        menu.active = true;
+        menu.start = 3;
+        menu.original_text = "s".to_string();
+        menu.initial_query = "s".to_string();
+        menu.current_replacement_len = 1;
+        menu.items = vec![
+            CompletionItem::new("src/", "src/", CompletionKind::Directory),
+            CompletionItem::new("scripts/", "scripts/", CompletionKind::Directory),
+        ];
+
+        // Navigate with Down advances to next candidate ("scripts/")
+        menu.handle_key(KeyCode::Down, KeyModifiers::NONE, &mut buffer, None);
+        assert!(menu.navigated);
+        assert_eq!(buffer.as_str(), "cd scripts/");
+
+        // Space commits "scripts/" WITH a trailing space so user can type next argument
+        let outcome = menu.handle_key(KeyCode::Char(' '), KeyModifiers::NONE, &mut buffer, None);
+        assert_eq!(outcome, MenuOutcome::Accepted);
+        assert!(!menu.is_active());
+        assert_eq!(buffer.as_str(), "cd scripts/ ");
+    }
+
+    #[test]
+    fn space_when_unnavigated_dismisses_and_passes_through() {
+        let helper = LineEditorHelper::new();
+        helper.set_binaries(vec!["cargo".to_string(), "cat".to_string()]);
+
+        let mut menu = LshMenu::new("completion_menu", helper);
+        let mut buffer = LineBuffer::new();
+        buffer.insert_str("ca");
+
+        menu.activate(&mut buffer, None);
+        assert!(menu.is_active());
+
+        // Space without prior navigation dismisses menu with PassThrough so editor inserts literal space
+        let outcome = menu.handle_key(KeyCode::Char(' '), KeyModifiers::NONE, &mut buffer, None);
+        assert_eq!(outcome, MenuOutcome::PassThrough);
+        assert!(!menu.is_active());
+        assert_eq!(buffer.as_str(), "ca");
     }
 }
