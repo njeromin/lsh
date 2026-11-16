@@ -4,7 +4,7 @@ use lsh_syntax::ast::{BinaryOp, Expr, UnaryOp};
 
 use crate::{
     eval::{
-        EvalFlow, Evaluator, cmds,
+        EvalError, EvalFlow, Evaluator, cmds,
         value::{FunctionValue, Value},
     },
     expand::{self, ExpandCtx},
@@ -26,22 +26,33 @@ impl Evaluator {
         receiver: Option<(Expr, Value)>,
     ) -> Value {
         let mut scope_indices = vec![0];
-        self.call_user_function_with_values_and_receiver(func, args, receiver, &mut scope_indices)
+        match self.try_call_user_function_with_values_and_receiver(
+            func,
+            args,
+            receiver,
+            &mut scope_indices,
+        ) {
+            Ok(val) => val,
+            Err(err) => {
+                self.report_runtime_error(&err);
+                Value::Null
+            }
+        }
     }
 
-    pub(crate) fn call_user_function_with_receiver(
+    pub(crate) fn try_call_user_function_with_receiver(
         &mut self,
         func: &FunctionValue,
         args: &[Expr],
         receiver: Option<(Expr, Value)>,
         scope_indices: &mut Vec<usize>,
-    ) -> Value {
-        let evaluated_args: Vec<Value> = args
-            .iter()
-            .map(|arg| self.evaluate_expr(arg, true, scope_indices))
-            .collect();
+    ) -> Result<Value, EvalError> {
+        let mut evaluated_args = Vec::with_capacity(args.len());
+        for arg in args {
+            evaluated_args.push(self.try_evaluate_expr(arg, true, scope_indices)?);
+        }
 
-        self.call_user_function_with_values_and_receiver(
+        self.try_call_user_function_with_values_and_receiver(
             func,
             evaluated_args,
             receiver,
@@ -49,13 +60,13 @@ impl Evaluator {
         )
     }
 
-    pub(crate) fn call_user_function_with_values_and_receiver(
+    pub(crate) fn try_call_user_function_with_values_and_receiver(
         &mut self,
         func: &FunctionValue,
         evaluated_args: Vec<Value>,
         receiver: Option<(Expr, Value)>,
         scope_indices: &mut Vec<usize>,
-    ) -> Value {
+    ) -> Result<Value, EvalError> {
         let effective_receiver = receiver.clone().or_else(|| {
             func.bound_this
                 .as_ref()
@@ -64,76 +75,65 @@ impl Evaluator {
 
         if let crate::eval::value::FunctionKind::Native { ref func, .. } = func.kind {
             let this_val = effective_receiver.map(|(_, ref v)| v.clone());
-            return (func.clone())(self, evaluated_args, this_val);
+            return Ok((func.clone())(self, evaluated_args, this_val));
         }
 
-        let scope_index = self.make_scope();
-        scope_indices.push(scope_index);
+        let (outcome_res, final_this) = self.with_scope(
+            scope_indices,
+            |scope| {
+                if let Some((_, ref this_val)) = effective_receiver {
+                    scope.vars.insert("this".to_string(), this_val.clone());
+                }
 
-        if let Some(scope) = self.scopes.get_mut(scope_index) {
-            if let Some((_, ref this_val)) = effective_receiver {
-                scope.vars.insert("this".to_string(), this_val.clone());
-            }
+                for (param_index, param_name) in func.params.iter().enumerate() {
+                    let value = evaluated_args
+                        .get(param_index)
+                        .cloned()
+                        .unwrap_or(Value::Null);
+                    scope.vars.insert(param_name.to_owned(), value);
+                }
+            },
+            |eval, scope_indices, scope_index| {
+                let outcome = eval.try_evaluate_statements(&func.body, scope_indices);
+                let final_this = if receiver.is_some() {
+                    eval.scopes
+                        .get(scope_index)
+                        .and_then(|s| s.vars.get("this").cloned())
+                } else {
+                    None
+                };
+                (outcome, final_this)
+            },
+        );
 
-            for (param_index, param_name) in func.params.iter().enumerate() {
-                let value = evaluated_args
-                    .get(param_index)
-                    .cloned()
-                    .unwrap_or(Value::Null);
-                scope.vars.insert(param_name.to_owned(), value);
-            }
-        } else {
-            panic!("Failed to create function call scope.");
-        }
-
-        let outcome = self.evaluate_statements(&func.body, scope_indices);
-
-        let final_this = if receiver.is_some() {
-            self.scopes
-                .get(scope_index)
-                .and_then(|s| s.vars.get("this").cloned())
-        } else {
-            None
-        };
-
-        let popped_scope_index = scope_indices
-            .pop()
-            .expect("Failed to pop scope index after function call.");
-        if popped_scope_index != scope_index {
-            panic!(
-                "Scope stack mismatch: expected to pop scope {scope_index}, popped {popped_scope_index}."
-            );
-        }
-
-        self.scopes
-            .pop()
-            .expect("Failed to pop evaluator scope after function call.");
+        let outcome = outcome_res?;
 
         if let (Some((receiver_expr, initial_this)), Some(updated_this)) = (receiver, final_this)
             && updated_this != initial_this
             && Self::is_assignable(&receiver_expr)
         {
-            self.assign_target(&receiver_expr, updated_this, scope_indices);
+            self.assign_target(&receiver_expr, updated_this, scope_indices)?;
         }
 
-        match outcome.flow {
+        Ok(match outcome.flow {
             EvalFlow::Continue | EvalFlow::LoopBreak | EvalFlow::LoopContinue => Value::Null,
             EvalFlow::Return(value) => value,
-        }
+        })
     }
 
-    pub(crate) fn evaluate_expr(
+    pub(crate) fn try_evaluate_expr(
         &mut self,
         expr: &Expr,
         is_secondary: bool,
         scope_indices: &mut Vec<usize>,
-    ) -> Value {
+    ) -> Result<Value, EvalError> {
         match expr {
             Expr::Call { target, args } => {
-                let (target_val, receiver) = self.resolve_callable_target(target, scope_indices);
+                let (target_val, receiver) =
+                    self.resolve_callable_target(target, scope_indices)?;
 
                 if let Value::Function(func) = &target_val {
-                    return self.call_user_function_with_receiver(
+                    return self.try_call_user_function_with_receiver(
                         func,
                         args,
                         receiver,
@@ -143,39 +143,54 @@ impl Evaluator {
 
                 // For command execution, we only want to do this if we are not in a secondary expression (like an argument).
                 if is_secondary {
-                    return target_val;
+                    return Ok(target_val);
                 }
 
                 let identifier = target_val.to_string();
                 if let Some((func, plugin_manifest)) = self.plugin_manager.get_command(&identifier)
                 {
                     let rec = Some((Expr::Variable("this".to_string()), plugin_manifest));
-                    return self.call_user_function_with_receiver(&func, args, rec, scope_indices);
+                    return self.try_call_user_function_with_receiver(
+                        &func,
+                        args,
+                        rec,
+                        scope_indices,
+                    );
                 }
 
                 let (res_cmd, res_args) = self.resolve_command(identifier);
 
                 // Concatenate arguments from the input cmd with the provided arguments from the evaluator.
-                let args = self.build_command_args(res_args, args, scope_indices);
+                let args = self.build_command_args(res_args, args, scope_indices)?;
 
                 let mut io = IoCtx::<io::Stdin, io::Stdout, io::Stderr>::default();
 
                 let code = cmds::exec_cmd(self, &res_cmd, args, &[], &mut io);
                 self.last_status = code;
 
-                Value::Null
+                Ok(Value::Null)
             }
             Expr::Word(word) => {
                 if let Some((func, rec_info)) =
                     self.resolve_named_function_with_receiver(word, scope_indices)
                 {
                     let rec = rec_info.map(|(path, val)| (Self::path_to_expr(&path), val));
-                    return self.call_user_function_with_receiver(&func, &[], rec, scope_indices);
+                    return self.try_call_user_function_with_receiver(
+                        &func,
+                        &[],
+                        rec,
+                        scope_indices,
+                    );
                 }
 
                 if let Some((func, plugin_manifest)) = self.plugin_manager.get_command(word) {
                     let rec = Some((Expr::Variable("this".to_string()), plugin_manifest));
-                    return self.call_user_function_with_receiver(&func, &[], rec, scope_indices);
+                    return self.try_call_user_function_with_receiver(
+                        &func,
+                        &[],
+                        rec,
+                        scope_indices,
+                    );
                 }
 
                 let (res_cmd, args) = self.resolve_command(word.to_owned());
@@ -185,7 +200,7 @@ impl Evaluator {
                     if !matches!(word.as_str(), "?" | "$" | "!" | "#" | "*" | "@")
                         && let Some(val) = self.scoped_var(word, scope_indices)
                     {
-                        return val;
+                        return Ok(val);
                     }
                     if word.contains('.') {
                         let parts: Vec<&str> = word.split('.').collect();
@@ -208,79 +223,79 @@ impl Evaluator {
                             if !matches!(cur, Value::Null) {
                                 if let Value::Function(f) = cur {
                                     if f.bound_this.is_none() {
-                                        return Value::function(f.with_bound_this(parent));
+                                        return Ok(Value::function(f.with_bound_this(parent)));
                                     } else {
-                                        return Value::Function(f);
+                                        return Ok(Value::Function(f));
                                     }
                                 }
-                                return cur;
+                                return Ok(cur);
                             }
                         }
                     }
                     if let Ok(env_var) = env::var(word) {
-                        return Value::String(env_var);
+                        return Ok(Value::String(env_var));
                     }
-                    return Value::String(word.to_owned());
+                    return Ok(Value::String(word.to_owned()));
                 }
 
                 let mut io = IoCtx::<io::Stdin, io::Stdout, io::Stderr>::default();
                 let code = cmds::exec_cmd(self, &res_cmd, args, &[], &mut io);
                 self.last_status = code;
 
-                Value::Null
+                Ok(Value::Null)
             }
             Expr::Variable(var_name) => {
                 if var_name.contains('.') {
                     let expanded_target = Self::path_to_expr(var_name);
-                    return self.evaluate_expr(&expanded_target, is_secondary, scope_indices);
+                    return self.try_evaluate_expr(&expanded_target, is_secondary, scope_indices);
                 }
 
                 if let Some(value) = self.scoped_var(var_name, scope_indices) {
-                    return value;
+                    return Ok(value);
                 }
 
                 // Try to find variable in environment.
                 if let Ok(env_var) = env::var(var_name) {
                     // Environment variables are resolved into strings.
-                    Value::String(env_var)
+                    Ok(Value::String(env_var))
                 } else {
-                    Value::Null
+                    Ok(Value::Null)
                 }
             }
             Expr::Unary { op, expr } => {
-                let val = self.evaluate_expr(expr, true, scope_indices);
-                match op {
+                let val = self.try_evaluate_expr(expr, true, scope_indices)?;
+                Ok(match op {
                     UnaryOp::Not => Value::Bool(!val.is_truthy()),
                     UnaryOp::Neg => match val {
                         Value::Number(n) => Value::Number(-n),
                         _ => Value::Null,
                     },
-                }
+                })
             }
             Expr::Binary {
                 op,
                 left: left_box,
                 right: right_box,
             } => {
-                let left_res = self.evaluate_expr(left_box, true, scope_indices);
-                let right_res = self.evaluate_expr(right_box, true, scope_indices);
-                Self::eval_binary_op(op, left_res, right_res)
+                let left_res = self.try_evaluate_expr(left_box, true, scope_indices)?;
+                let right_res = self.try_evaluate_expr(right_box, true, scope_indices)?;
+                Ok(Self::eval_binary_op(op, left_res, right_res))
             }
             Expr::Index { object, index } => {
-                let object_value = self.evaluate_expr(object, true, scope_indices);
-                let index_value = self.evaluate_expr(index, true, scope_indices);
+                let object_value = self.try_evaluate_expr(object, true, scope_indices)?;
+                let index_value = self.try_evaluate_expr(index, true, scope_indices)?;
 
                 if let Some(key) = Self::object_index_key(index_value) {
                     let (prop_val, parent_obj) = if key.contains('.') {
                         let parts: Vec<&str> = key.split('.').collect();
                         let mut cur_obj = object_value;
-                        for part in &parts[..parts.len() - 1] {
+                        for part in &parts[..parts.len().saturating_sub(1)] {
                             cur_obj = Self::get_child_member(&cur_obj, part);
                             if matches!(cur_obj, Value::Null) {
                                 break;
                             }
                         }
-                        let last = parts.last().unwrap();
+                        let last = parts.last().copied().unwrap_or_default();
                         let prop = Self::get_child_member(&cur_obj, last);
                         (prop, cur_obj)
                     } else {
@@ -290,27 +305,27 @@ impl Evaluator {
 
                     if let Value::Function(f) = prop_val {
                         if f.bound_this.is_none() {
-                            Value::function(f.with_bound_this(parent_obj))
+                            Ok(Value::function(f.with_bound_this(parent_obj)))
                         } else {
-                            Value::Function(f)
+                            Ok(Value::Function(f))
                         }
                     } else {
-                        prop_val
+                        Ok(prop_val)
                     }
                 } else {
-                    Value::Null
+                    Ok(Value::Null)
                 }
             }
             Expr::TypeOf(expr) => {
                 // Evaluate the expression and return its type as a string.
-                let evaluated_value = self.evaluate_expr(expr, true, scope_indices);
-                Value::String(evaluated_value.get_type().to_string())
+                let evaluated_value = self.try_evaluate_expr(expr, true, scope_indices)?;
+                Ok(Value::String(evaluated_value.get_type().to_string()))
             }
-            Expr::String(string) | Expr::QuotedString(string) => Value::String(string.to_owned()),
+            Expr::String(string) | Expr::QuotedString(string) => Ok(Value::String(string.to_owned())),
             Expr::InterpolatedString(parts) => {
                 let mut buf = String::new();
                 for part in parts {
-                    let val = self.evaluate_expr(part, true, scope_indices);
+                    let val = self.try_evaluate_expr(part, true, scope_indices)?;
                     match val {
                         Value::Object(map) => {
                             let guard = match map.read() {
@@ -331,24 +346,28 @@ impl Evaluator {
                         }
                     }
                 }
-                Value::String(buf)
+                Ok(Value::String(buf))
             }
-            Expr::Number(num) => Value::Number(*num),
-            Expr::Bool(bool) => Value::Bool(*bool),
+            Expr::Number(num) => Ok(Value::Number(*num)),
+            Expr::Bool(bool) => Ok(Value::Bool(*bool)),
             Expr::CommandSub(expr) => {
                 match expr.as_ref() {
                     Expr::Call { target, args } => {
                         let (target_val, receiver) =
-                            self.resolve_callable_target(target, scope_indices);
+                            self.resolve_callable_target(target, scope_indices)?;
 
                         if let Value::Function(func) = &target_val {
-                            let value = self.call_user_function_with_receiver(
+                            let value = self.try_call_user_function_with_receiver(
                                 func,
                                 args,
                                 receiver,
                                 scope_indices,
-                            );
-                            return Self::make_command_result(0, value.to_string(), String::new());
+                            )?;
+                            return Ok(Self::make_command_result(
+                                0,
+                                value.to_string(),
+                                String::new(),
+                            ));
                         }
 
                         let identifier = target_val.to_string();
@@ -357,30 +376,38 @@ impl Evaluator {
                             self.resolve_named_function_with_receiver(&identifier, scope_indices)
                         {
                             let rec = rec_info.map(|(path, val)| (Self::path_to_expr(&path), val));
-                            let value = self.call_user_function_with_receiver(
+                            let value = self.try_call_user_function_with_receiver(
                                 &func,
                                 args,
                                 rec,
                                 scope_indices,
-                            );
-                            return Self::make_command_result(0, value.to_string(), String::new());
+                            )?;
+                            return Ok(Self::make_command_result(
+                                0,
+                                value.to_string(),
+                                String::new(),
+                            ));
                         }
 
                         if let Some((func, plugin_manifest)) =
                             self.plugin_manager.get_command(&identifier)
                         {
                             let rec = Some((Expr::Variable("this".to_string()), plugin_manifest));
-                            let value = self.call_user_function_with_receiver(
+                            let value = self.try_call_user_function_with_receiver(
                                 &func,
                                 args,
                                 rec,
                                 scope_indices,
-                            );
-                            return Self::make_command_result(0, value.to_string(), String::new());
+                            )?;
+                            return Ok(Self::make_command_result(
+                                0,
+                                value.to_string(),
+                                String::new(),
+                            ));
                         }
 
                         let (res_cmd, res_args) = self.resolve_command(identifier);
-                        let all_args = self.build_command_args(res_args, args, scope_indices);
+                        let all_args = self.build_command_args(res_args, args, scope_indices)?;
 
                         let mut io = IoCtx {
                             input: io::empty(),
@@ -393,36 +420,44 @@ impl Evaluator {
 
                         let exit_status = cmds::exec_cmd(self, &res_cmd, all_args, &[], &mut io);
 
-                        Self::make_command_result(
+                        Ok(Self::make_command_result(
                             exit_status,
                             String::from_utf8(io.out).unwrap_or_default(),
                             String::from_utf8(io.err).unwrap_or_default(),
-                        )
+                        ))
                     }
                     Expr::Word(word) => {
                         if let Some((func, rec_info)) =
                             self.resolve_named_function_with_receiver(word, scope_indices)
                         {
                             let rec = rec_info.map(|(path, val)| (Self::path_to_expr(&path), val));
-                            let value = self.call_user_function_with_receiver(
+                            let value = self.try_call_user_function_with_receiver(
                                 &func,
                                 &[],
                                 rec,
                                 scope_indices,
-                            );
-                            return Self::make_command_result(0, value.to_string(), String::new());
+                            )?;
+                            return Ok(Self::make_command_result(
+                                0,
+                                value.to_string(),
+                                String::new(),
+                            ));
                         }
 
                         if let Some((func, plugin_manifest)) = self.plugin_manager.get_command(word)
                         {
                             let rec = Some((Expr::Variable("this".to_string()), plugin_manifest));
-                            let value = self.call_user_function_with_receiver(
+                            let value = self.try_call_user_function_with_receiver(
                                 &func,
                                 &[],
                                 rec,
                                 scope_indices,
-                            );
-                            return Self::make_command_result(0, value.to_string(), String::new());
+                            )?;
+                            return Ok(Self::make_command_result(
+                                0,
+                                value.to_string(),
+                                String::new(),
+                            ));
                         }
 
                         let (res_cmd, all_args) = self.resolve_command(word.to_owned());
@@ -439,11 +474,11 @@ impl Evaluator {
 
                         let exit_status = cmds::exec_cmd(self, &res_cmd, all_args, &[], &mut io);
 
-                        Self::make_command_result(
+                        Ok(Self::make_command_result(
                             exit_status,
                             String::from_utf8(io.out).unwrap_or_default(),
                             String::from_utf8(io.err).unwrap_or_default(),
-                        )
+                        ))
                     }
                     Expr::Bool(b) => {
                         let word = if *b { "true" } else { "false" };
@@ -461,16 +496,20 @@ impl Evaluator {
 
                         let exit_status = cmds::exec_cmd(self, &res_cmd, all_args, &[], &mut io);
 
-                        Self::make_command_result(
+                        Ok(Self::make_command_result(
                             exit_status,
                             String::from_utf8(io.out).unwrap_or_default(),
                             String::from_utf8(io.err).unwrap_or_default(),
-                        )
+                        ))
                     }
                     other => {
                         // Fallback: allow non-command expressions inside $(...)
-                        let value = self.evaluate_expr(other, true, scope_indices);
-                        Self::make_command_result(0, value.to_string(), String::new())
+                        let value = self.try_evaluate_expr(other, true, scope_indices)?;
+                        Ok(Self::make_command_result(
+                            0,
+                            value.to_string(),
+                            String::new(),
+                        ))
                     }
                 }
             }
@@ -480,30 +519,30 @@ impl Evaluator {
                     vec![],
                     scope_indices,
                     true,
-                );
-                Self::make_command_result(
+                )?;
+                Ok(Self::make_command_result(
                     code,
                     String::from_utf8(out).unwrap_or_default(),
                     String::from_utf8(err).unwrap_or_default(),
-                )
+                ))
             }
             Expr::AnonymousFunction { params, body } => {
-                Value::function(FunctionValue::ast(params.clone(), body.clone()))
+                Ok(Value::function(FunctionValue::ast(params.clone(), body.clone())))
             }
             Expr::Object(expr_map) => {
                 let mut obj = HashMap::new();
                 for (key, value) in expr_map {
-                    let value_value = self.evaluate_expr(value, true, scope_indices);
+                    let value_value = self.try_evaluate_expr(value, true, scope_indices)?;
                     obj.insert(key.to_string(), value_value);
                 }
-                Value::object(obj)
+                Ok(Value::object(obj))
             }
             Expr::Array(elements) => {
                 let mut evaluated = Vec::with_capacity(elements.len());
                 for elem in elements {
-                    evaluated.push(self.evaluate_expr(elem, true, scope_indices));
+                    evaluated.push(self.try_evaluate_expr(elem, true, scope_indices)?);
                 }
-                Value::array(evaluated)
+                Ok(Value::array(evaluated))
             }
         }
     }

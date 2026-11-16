@@ -7,7 +7,7 @@ use lsh_syntax::ast::{Program, Statement};
 use lsh_sys::signals::STATUS_SIGINT;
 
 use crate::eval::{
-    Evaluator,
+    EvalError, Evaluator,
     value::{FunctionValue, Value},
 };
 
@@ -26,38 +26,54 @@ pub struct EvalOutcome {
 }
 
 impl Evaluator {
+    pub fn try_evaluate_program(&mut self, prog: Program) -> Result<EvalOutcome, EvalError> {
+        self.try_evaluate_statements(&prog.body, &mut vec![0])
+    }
+
     pub fn evaluate_program(&mut self, prog: Program) -> EvalOutcome {
-        self.evaluate_statements(&prog.body, &mut vec![0])
+        match self.try_evaluate_program(prog) {
+            Ok(outcome) => outcome,
+            Err(err) => {
+                self.report_runtime_error(&err);
+                EvalOutcome {
+                    flow: EvalFlow::Continue,
+                    last_status: 1,
+                }
+            }
+        }
     }
 
     pub fn evaluate(&mut self, prog: Program) -> i32 {
         self.evaluate_program(prog).last_status
     }
 
-    fn evaluate_in_new_scope(
+    pub fn evaluate_statements(
         &mut self,
         statements: &[Statement],
         scope_indices: &mut Vec<usize>,
     ) -> EvalOutcome {
-        let scope_index = self.make_scope();
-        scope_indices.push(scope_index);
-
-        let outcome = self.evaluate_statements(statements, scope_indices);
-
-        let popped_scope_index = scope_indices
-            .pop()
-            .expect("Failed to pop scope index after scoped evaluation.");
-        if popped_scope_index != scope_index {
-            panic!(
-                "Scope stack mismatch: expected to pop scope {scope_index}, popped {popped_scope_index}."
-            );
+        match self.try_evaluate_statements(statements, scope_indices) {
+            Ok(outcome) => outcome,
+            Err(err) => {
+                self.report_runtime_error(&err);
+                EvalOutcome {
+                    flow: EvalFlow::Continue,
+                    last_status: 1,
+                }
+            }
         }
+    }
 
-        self.scopes
-            .pop()
-            .expect("Failed to pop evaluator scope after scoped evaluation.");
-
-        outcome
+    fn evaluate_in_new_scope(
+        &mut self,
+        statements: &[Statement],
+        scope_indices: &mut Vec<usize>,
+    ) -> Result<EvalOutcome, EvalError> {
+        self.with_scope(
+            scope_indices,
+            |_| {},
+            |eval, scope_indices, _| eval.try_evaluate_statements(statements, scope_indices),
+        )
     }
 
     fn evaluate_in_new_scope_with_var(
@@ -66,50 +82,35 @@ impl Evaluator {
         var_name: &str,
         var_val: Value,
         scope_indices: &mut Vec<usize>,
-    ) -> EvalOutcome {
-        let scope_index = self.make_scope();
-        if let Some(scope) = self.scopes.get_mut(scope_index) {
-            scope.vars.insert(var_name.to_string(), var_val);
-        }
-        scope_indices.push(scope_index);
-
-        let outcome = self.evaluate_statements(statements, scope_indices);
-
-        let popped_scope_index = scope_indices
-            .pop()
-            .expect("Failed to pop scope index after scoped evaluation.");
-        if popped_scope_index != scope_index {
-            panic!(
-                "Scope stack mismatch: expected to pop scope {scope_index}, popped {popped_scope_index}."
-            );
-        }
-
-        self.scopes
-            .pop()
-            .expect("Failed to pop evaluator scope after scoped evaluation.");
-
-        outcome
+    ) -> Result<EvalOutcome, EvalError> {
+        self.with_scope(
+            scope_indices,
+            |scope| {
+                scope.vars.insert(var_name.to_string(), var_val);
+            },
+            |eval, scope_indices, _| eval.try_evaluate_statements(statements, scope_indices),
+        )
     }
 
-    pub fn evaluate_statements(
+    pub fn try_evaluate_statements(
         &mut self,
         statements: &[Statement],
         scope_indices: &mut Vec<usize>,
-    ) -> EvalOutcome {
+    ) -> Result<EvalOutcome, EvalError> {
         let mut last_status = 0;
 
         for statement in statements {
             if self.interrupted.swap(false, Ordering::Relaxed) {
                 self.last_status = STATUS_SIGINT;
-                return EvalOutcome {
+                return Ok(EvalOutcome {
                     flow: EvalFlow::Return(Value::Null),
                     last_status: STATUS_SIGINT,
-                };
+                });
             }
 
             match statement {
                 Statement::Expr(expr) => {
-                    self.evaluate_expr(expr, false, scope_indices);
+                    self.try_evaluate_expr(expr, false, scope_indices)?;
                     last_status = self.last_status;
                 }
                 Statement::Command(cmd_expr) => {
@@ -118,7 +119,7 @@ impl Evaluator {
                         vec![],
                         scope_indices,
                         false,
-                    );
+                    )?;
                     last_status = code;
                     self.last_status = code;
                     if !out.is_empty() {
@@ -128,14 +129,14 @@ impl Evaluator {
                         let _ = io::stderr().write_all(&err);
                     }
                     if code == STATUS_SIGINT || self.interrupted.swap(false, Ordering::Relaxed) {
-                        return EvalOutcome {
+                        return Ok(EvalOutcome {
                             flow: EvalFlow::Return(Value::Null),
                             last_status: STATUS_SIGINT,
-                        };
+                        });
                     }
                 }
                 Statement::Let { name, value } => {
-                    let expr = self.evaluate_expr(value, true, scope_indices);
+                    let expr = self.try_evaluate_expr(value, true, scope_indices)?;
                     last_status = 0;
 
                     if let Some(last_scope_index) = scope_indices.last()
@@ -144,16 +145,16 @@ impl Evaluator {
                         scope.vars.insert(name.to_owned(), expr.clone());
                         self.sync_env_var_if_exported(name, &expr);
                     } else {
-                        panic!("Failed to get current scope.");
+                        return Err(EvalError::ScopeNotFound);
                     }
                 }
                 Statement::Assign { target, value } => {
-                    let assigned_value = self.evaluate_expr(value, true, scope_indices);
-                    self.assign_target(target, assigned_value, scope_indices);
+                    let assigned_value = self.try_evaluate_expr(value, true, scope_indices)?;
+                    self.assign_target(target, assigned_value, scope_indices)?;
                     last_status = 0;
                 }
                 Statement::CompoundAssign { target, op, value } => {
-                    self.compound_assign_target(target, op, value, scope_indices);
+                    self.compound_assign_target(target, op, value, scope_indices)?;
                     last_status = 0;
                 }
                 Statement::If {
@@ -161,26 +162,26 @@ impl Evaluator {
                     then_branch,
                     else_branch,
                 } => {
-                    let cond_res = self.evaluate_expr(condition, true, scope_indices);
+                    let cond_res = self.try_evaluate_expr(condition, true, scope_indices)?;
 
                     if cond_res.is_truthy() {
-                        let outcome = self.evaluate_in_new_scope(then_branch, scope_indices);
+                        let outcome = self.evaluate_in_new_scope(then_branch, scope_indices)?;
                         last_status = outcome.last_status;
                         if outcome.flow != EvalFlow::Continue {
-                            return outcome;
+                            return Ok(outcome);
                         }
                     } else if let Some(else_branch_statements) = else_branch {
                         let outcome =
-                            self.evaluate_in_new_scope(else_branch_statements, scope_indices);
+                            self.evaluate_in_new_scope(else_branch_statements, scope_indices)?;
                         last_status = outcome.last_status;
                         if outcome.flow != EvalFlow::Continue {
-                            return outcome;
+                            return Ok(outcome);
                         }
                     }
                 }
                 Statement::While { condition, body } => {
                     while self
-                        .evaluate_expr(condition, true, scope_indices)
+                        .try_evaluate_expr(condition, true, scope_indices)?
                         .is_truthy()
                     {
                         if self.interrupted.swap(false, Ordering::Relaxed) {
@@ -189,7 +190,7 @@ impl Evaluator {
                             break;
                         }
 
-                        let outcome = self.evaluate_in_new_scope(body, scope_indices);
+                        let outcome = self.evaluate_in_new_scope(body, scope_indices)?;
                         last_status = outcome.last_status;
                         if outcome.last_status == STATUS_SIGINT
                             || self.interrupted.swap(false, Ordering::Relaxed)
@@ -205,10 +206,10 @@ impl Evaluator {
                             continue;
                         }
                         if let EvalFlow::Return(value) = outcome.flow {
-                            return EvalOutcome {
+                            return Ok(EvalOutcome {
                                 flow: EvalFlow::Return(value),
                                 last_status,
-                            };
+                            });
                         }
                     }
                 }
@@ -217,7 +218,7 @@ impl Evaluator {
                     iterable,
                     body,
                 } => {
-                    let iter_val = self.evaluate_expr(iterable, true, scope_indices);
+                    let iter_val = self.try_evaluate_expr(iterable, true, scope_indices)?;
                     let items: Vec<Value> = match iter_val {
                         Value::Array(arr) => {
                             let guard = match arr.read() {
@@ -277,7 +278,7 @@ impl Evaluator {
                             variable,
                             item,
                             scope_indices,
-                        );
+                        )?;
                         last_status = outcome.last_status;
                         if outcome.last_status == STATUS_SIGINT
                             || self.interrupted.swap(false, Ordering::Relaxed)
@@ -293,24 +294,24 @@ impl Evaluator {
                             continue;
                         }
                         if let EvalFlow::Return(value) = outcome.flow {
-                            return EvalOutcome {
+                            return Ok(EvalOutcome {
                                 flow: EvalFlow::Return(value),
                                 last_status,
-                            };
+                            });
                         }
                     }
                 }
                 Statement::Break => {
-                    return EvalOutcome {
+                    return Ok(EvalOutcome {
                         flow: EvalFlow::LoopBreak,
                         last_status,
-                    };
+                    });
                 }
                 Statement::Continue => {
-                    return EvalOutcome {
+                    return Ok(EvalOutcome {
                         flow: EvalFlow::LoopContinue,
                         last_status,
-                    };
+                    });
                 }
                 Statement::FunctionDeclaration {
                     target,
@@ -319,34 +320,34 @@ impl Evaluator {
                 } => {
                     let func_value =
                         Value::function(FunctionValue::ast(params.clone(), body.clone()));
-                    self.assign_target(target, func_value, scope_indices);
+                    self.assign_target(target, func_value, scope_indices)?;
                     last_status = 0;
                 }
                 Statement::Return(maybe_expr) => {
                     let result = if let Some(expr) = maybe_expr {
-                        self.evaluate_expr(expr, true, scope_indices)
+                        self.try_evaluate_expr(expr, true, scope_indices)?
                     } else {
                         Value::Null
                     };
 
-                    return EvalOutcome {
+                    return Ok(EvalOutcome {
                         flow: EvalFlow::Return(result),
                         last_status,
-                    };
+                    });
                 }
                 Statement::Block(block) => {
-                    let outcome = self.evaluate_in_new_scope(block, scope_indices);
+                    let outcome = self.evaluate_in_new_scope(block, scope_indices)?;
                     last_status = outcome.last_status;
                     if outcome.flow != EvalFlow::Continue {
-                        return outcome;
+                        return Ok(outcome);
                     }
                 }
             }
         }
 
-        EvalOutcome {
+        Ok(EvalOutcome {
             flow: EvalFlow::Continue,
             last_status,
-        }
+        })
     }
 }

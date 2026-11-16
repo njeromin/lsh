@@ -18,59 +18,57 @@ use crate::{
 
 impl Evaluator {
     pub fn trigger_pre_prompt(&mut self) {
-        let registry_hooks = self.hook_registry.read().unwrap().get_hooks("pre_prompt");
+        let registry_hooks = self
+            .hook_registry
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
+            .get_hooks("pre_prompt");
         for func in registry_hooks {
-            let mut scope_indices = vec![0];
-            self.call_user_function_with_values_and_receiver(
-                &func,
-                vec![],
-                None,
-                &mut scope_indices,
-            );
+            self.exec_function(&func, vec![]);
         }
     }
 
     pub fn trigger_pre_exec(&mut self, cmd_line: &str) {
-        let registry_hooks = self.hook_registry.read().unwrap().get_hooks("pre_exec");
+        let registry_hooks = self
+            .hook_registry
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
+            .get_hooks("pre_exec");
         for func in registry_hooks {
-            let mut scope_indices = vec![0];
-            self.call_user_function_with_values_and_receiver(
-                &func,
-                vec![Value::String(cmd_line.to_string())],
-                None,
-                &mut scope_indices,
-            );
+            self.exec_function(&func, vec![Value::String(cmd_line.to_string())]);
         }
     }
 
     pub fn trigger_post_exec(&mut self, cmd_line: &str, exit_code: i32) {
-        let registry_hooks = self.hook_registry.read().unwrap().get_hooks("post_exec");
+        let registry_hooks = self
+            .hook_registry
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
+            .get_hooks("post_exec");
         for func in registry_hooks {
-            let mut scope_indices = vec![0];
-            self.call_user_function_with_values_and_receiver(
+            self.exec_function(
                 &func,
                 vec![
                     Value::String(cmd_line.to_string()),
                     Value::Number(exit_code as f64),
                 ],
-                None,
-                &mut scope_indices,
             );
         }
     }
 
     pub fn trigger_chpwd(&mut self, old_pwd: &str, new_pwd: &str) {
-        let registry_hooks = self.hook_registry.read().unwrap().get_hooks("chpwd");
+        let registry_hooks = self
+            .hook_registry
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
+            .get_hooks("chpwd");
         for func in registry_hooks {
-            let mut scope_indices = vec![0];
-            self.call_user_function_with_values_and_receiver(
+            self.exec_function(
                 &func,
                 vec![
                     Value::String(old_pwd.to_string()),
                     Value::String(new_pwd.to_string()),
                 ],
-                None,
-                &mut scope_indices,
             );
         }
     }
@@ -193,22 +191,20 @@ impl Evaluator {
         let canonical_path = path.canonicalize().unwrap_or_else(|_| path.clone());
 
         {
-            let cache = self.module_cache.read().unwrap();
+            let cache = self.module_cache.read().unwrap_or_else(|p| p.into_inner());
             if let Some(cached_val) = cache.get(&canonical_path) {
                 return Ok(cached_val.clone());
             }
         }
 
-        let scope_index = self.make_scope();
-        let mut scope_indices = vec![0, scope_index];
-        let outcome_res =
-            crate::eval::exec::exec_file_outcome_scoped(self, path, &mut scope_indices);
-
-        if scope_indices.pop() == Some(scope_index) {
-            self.scopes.pop();
-        }
-
-        let outcome = outcome_res?;
+        let mut scope_indices = vec![0];
+        let outcome = self.with_scope(
+            &mut scope_indices,
+            |_| {},
+            |eval, scope_indices, _| {
+                crate::eval::exec::exec_file_outcome_scoped(eval, path, scope_indices)
+            },
+        )?;
         let export_val = match outcome.flow {
             EvalFlow::Return(v) => v,
             _ => Value::Null,
@@ -257,7 +253,7 @@ impl Evaluator {
             }
 
             if !hooks_to_register.is_empty() {
-                let mut reg = self.hook_registry.write().unwrap();
+                let mut reg = self.hook_registry.write().unwrap_or_else(|p| p.into_inner());
                 for (event, func) in hooks_to_register {
                     reg.add(&event, func);
                 }
@@ -273,7 +269,7 @@ impl Evaluator {
 
         self.module_cache
             .write()
-            .unwrap()
+            .unwrap_or_else(|p| p.into_inner())
             .insert(canonical_path, export_val.clone());
 
         Ok(export_val)
@@ -309,7 +305,10 @@ impl Evaluator {
                     .or_else(|| manifest.get_property(&full))
                     .or_else(|| manifest.get_property(hook));
                 if let Some(Value::Function(f)) = func_to_remove {
-                    self.hook_registry.write().unwrap().remove(hook, &f);
+                    self.hook_registry
+                        .write()
+                        .unwrap_or_else(|p| p.into_inner())
+                        .remove(hook, &f);
                 }
             }
         }

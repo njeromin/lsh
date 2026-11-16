@@ -125,9 +125,12 @@ fn interactive_session(
         completer.set_vars(eval.get_var_names());
         completer.refresh_binaries_if_path_changed();
 
-        let cwd_path = current_dir().expect("Failed to get CWD");
-        let formatted_cwd = format_cwd(&cwd_path, &home_dir().expect("Failed to get home dir"));
-        execute!(io::stdout(), SetTitle(formatted_cwd)).expect("Failed to set tab title");
+        let cwd_path = current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let formatted_cwd = match home_dir() {
+            Some(home) => format_cwd(&cwd_path, &home),
+            None => cwd_path.to_string_lossy().into_owned(),
+        };
+        let _ = execute!(io::stdout(), SetTitle(formatted_cwd));
         osc::write_7_cwd(&cwd_path);
 
         let prompt_str = get_prompt(eval);
@@ -211,13 +214,11 @@ fn main() {
     // Handle initial config.
     let config_dir = if let Ok(cfg_path) = env::var("LSH_CONFIG_DIR") {
         PathBuf::from(cfg_path)
+    } else if let Some(config_dir) = dirs::config_dir() {
+        config_dir.join("lsh/")
     } else {
-        if let Some(config_dir) = dirs::config_dir() {
-            config_dir.join("lsh/")
-        } else {
-            let current_dir = current_dir().expect("Failed to get current directory");
-            Path::new(&current_dir).join("config/")
-        }
+        let cwd = current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        cwd.join("config/")
     };
 
     let config_entrypoint = config_dir.join("config.lsh");
@@ -226,17 +227,27 @@ fn main() {
         .insert(0, config_dir.join("plugins"));
 
     // Evaluate config if it exists.
-    if fs::exists(&config_entrypoint).expect("Failed to check config file existence") {
-        exec_file(&mut eval, config_entrypoint);
+    match fs::exists(&config_entrypoint) {
+        Ok(true) => {
+            exec_file(&mut eval, config_entrypoint);
+        }
+        Ok(false) => {}
+        Err(e) => {
+            print_error(
+                &mut io::stderr(),
+                &format!("Failed to check config file: {e}"),
+            );
+        }
     }
 
     let lib_path = config_dir.join("lib/");
-    eval.set_var(
+    if let Err(e) = eval.set_var(
         0,
         "lib_path",
         Value::String(lib_path.to_string_lossy().into_owned()),
-    )
-    .expect("Failed to set library path");
+    ) {
+        print_error(&mut io::stderr(), &e.to_string());
+    }
 
     if let Some(file_path) = args.next() {
         // Push command line arguments as into global scope.

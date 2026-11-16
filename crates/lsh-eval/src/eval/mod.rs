@@ -20,21 +20,38 @@ pub use statement::{EvalFlow, EvalOutcome};
 
 use std::{
     collections::{HashMap, HashSet},
-    env,
+    env, fmt, io,
     path::PathBuf,
     sync::{Arc, RwLock, atomic::AtomicBool},
 };
 
 use hooks::HookRegistry;
 use lsh_completions::CompletionRegistry;
+use lsh_syntax::print_error;
 use lsh_sys::signals::get_interrupt_flag;
 
 use crate::{eval::value::Value, jobs::JobManager, plugins::PluginManager};
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EvalError {
     ScopeNotFound,
+    InvalidIndex(String),
+    InvalidAssignmentTarget(String),
+    TypeError(String),
 }
+
+impl fmt::Display for EvalError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ScopeNotFound => write!(f, "Scope not found."),
+            Self::InvalidIndex(msg)
+            | Self::InvalidAssignmentTarget(msg)
+            | Self::TypeError(msg) => write!(f, "{msg}"),
+        }
+    }
+}
+
+impl std::error::Error for EvalError {}
 
 pub struct Evaluator {
     pub(crate) scopes: Vec<Scope>,
@@ -82,6 +99,12 @@ impl Evaluator {
     ) -> Evaluator {
         self.completion_registry = registry;
         self
+    }
+
+    pub(crate) fn report_runtime_error(&mut self, err: &EvalError) {
+        let mut cerr = io::stderr();
+        print_error(&mut cerr, &err.to_string());
+        self.last_status = 1;
     }
 }
 

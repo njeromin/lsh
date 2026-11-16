@@ -128,7 +128,7 @@ pub fn print_diagnostic<W: std::io::Write>(out: &mut W, diag: &Diagnostic, sourc
     let caret_padding = col_num.saturating_sub(1);
     let underline = "^".repeat(underline_len);
 
-    queue!(
+    let _ = queue!(
         out,
         style::Print(format!("{}: ", format_kind(&diag.kind)).red()),
         style::Print(format!("{}\n", diag.message)),
@@ -141,24 +141,21 @@ pub fn print_diagnostic<W: std::io::Write>(out: &mut W, diag: &Diagnostic, sourc
         style::Print(" ".repeat(caret_padding)),
         style::Print(underline.red()),
         style::Print("\n"),
-    )
-    .expect("Failed to print diagnostic");
+    );
 
     for note in &diag.notes {
-        queue!(
+        let _ = queue!(
             out,
             style::Print(" |  ".blue()),
             style::Print(format!("{note}\n"))
-        )
-        .expect("Failed to print diagnostic note");
+        );
     }
 
     if let Some(hint) = &diag.hint {
-        queue!(
+        let _ = queue!(
             out,
             style::Print(" |  ".blue()),
             style::Print(format!("{hint}\n"))
-        )
-        .expect("Failed to print diagnostic hint");
+        );
     }
 }

@@ -88,18 +88,18 @@ pub fn kill<R: io::Read, W: io::Write, WE: io::Write>(
                 print_error(&mut ctx.err, &format!("kill: invalid signal: {}", args[i]));
                 return 1;
             }
-        } else if arg.starts_with('-')
-            && arg.len() > 1
-            && !arg.chars().nth(1).unwrap().is_ascii_digit()
-            && parse_signal(arg).is_some()
+        } else if let Some(second_ch) = arg.chars().nth(1)
+            && arg.starts_with('-')
+            && !second_ch.is_ascii_digit()
+            && let Some(parsed) = parse_signal(arg)
         {
-            sig = parse_signal(arg).unwrap();
-        } else if arg.starts_with('-')
-            && arg.len() > 1
-            && arg[1..].parse::<i32>().is_ok()
+            sig = parsed;
+        } else if let Some(rest) = arg.strip_prefix('-')
+            && !rest.is_empty()
+            && let Ok(parsed) = rest.parse::<i32>()
             && targets.is_empty()
         {
-            sig = arg[1..].parse::<i32>().unwrap();
+            sig = parsed;
         } else {
             targets.push(arg.clone());
         }
@@ -120,7 +120,11 @@ pub fn kill<R: io::Read, W: io::Write, WE: io::Write>(
         {
             match eval.job_manager.find_by_spec(&target) {
                 Ok(job_id) => {
-                    let job = eval.job_manager.get_job(job_id).unwrap();
+                    let Some(job) = eval.job_manager.get_job(job_id) else {
+                        print_error(&mut ctx.err, &format!("kill: job {job_id} not found"));
+                        exit_code = 1;
+                        continue;
+                    };
                     let pgid = job.pgid;
                     let was_stopped = matches!(job.state, JobState::Stopped(_));
 

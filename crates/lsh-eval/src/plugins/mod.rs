@@ -185,7 +185,7 @@ impl PluginManager {
         let candidate_hooks = ["on_pre_prompt", "on_pre_exec", "on_post_exec", "on_chpwd"];
         if let Some(plugin) = self.plugins.get(plugin_name) {
             for hook in candidate_hooks {
-                let alt = hook.strip_prefix("on_").unwrap();
+                let alt = hook.strip_prefix("on_").unwrap_or(hook);
                 let mut has_hook = false;
                 if let Some(hooks_val) = plugin.manifest.get_property("hooks")
                     && (hooks_val.get_property(hook).is_some()

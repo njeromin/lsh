@@ -20,7 +20,10 @@ pub fn complete<R: io::Read, W: io::Write, WE: io::Write>(
 
     match subcmd {
         "list" => {
-            let registry = eval.completion_registry.read().unwrap();
+            let registry = eval
+                .completion_registry
+                .read()
+                .unwrap_or_else(|p| p.into_inner());
             let entries = registry.list();
             for (path, rule) in entries {
                 let mut parts = Vec::new();
@@ -61,7 +64,10 @@ pub fn complete<R: io::Read, W: io::Write, WE: io::Write>(
                     return 1;
                 }
             };
-            let mut registry = eval.completion_registry.write().unwrap();
+            let mut registry = eval
+                .completion_registry
+                .write()
+                .unwrap_or_else(|p| p.into_inner());
             if registry.remove(cmd_path) {
                 0
             } else {
@@ -114,7 +120,10 @@ pub fn complete<R: io::Read, W: io::Write, WE: io::Write>(
                 }
             }
 
-            let mut registry = eval.completion_registry.write().unwrap();
+            let mut registry = eval
+                .completion_registry
+                .write()
+                .unwrap_or_else(|p| p.into_inner());
             let mut rule = CompletionRule::new();
             rule.candidates = candidates;
             rule.exec = exec;

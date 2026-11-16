@@ -202,7 +202,9 @@ fn build_command_args_expands_unquoted_wildcards_and_preserves_quotes() {
         Statement::Expr(Expr::Call { args, .. }) => args,
         _ => panic!("expected call-like statement"),
     };
-    let args = eval.build_command_args(vec![], call_args, &mut scopes);
+    let args = eval
+        .build_command_args(vec![], call_args, &mut scopes)
+        .unwrap();
     assert!(args.contains(&"src/lib.rs".to_string()));
     assert!(args.iter().any(|a| a.ends_with(".rs")));
 
@@ -216,7 +218,9 @@ fn build_command_args_expands_unquoted_wildcards_and_preserves_quotes() {
         Statement::Expr(Expr::Call { args, .. }) => args,
         _ => panic!("expected call-like statement"),
     };
-    let args = eval.build_command_args(vec![], call_args, &mut scopes);
+    let args = eval
+        .build_command_args(vec![], call_args, &mut scopes)
+        .unwrap();
     assert_eq!(args, vec!["src/*.rs".to_string()]);
 
     // Nonexistent wildcard fallback
@@ -229,7 +233,9 @@ fn build_command_args_expands_unquoted_wildcards_and_preserves_quotes() {
         Statement::Expr(Expr::Call { args, .. }) => args,
         _ => panic!("expected call-like statement"),
     };
-    let args = eval.build_command_args(vec![], call_args, &mut scopes);
+    let args = eval
+        .build_command_args(vec![], call_args, &mut scopes)
+        .unwrap();
     assert_eq!(args, vec!["nonexistent_*.xyz".to_string()]);
 }
 
@@ -1668,4 +1674,51 @@ fn test_compound_assignments() {
             .get_property("score"),
         Some(Value::Number(3.0))
     );
+}
+
+#[test]
+fn test_runtime_errors_do_not_panic_and_clean_up_scopes() {
+    let cases = [
+        "let x = 5\n$x.a = 1",
+        "let x = 5\n$x.a += 1",
+        "let obj = {}\n$obj[true] = 1",
+        "let arr = [1, 2]\n$arr[\"bad\"] = 3",
+        "let arr = [1, 2]\n$arr[99] = 3",
+        "fn fail() { if true { let x = 5; $x.a = 1 } }\nfail()",
+    ];
+
+    for script in cases {
+        let mut eval = Evaluator::new();
+        let prog = Parser::new(0, lexer::lex_input(0, script).unwrap())
+            .parse_program()
+            .unwrap();
+        let status = eval.evaluate(prog);
+        assert_eq!(status, 1, "expected non-zero status for script: {script}");
+        assert_eq!(eval.last_status, 1);
+        assert_eq!(
+            eval.scopes.len(),
+            1,
+            "scope stack leaked after runtime error in: {script}"
+        );
+    }
+
+    // Verify try_evaluate_program returns structured EvalError variants.
+    let mut eval = Evaluator::new();
+    let prog = Parser::new(
+        0,
+        lexer::lex_input(0, "let x = 5\n$x.a = 1").unwrap(),
+    )
+    .parse_program()
+    .unwrap();
+    let err = eval.try_evaluate_program(prog).unwrap_err();
+    assert!(matches!(err, crate::eval::EvalError::TypeError(_)));
+
+    let prog2 = Parser::new(
+        0,
+        lexer::lex_input(0, "let obj = {}\n$obj[true] = 1").unwrap(),
+    )
+    .parse_program()
+    .unwrap();
+    let err2 = eval.try_evaluate_program(prog2).unwrap_err();
+    assert!(matches!(err2, crate::eval::EvalError::InvalidIndex(_)));
 }

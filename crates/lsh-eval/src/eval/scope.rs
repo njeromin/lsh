@@ -41,8 +41,6 @@ impl Evaluator {
     pub fn push_var(&mut self, scope_index: usize, name: String, value: Value) {
         if let Some(scope) = self.scopes.get_mut(scope_index) {
             scope.vars.insert(name, value);
-        } else {
-            panic!("Failed to retrieve scope {scope_index}.");
         }
     }
 
@@ -51,10 +49,7 @@ impl Evaluator {
             // Split the unsplit command by spaces, take out the command itself, and return the rest of the
             // parts as arguments.
             let mut split_cmd = resolved_alias.split(' ');
-            let resolved_cmd = split_cmd
-                .next()
-                .expect("Failed to get first command.")
-                .to_string();
+            let resolved_cmd = split_cmd.next().unwrap_or(cmd.as_str()).to_string();
             let args: Vec<String> = split_cmd.map(|arg| arg.to_string()).collect();
 
             (resolved_cmd, args)
@@ -103,6 +98,30 @@ impl Evaluator {
         self.scopes.len() - 1
     }
 
+    pub(crate) fn with_scope<R>(
+        &mut self,
+        scope_indices: &mut Vec<usize>,
+        init: impl FnOnce(&mut Scope),
+        body: impl FnOnce(&mut Self, &mut Vec<usize>, usize) -> R,
+    ) -> R {
+        let scope_index = self.make_scope();
+        if let Some(scope) = self.scopes.get_mut(scope_index) {
+            init(scope);
+        }
+        scope_indices.push(scope_index);
+
+        let result = body(self, scope_indices, scope_index);
+
+        if scope_indices.last().copied() == Some(scope_index) {
+            scope_indices.pop();
+        }
+        if self.scopes.len() == scope_index + 1 {
+            self.scopes.pop();
+        }
+
+        result
+    }
+
     pub(crate) fn object_index_key(value: Value) -> Option<String> {
         match value {
             Value::String(s) => Some(s),
@@ -119,12 +138,10 @@ impl Evaluator {
 
     pub(crate) fn scoped_var(&self, var_name: &str, scope_indices: &[usize]) -> Option<Value> {
         for scope_index in scope_indices.iter().rev() {
-            if let Some(scope) = self.scopes.get(*scope_index) {
-                if let Some(value) = scope.vars.get(var_name) {
-                    return Some(value.to_owned());
-                }
-            } else {
-                panic!("Failed to retrieve scope {scope_index}.");
+            if let Some(scope) = self.scopes.get(*scope_index)
+                && let Some(value) = scope.vars.get(var_name)
+            {
+                return Some(value.to_owned());
             }
         }
 
@@ -146,16 +163,19 @@ impl Evaluator {
         }
     }
 
-    pub(crate) fn assign_var(&mut self, var_name: &str, value: Value, scope_indices: &[usize]) {
+    pub(crate) fn assign_var(
+        &mut self,
+        var_name: &str,
+        value: Value,
+        scope_indices: &[usize],
+    ) -> Result<(), EvalError> {
         for scope_index in scope_indices.iter().rev() {
-            if let Some(scope) = self.scopes.get_mut(*scope_index) {
-                if scope.vars.contains_key(var_name) {
-                    scope.vars.insert(var_name.to_owned(), value.clone());
-                    self.sync_env_var_if_exported(var_name, &value);
-                    return;
-                }
-            } else {
-                panic!("Failed to retrieve scope {scope_index}.");
+            if let Some(scope) = self.scopes.get_mut(*scope_index)
+                && scope.vars.contains_key(var_name)
+            {
+                scope.vars.insert(var_name.to_owned(), value.clone());
+                self.sync_env_var_if_exported(var_name, &value);
+                return Ok(());
             }
         }
 
@@ -164,8 +184,9 @@ impl Evaluator {
         {
             scope.vars.insert(var_name.to_owned(), value.clone());
             self.sync_env_var_if_exported(var_name, &value);
+            Ok(())
         } else {
-            panic!("Failed to get current scope for assignment.");
+            Err(EvalError::ScopeNotFound)
         }
     }
 
@@ -176,23 +197,30 @@ impl Evaluator {
     fn expand_dotted_index_target(object: &Expr, key: &str) -> Expr {
         let parts: Vec<&str> = key.split('.').collect();
         let mut current_obj = object.clone();
-        for part in &parts[..parts.len() - 1] {
+        for part in &parts[..parts.len().saturating_sub(1)] {
             current_obj = Expr::Index {
                 object: Box::new(current_obj),
                 index: Box::new(Expr::String(part.to_string())),
             };
         }
-        let last_key = parts.last().unwrap().to_string();
+        let last_key = parts.last().copied().unwrap_or_default().to_string();
         Expr::Index {
             object: Box::new(current_obj),
             index: Box::new(Expr::String(last_key)),
         }
     }
 
-    fn resolve_array_assign_index(len: usize, key: &str) -> Option<usize> {
-        let idx = key.parse::<isize>().ok()?;
+    fn resolve_array_assign_index(len: usize, key: &str) -> Result<usize, EvalError> {
+        let idx = key
+            .parse::<isize>()
+            .map_err(|_| EvalError::InvalidIndex(format!("Invalid array index '{key}'.")))?;
         let actual_idx = if idx < 0 { len as isize + idx } else { idx };
-        (actual_idx >= 0).then_some(actual_idx as usize)
+        if actual_idx < 0 || (actual_idx as usize) > len {
+            return Err(EvalError::InvalidIndex(format!(
+                "Array index {idx} out of bounds for length {len}."
+            )));
+        }
+        Ok(actual_idx as usize)
     }
 
     pub(crate) fn assign_target(
@@ -200,28 +228,27 @@ impl Evaluator {
         target: &Expr,
         value: Value,
         scope_indices: &mut Vec<usize>,
-    ) {
+    ) -> Result<(), EvalError> {
         match target {
             Expr::Variable(var_name) | Expr::Word(var_name) => {
                 if var_name.contains('.') {
                     let expanded_target = Self::path_to_expr(var_name);
-                    self.assign_target(&expanded_target, value, scope_indices);
-                    return;
+                    return self.assign_target(&expanded_target, value, scope_indices);
                 }
-                self.assign_var(var_name, value, scope_indices);
+                self.assign_var(var_name, value, scope_indices)
             }
             Expr::Index { object, index } => {
-                let key_value = self.evaluate_expr(index, true, scope_indices);
-                let key = Self::object_index_key(key_value)
-                    .unwrap_or_else(|| panic!("Invalid object index for assignment."));
+                let key_value = self.try_evaluate_expr(index, true, scope_indices)?;
+                let key = Self::object_index_key(key_value).ok_or_else(|| {
+                    EvalError::InvalidIndex("Invalid object index for assignment.".to_string())
+                })?;
 
                 if key.contains('.') {
                     let expanded_target = Self::expand_dotted_index_target(object, &key);
-                    self.assign_target(&expanded_target, value, scope_indices);
-                    return;
+                    return self.assign_target(&expanded_target, value, scope_indices);
                 }
 
-                let target_obj = self.evaluate_expr(object, true, scope_indices);
+                let target_obj = self.try_evaluate_expr(object, true, scope_indices)?;
                 match target_obj {
                     Value::Object(map) => {
                         let mut m = match map.write() {
@@ -229,29 +256,35 @@ impl Evaluator {
                             Err(p) => p.into_inner(),
                         };
                         m.insert(key, value);
+                        Ok(())
                     }
                     Value::Array(arr) => {
                         let mut a = match arr.write() {
                             Ok(g) => g,
                             Err(p) => p.into_inner(),
                         };
-                        if let Some(u_idx) = Self::resolve_array_assign_index(a.len(), &key) {
-                            if u_idx < a.len() {
-                                a[u_idx] = value;
-                            } else if u_idx == a.len() {
-                                a.push(value);
-                            }
+                        let u_idx = Self::resolve_array_assign_index(a.len(), &key)?;
+                        if u_idx < a.len() {
+                            a[u_idx] = value;
+                        } else if u_idx == a.len() {
+                            a.push(value);
                         }
+                        Ok(())
                     }
                     Value::Null => {
                         let mut new_map = HashMap::new();
                         new_map.insert(key, value);
-                        self.assign_target(object, Value::object(new_map), scope_indices);
+                        self.assign_target(object, Value::object(new_map), scope_indices)
                     }
-                    _ => panic!("Assignment target must be an object or array member."),
+                    other => Err(EvalError::TypeError(format!(
+                        "Cannot assign member '{key}' on value of type '{}'.",
+                        other.get_type()
+                    ))),
                 }
             }
-            _ => panic!("Invalid assignment target."),
+            _ => Err(EvalError::InvalidAssignmentTarget(
+                "Invalid assignment target.".to_string(),
+            )),
         }
     }
 
@@ -261,34 +294,43 @@ impl Evaluator {
         op: &BinaryOp,
         rhs_expr: &Expr,
         scope_indices: &mut Vec<usize>,
-    ) {
+    ) -> Result<(), EvalError> {
         match target {
             Expr::Variable(var_name) | Expr::Word(var_name) => {
                 if var_name.contains('.') {
                     let expanded_target = Self::path_to_expr(var_name);
-                    self.compound_assign_target(&expanded_target, op, rhs_expr, scope_indices);
-                    return;
+                    return self.compound_assign_target(
+                        &expanded_target,
+                        op,
+                        rhs_expr,
+                        scope_indices,
+                    );
                 }
                 let current = self
                     .scoped_var(var_name, scope_indices)
                     .or_else(|| env::var(var_name).ok().map(Value::String))
                     .unwrap_or(Value::Null);
-                let rhs = self.evaluate_expr(rhs_expr, true, scope_indices);
+                let rhs = self.try_evaluate_expr(rhs_expr, true, scope_indices)?;
                 let updated = Self::eval_binary_op(op, current, rhs);
-                self.assign_var(var_name, updated, scope_indices);
+                self.assign_var(var_name, updated, scope_indices)
             }
             Expr::Index { object, index } => {
-                let key_value = self.evaluate_expr(index, true, scope_indices);
-                let key = Self::object_index_key(key_value)
-                    .unwrap_or_else(|| panic!("Invalid object index for assignment."));
+                let key_value = self.try_evaluate_expr(index, true, scope_indices)?;
+                let key = Self::object_index_key(key_value).ok_or_else(|| {
+                    EvalError::InvalidIndex("Invalid object index for assignment.".to_string())
+                })?;
 
                 if key.contains('.') {
                     let expanded_target = Self::expand_dotted_index_target(object, &key);
-                    self.compound_assign_target(&expanded_target, op, rhs_expr, scope_indices);
-                    return;
+                    return self.compound_assign_target(
+                        &expanded_target,
+                        op,
+                        rhs_expr,
+                        scope_indices,
+                    );
                 }
 
-                let target_obj = self.evaluate_expr(object, true, scope_indices);
+                let target_obj = self.try_evaluate_expr(object, true, scope_indices)?;
                 match target_obj {
                     Value::Object(map) => {
                         let current = {
@@ -298,13 +340,14 @@ impl Evaluator {
                             };
                             guard.get(&key).cloned().unwrap_or(Value::Null)
                         };
-                        let rhs = self.evaluate_expr(rhs_expr, true, scope_indices);
+                        let rhs = self.try_evaluate_expr(rhs_expr, true, scope_indices)?;
                         let updated = Self::eval_binary_op(op, current, rhs);
                         let mut m = match map.write() {
                             Ok(g) => g,
                             Err(p) => p.into_inner(),
                         };
                         m.insert(key, updated);
+                        Ok(())
                     }
                     Value::Array(arr) => {
                         let (u_idx, current) = {
@@ -312,37 +355,39 @@ impl Evaluator {
                                 Ok(g) => g,
                                 Err(p) => p.into_inner(),
                             };
-                            let u_idx = Self::resolve_array_assign_index(guard.len(), &key);
-                            let current = u_idx
-                                .and_then(|i| guard.get(i).cloned())
-                                .unwrap_or(Value::Null);
+                            let u_idx = Self::resolve_array_assign_index(guard.len(), &key)?;
+                            let current = guard.get(u_idx).cloned().unwrap_or(Value::Null);
                             (u_idx, current)
                         };
-                        let rhs = self.evaluate_expr(rhs_expr, true, scope_indices);
+                        let rhs = self.try_evaluate_expr(rhs_expr, true, scope_indices)?;
                         let updated = Self::eval_binary_op(op, current, rhs);
-                        if let Some(u_idx) = u_idx {
-                            let mut a = match arr.write() {
-                                Ok(g) => g,
-                                Err(p) => p.into_inner(),
-                            };
-                            if u_idx < a.len() {
-                                a[u_idx] = updated;
-                            } else if u_idx == a.len() {
-                                a.push(updated);
-                            }
+                        let mut a = match arr.write() {
+                            Ok(g) => g,
+                            Err(p) => p.into_inner(),
+                        };
+                        if u_idx < a.len() {
+                            a[u_idx] = updated;
+                        } else if u_idx == a.len() {
+                            a.push(updated);
                         }
+                        Ok(())
                     }
                     Value::Null => {
-                        let rhs = self.evaluate_expr(rhs_expr, true, scope_indices);
+                        let rhs = self.try_evaluate_expr(rhs_expr, true, scope_indices)?;
                         let updated = Self::eval_binary_op(op, Value::Null, rhs);
                         let mut new_map = HashMap::new();
                         new_map.insert(key, updated);
-                        self.assign_target(object, Value::object(new_map), scope_indices);
+                        self.assign_target(object, Value::object(new_map), scope_indices)
                     }
-                    _ => panic!("Assignment target must be an object or array member."),
+                    other => Err(EvalError::TypeError(format!(
+                        "Cannot assign member '{key}' on value of type '{}'.",
+                        other.get_type()
+                    ))),
                 }
             }
-            _ => panic!("Invalid assignment target."),
+            _ => Err(EvalError::InvalidAssignmentTarget(
+                "Invalid assignment target.".to_string(),
+            )),
         }
     }
 

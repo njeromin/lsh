@@ -5,7 +5,7 @@ use std::{
 
 use lsh_syntax::ast::Expr;
 
-use crate::eval::value::{FunctionValue, Value};
+use crate::eval::{EvalError, value::{FunctionValue, Value}};
 
 use super::{Evaluator, NamedFunctionWithReceiver};
 
@@ -336,19 +336,19 @@ impl Evaluator {
         &mut self,
         target: &Expr,
         scope_indices: &mut Vec<usize>,
-    ) -> (Value, Option<(Expr, Value)>) {
+    ) -> Result<(Value, Option<(Expr, Value)>), EvalError> {
         match target {
             Expr::Index { object, index } => {
                 let mut receiver_expr = *object.clone();
-                let mut receiver_val = self.evaluate_expr(object, true, scope_indices);
-                let index_val = self.evaluate_expr(index, true, scope_indices);
+                let mut receiver_val = self.try_evaluate_expr(object, true, scope_indices)?;
+                let index_val = self.try_evaluate_expr(index, true, scope_indices)?;
                 let key = Self::object_index_key(index_val);
 
                 let func_val = match key {
                     Some(k) if k.contains('.') => {
                         let parts: Vec<&str> = k.split('.').collect();
                         let mut current_val = receiver_val;
-                        for part in &parts[..parts.len() - 1] {
+                        for part in &parts[..parts.len().saturating_sub(1)] {
                             receiver_expr = Expr::Index {
                                 object: Box::new(receiver_expr),
                                 index: Box::new(Expr::String(part.to_string())),
@@ -359,25 +359,25 @@ impl Evaluator {
                             }
                         }
                         receiver_val = current_val;
-                        let last_key = parts.last().unwrap();
+                        let last_key = parts.last().copied().unwrap_or_default();
                         Self::resolve_member_or_method(&receiver_val, last_key)
                     }
                     Some(k) => Self::resolve_member_or_method(&receiver_val, &k),
                     None => Value::Null,
                 };
-                (func_val, Some((receiver_expr, receiver_val)))
+                Ok((func_val, Some((receiver_expr, receiver_val))))
             }
             Expr::Word(identifier) | Expr::Variable(identifier) => {
                 if let Some((func, rec_info)) =
                     self.resolve_named_function_with_receiver(identifier, scope_indices)
                 {
                     let rec = rec_info.map(|(path, val)| (Self::path_to_expr(&path), val));
-                    (Value::Function(func), rec)
+                    Ok((Value::Function(func), rec))
                 } else {
-                    (self.evaluate_expr(target, true, scope_indices), None)
+                    Ok((self.try_evaluate_expr(target, true, scope_indices)?, None))
                 }
             }
-            _ => (self.evaluate_expr(target, true, scope_indices), None),
+            _ => Ok((self.try_evaluate_expr(target, true, scope_indices)?, None)),
         }
     }
 }

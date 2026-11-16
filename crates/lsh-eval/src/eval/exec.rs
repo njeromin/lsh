@@ -37,7 +37,16 @@ pub fn exec_file_outcome_scoped(
 
             debug::print_parser(&prog);
 
-            Ok(evaluator.evaluate_statements(&prog.body, scope_indices))
+            let outcome = evaluator
+                .try_evaluate_statements(&prog.body, scope_indices)
+                .map_err(|err| {
+                    evaluator.last_status = 1;
+                    let msg = err.to_string();
+                    print_error(&mut cerr, &msg);
+                    msg
+                })?;
+
+            Ok(outcome)
         }
         Err(e) => {
             let msg = e.to_string();

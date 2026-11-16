@@ -33,7 +33,9 @@ impl Evaluator {
     }
 
     pub fn with_globals(mut self) -> Evaluator {
-        let scope = self.scopes.first_mut().unwrap(); // TODO: Don't use unwrap.
+        let Some(scope) = self.scopes.first_mut() else {
+            return self;
+        };
 
         let fmt_cwd_fn = Value::function(FunctionValue::native("fmt_cwd", |eval, args, _| {
             let formatted = if let Some(path_arg) = args.first() {
@@ -120,7 +122,9 @@ impl Evaluator {
                 let Value::Function(f) = func_val else {
                     return Value::Bool(false);
                 };
-                reg.write().unwrap().add(event, Arc::clone(f));
+                reg.write()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .add(event, Arc::clone(f));
                 Value::Bool(true)
             }))
         };
@@ -141,7 +145,10 @@ impl Evaluator {
                 let Value::Function(f) = func_val else {
                     return Value::Bool(false);
                 };
-                let removed = reg.write().unwrap().remove(event, f);
+                let removed = reg
+                    .write()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .remove(event, f);
                 Value::Bool(removed)
             }))
         };
@@ -153,7 +160,7 @@ impl Evaluator {
                     Value::String(s) => Some(s.as_str()),
                     _ => None,
                 });
-                reg.write().unwrap().clear(event);
+                reg.write().unwrap_or_else(|p| p.into_inner()).clear(event);
                 Value::Null
             }))
         };
@@ -161,7 +168,7 @@ impl Evaluator {
         let list_fn = {
             let reg = Arc::clone(&hooks_registry);
             Value::function(FunctionValue::native("list", move |_eval, _args, _| {
-                let list = reg.read().unwrap().list();
+                let list = reg.read().unwrap_or_else(|p| p.into_inner()).list();
                 let map = list
                     .into_iter()
                     .map(|(k, count)| (k, Value::Number(count as f64)))
