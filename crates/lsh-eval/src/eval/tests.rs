@@ -1669,9 +1669,7 @@ fn test_compound_assignments() {
     let obj = eval.get_var(0, "obj").unwrap();
     assert_eq!(obj.get_property("count"), Some(Value::Number(10.0)));
     assert_eq!(
-        obj.get_property("nested")
-            .unwrap()
-            .get_property("score"),
+        obj.get_property("nested").unwrap().get_property("score"),
         Some(Value::Number(3.0))
     );
 }
@@ -1704,12 +1702,9 @@ fn test_runtime_errors_do_not_panic_and_clean_up_scopes() {
 
     // Verify try_evaluate_program returns structured EvalError variants.
     let mut eval = Evaluator::new();
-    let prog = Parser::new(
-        0,
-        lexer::lex_input(0, "let x = 5\n$x.a = 1").unwrap(),
-    )
-    .parse_program()
-    .unwrap();
+    let prog = Parser::new(0, lexer::lex_input(0, "let x = 5\n$x.a = 1").unwrap())
+        .parse_program()
+        .unwrap();
     let err = eval.try_evaluate_program(prog).unwrap_err();
     assert!(matches!(err, crate::eval::EvalError::TypeError(_)));
 

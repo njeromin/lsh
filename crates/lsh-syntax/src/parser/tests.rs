@@ -1048,9 +1048,7 @@ fn parses_unary_not_and_negation() {
 
 #[test]
 fn parses_compound_assignments() {
-    let body = parse_program(
-        "$x += 1\n$x -= 2\n$obj.count *= 3\n$arr[0] /= 4",
-    );
+    let body = parse_program("$x += 1\n$x -= 2\n$obj.count *= 3\n$arr[0] /= 4");
     assert_eq!(body.len(), 4);
 
     assert!(matches!(

@@ -253,7 +253,10 @@ impl Evaluator {
             }
 
             if !hooks_to_register.is_empty() {
-                let mut reg = self.hook_registry.write().unwrap_or_else(|p| p.into_inner());
+                let mut reg = self
+                    .hook_registry
+                    .write()
+                    .unwrap_or_else(|p| p.into_inner());
                 for (event, func) in hooks_to_register {
                     reg.add(&event, func);
                 }

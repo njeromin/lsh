@@ -5,7 +5,10 @@ use std::{
 
 use lsh_syntax::ast::Expr;
 
-use crate::eval::{EvalError, value::{FunctionValue, Value}};
+use crate::eval::{
+    EvalError,
+    value::{FunctionValue, Value},
+};
 
 use super::{Evaluator, NamedFunctionWithReceiver};
 

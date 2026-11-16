@@ -97,7 +97,8 @@ impl Parser {
                     _ => None,
                 };
 
-                if is_assignable && (self.check_current(&TokenKind::Equals) || compound_op.is_some())
+                if is_assignable
+                    && (self.check_current(&TokenKind::Equals) || compound_op.is_some())
                 {
                     let pre_assign_index = self.index;
                     self.advance(); // Skip '=' or compound assignment operator.

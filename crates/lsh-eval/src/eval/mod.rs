@@ -44,9 +44,9 @@ impl fmt::Display for EvalError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::ScopeNotFound => write!(f, "Scope not found."),
-            Self::InvalidIndex(msg)
-            | Self::InvalidAssignmentTarget(msg)
-            | Self::TypeError(msg) => write!(f, "{msg}"),
+            Self::InvalidIndex(msg) | Self::InvalidAssignmentTarget(msg) | Self::TypeError(msg) => {
+                write!(f, "{msg}")
+            }
         }
     }
 }

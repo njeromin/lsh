@@ -130,21 +130,20 @@ impl Evaluator {
                         let value = eval
                             .try_evaluate_expr(value_expr, true, scope_indices)?
                             .to_string();
-                        eval.push_var(
-                            temp_scope_index,
-                            name.clone(),
-                            Value::String(value.clone()),
-                        );
+                        eval.push_var(temp_scope_index, name.clone(), Value::String(value.clone()));
                         env_assignment_values.push((name.clone(), value));
                     }
 
                     let stdout_redirect_path =
                         eval.resolve_stdout_redirect_path(stdout_redirect, scope_indices)?;
 
-                    let identifier_val =
-                        eval.try_evaluate_expr(identifier, true, scope_indices)?;
+                    let identifier_val = eval.try_evaluate_expr(identifier, true, scope_indices)?;
 
-                    Ok::<_, EvalError>((env_assignment_values, stdout_redirect_path, identifier_val))
+                    Ok::<_, EvalError>((
+                        env_assignment_values,
+                        stdout_redirect_path,
+                        identifier_val,
+                    ))
                 },
             )?;
 
@@ -175,9 +174,11 @@ impl Evaluator {
             });
         }
 
-        Ok(Some(
-            self.execute_external_pipeline(resolved_stages, input, capture_output),
-        ))
+        Ok(Some(self.execute_external_pipeline(
+            resolved_stages,
+            input,
+            capture_output,
+        )))
     }
 
     fn execute_external_pipeline(
@@ -330,9 +331,7 @@ impl Evaluator {
                 });
             }
 
-            let stdout_handle = if capture_output
-                && let Some(last_child) = children.last_mut()
-            {
+            let stdout_handle = if capture_output && let Some(last_child) = children.last_mut() {
                 last_child.stdout.take().map(|mut stdout| {
                     s.spawn(move || {
                         let mut buf = Vec::new();
@@ -691,12 +690,13 @@ impl Evaluator {
                     .evaluate_command_expr_with_input(left, input, scope_indices, capture_output)?;
 
                 if left_code == 0 {
-                    let (right_code, right_out, right_err) = self.evaluate_command_expr_with_input(
-                        right,
-                        vec![],
-                        scope_indices,
-                        capture_output,
-                    )?;
+                    let (right_code, right_out, right_err) = self
+                        .evaluate_command_expr_with_input(
+                            right,
+                            vec![],
+                            scope_indices,
+                            capture_output,
+                        )?;
                     left_out.extend(right_out);
                     left_err.extend(right_err);
                     Ok((right_code, left_out, left_err))
@@ -709,12 +709,13 @@ impl Evaluator {
                     .evaluate_command_expr_with_input(left, input, scope_indices, capture_output)?;
 
                 if left_code != 0 {
-                    let (right_code, right_out, right_err) = self.evaluate_command_expr_with_input(
-                        right,
-                        vec![],
-                        scope_indices,
-                        capture_output,
-                    )?;
+                    let (right_code, right_out, right_err) = self
+                        .evaluate_command_expr_with_input(
+                            right,
+                            vec![],
+                            scope_indices,
+                            capture_output,
+                        )?;
                     left_out.extend(right_out);
                     left_err.extend(right_err);
                     Ok((right_code, left_out, left_err))
@@ -742,8 +743,8 @@ impl Evaluator {
                 args,
                 stdout_redirect,
             } => {
-                let (env_assignment_values, stdout_redirect_path, res_cmd, all_args) =
-                    self.with_scope(
+                let (env_assignment_values, stdout_redirect_path, res_cmd, all_args) = self
+                    .with_scope(
                         scope_indices,
                         |_| {},
                         |eval, scope_indices, temp_scope_index| {
@@ -880,10 +881,8 @@ impl Evaluator {
                                     env_assignment_values.push((name.clone(), value));
                                 }
 
-                                let stdout_redirect_path = eval.resolve_stdout_redirect_path(
-                                    stdout_redirect,
-                                    scope_indices,
-                                )?;
+                                let stdout_redirect_path = eval
+                                    .resolve_stdout_redirect_path(stdout_redirect, scope_indices)?;
 
                                 let (identifier_val, _) =
                                     eval.resolve_callable_target(identifier, scope_indices)?;

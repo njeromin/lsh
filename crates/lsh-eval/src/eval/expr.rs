@@ -129,8 +129,7 @@ impl Evaluator {
     ) -> Result<Value, EvalError> {
         match expr {
             Expr::Call { target, args } => {
-                let (target_val, receiver) =
-                    self.resolve_callable_target(target, scope_indices)?;
+                let (target_val, receiver) = self.resolve_callable_target(target, scope_indices)?;
 
                 if let Value::Function(func) = &target_val {
                     return self.try_call_user_function_with_receiver(
@@ -321,7 +320,9 @@ impl Evaluator {
                 let evaluated_value = self.try_evaluate_expr(expr, true, scope_indices)?;
                 Ok(Value::String(evaluated_value.get_type().to_string()))
             }
-            Expr::String(string) | Expr::QuotedString(string) => Ok(Value::String(string.to_owned())),
+            Expr::String(string) | Expr::QuotedString(string) => {
+                Ok(Value::String(string.to_owned()))
+            }
             Expr::InterpolatedString(parts) => {
                 let mut buf = String::new();
                 for part in parts {
@@ -526,9 +527,10 @@ impl Evaluator {
                     String::from_utf8(err).unwrap_or_default(),
                 ))
             }
-            Expr::AnonymousFunction { params, body } => {
-                Ok(Value::function(FunctionValue::ast(params.clone(), body.clone())))
-            }
+            Expr::AnonymousFunction { params, body } => Ok(Value::function(FunctionValue::ast(
+                params.clone(),
+                body.clone(),
+            ))),
             Expr::Object(expr_map) => {
                 let mut obj = HashMap::new();
                 for (key, value) in expr_map {
