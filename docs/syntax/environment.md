@@ -30,9 +30,6 @@ Modifying `$PATH` automatically updates the operating system's process environme
 # Prepend a directory to PATH:
 $PATH = "/custom/bin:" + $PATH
 
-# Or without the leading $:
-PATH = "$HOME/.local/bin:$PATH"
-
 # Or with let:
 let PATH = "$HOME/.cargo/bin:$PATH"
 ```
@@ -56,7 +53,7 @@ export EDITOR="nvim"
 # Export key and value as separate arguments:
 export PAGER "less"
 
-# Export an existing local shell variable:
+# Export an existing top-level shell variable:
 let MY_FLAG = "enabled"
 export MY_FLAG
 

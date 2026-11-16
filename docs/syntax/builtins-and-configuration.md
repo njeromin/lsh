@@ -8,14 +8,20 @@
 
 - [Builtin Commands](#builtin-commands)
   - [`alias`](#alias)
+  - [`bg`](#bg)
   - [`cd`](#cd)
   - [`complete`](#complete)
+  - [`disown`](#disown)
   - [`exec`](#exec)
   - [`exit`](#exit)
   - [`export`](#export)
+  - [`fg`](#fg)
   - [`fmt-cwd`](#fmt-cwd)
+  - [`jobs`](#jobs)
+  - [`kill`](#kill)
   - [`plugin`](#plugin)
   - [`source`](#source)
+  - [`wait`](#wait)
 - [Configuration (`config.lsh`)](#configuration-configlsh)
   - [Options (`$options`)](#options-options)
   - [Colours (`$palette`)](#colours-palette)
@@ -35,24 +41,40 @@ alias set ls "eza --icons"
 alias list
 ```
 
+### `bg`
+Resume a stopped job in the background:
+
+```lsh
+bg %1
+```
+
 ### `cd`
-Change the current working directory:
+Change the current working directory (normalises logical paths and expands `~`):
 
 ```lsh
 cd ~/projects
-cd -P /var/tmp   # Physical path (resolves symlinks)
-cd -L /var/tmp   # Logical path (preserves symlinks)
+cd /var/tmp
 ```
 
-`cd` automatically synchronises `$PWD` and `$OLDPWD` in both the shell scope and the operating system process environment.
+`cd` automatically synchronises `$PWD` and `$OLDPWD` in both the shell scope and the operating system process environment, and triggers `chpwd` hooks.
 
 ### `complete`
-Configure custom tab completion rules:
+Configure custom tab completion rules (`set`, `list`, `remove`):
 
 ```lsh
-complete set cargo --flags
+complete set mytool start stop:Stop status --ext json
+complete set mycd --dirs
+complete set mygit --exec "git branch"
 complete list
-complete remove cargo
+complete remove mytool
+```
+
+### `disown`
+Remove jobs from the shell job table (`-a` removes all jobs):
+
+```lsh
+disown %1
+disown -a
 ```
 
 ### `exec`
@@ -77,11 +99,36 @@ export KEY="value"
 export
 ```
 
+### `fg`
+Resume a background or stopped job in the foreground:
+
+```lsh
+fg %1
+```
+
 ### `fmt-cwd`
 Format the current directory for prompt display, substituting `$HOME` with `~`:
 
 ```lsh
 fmt-cwd
+```
+
+### `jobs`
+List background and stopped jobs (supports `-l`, `-p`, `-r`, `-s`):
+
+```lsh
+jobs
+jobs -l
+```
+
+### `kill`
+Send a signal to processes or job specs:
+
+```lsh
+kill %1
+kill -9 12345
+kill -TERM %1
+kill -l
 ```
 
 ### `plugin`
@@ -101,14 +148,22 @@ Execute a script within the current shell evaluator (persisting variables and fu
 source ~/.config/lsh/config.lsh
 ```
 
+### `wait`
+Wait for background jobs to complete:
+
+```lsh
+wait
+wait %1
+```
+
 ---
 
 ## Configuration (`config.lsh`)
 
 At startup, `lsh` looks for `config.lsh` in:
-1. `$LSH_CONFIG_DIR/config.lsh` (if set)
-2. `~/.config/lsh/config.lsh` (or platform config directory)
-3. Fallback: `./config/config.lsh`
+1. `$LSH_CONFIG_DIR/config.lsh` (if `LSH_CONFIG_DIR` is set)
+2. `<platform config dir>/lsh/config.lsh` (e.g. `~/.config/lsh/config.lsh` on Linux)
+3. `./config/config.lsh` if no platform config directory is available
 
 ---
 
@@ -129,7 +184,7 @@ $options.edit_mode = "default"
 # Cursor shape: "bar", "steady_bar", "block", "steady_block", "underline", or "steady_underline"
 $options.cursor_shape = "bar"
 
-# Completion UI: "menu" (fuzzy dropdown) or "list"
+# Completion UI: "menu" (fuzzy dropdown), "list", or "circular"
 $options.completion_type = "menu"
 ```
 
@@ -199,8 +254,8 @@ $hooks.add("chpwd", (old_dir, new_dir) => {
     echo "Switched to: " + $new_dir
 })
 
-# List registered hooks
-$hooks.list()
+# List registered hooks (returns an object mapping event name -> count)
+let registered = $hooks.list()
 
 # Clear all hooks for an event
 $hooks.clear("chpwd")

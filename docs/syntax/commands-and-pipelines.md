@@ -9,7 +9,8 @@
 - [Command Execution](#command-execution)
 - [Pipelines (`|`)](#pipelines-)
 - [Logical Chaining (`&&` / `||`)](#logical-chaining---)
-- [Output Redirection (`->`)](#output-redirection--)
+- [Background Jobs (`&`)](#background-jobs-)
+- [Output Redirection (`->` / `->>`)](#output-redirection----)
 - [Prefix Environment Assignments](#prefix-environment-assignments)
 - [Command Substitution (`$(...)`)](#command-substitution-)
 
@@ -57,13 +58,26 @@ which nonexistent_tool || echo "Tool not installed"
 
 ---
 
-## Output Redirection (`->`)
+## Background Jobs (`&`)
+Run external commands or pipelines in the background with `&`:
+
+```lsh
+sleep 10 &
+cat access.log | grep "ERROR" &
+```
+
+Manage background and stopped jobs with `jobs`, `fg`, `bg`, `wait`, `disown`, and `kill`.
+
+---
+
+## Output Redirection (`->` / `->>`)
 
 > [!IMPORTANT]
-> `lsh` uses `->` for standard output redirection instead of the POSIX `>` operator.
+> `lsh` uses `->` (truncate/create) and `->>` (append) for standard output redirection instead of the POSIX `>` / `>>` operators.
 
 ```lsh
 echo "saved text" -> /tmp/output.txt
+echo "more text" ->> /tmp/output.txt
 ls -la -> dir_contents.txt
 ```
 
@@ -86,8 +100,8 @@ Command substitution captures the output of a command and returns a structured *
 - `.code` — Numeric exit code (`0` on success)
 - `.out` — Standard output as a string
 - `.err` — Standard error as a string
-- `.is_ok() — Boolean (`true` if exit code is 0)
-- `.is_err() — Boolean (`true` if exit code is non-zero)
+- `.is_ok()` (or `.ok()`) — Boolean (`true` if exit code is 0)
+- `.is_err()` (or `.err()`) — Boolean (`true` if exit code is non-zero)
 - `.lines()` — Array of stdout lines
 
 ### Examples:

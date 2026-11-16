@@ -39,15 +39,20 @@ let is_ready = true
 
 ### Assignment
 
-Variables can be assigned to using a leading `$`:
+Variables, object fields, and array elements can be reassigned using a leading `$` with `=` or compound assignment operators (`+=`, `-=`, `*=`, `/=`):
 
 ```lsh
 $name = "new_value"
+$count += 1
+$count *= 2
+$name += "!"
+$obj.score -= 5
+$arr[0] /= 2
 ```
 
 ### Scoping
 
-`lsh` uses lexical block scoping. Variables declared inside blocks (`{ ... }`), functions, or loops are local to that block and shadow outer variables:
+`lsh` uses dynamic scoping with block- and function-local scopes. `let` always declares a variable in the innermost active scope, while reassignment updates the nearest enclosing active scope on the call stack (or defines it in the current scope if not found). Functions do not capture lexical environments:
 
 ```lsh
 let x = 10
@@ -66,10 +71,11 @@ echo $x        # 10
 
 ### Arithmetic
 
-- `+` — Addition or string concatenation
-- `-` — Subtraction
-- `*` — Multiplication
+- `+` — Addition (`Number + Number`), string concatenation (`String + any`), or array concatenation/append (`Array + Array`, `Array + any`)
+- `-` — Subtraction and unary negation (`-$x`, `-(1 + 2)`)
+- `*` — Multiplication (`Number * Number`) or string repetition (`String * Number`)
 - `/` — Division (division by zero returns `null`)
+- `+=`, `-=`, `*=`, `/=` — Compound assignment operators
 
 ### Comparison
 
@@ -82,9 +88,9 @@ echo $x        # 10
 
 ### Logical
 
-- `&&` — Logical AND
-- `||` — Logical OR
-- `!` — Logical NOT
+- `&&` — Logical AND (in expressions, evaluates both operands and returns a boolean)
+- `||` — Logical OR (in expressions, evaluates both operands and returns a boolean)
+- `!` — Logical NOT (`!$flag`, returns a boolean)
 
 ---
 
@@ -94,27 +100,31 @@ echo $x        # 10
 
 #### Double-Quoted Strings (Interpolated)
 
-Double-quoted strings support variable interpolation (`$var`), command substitutions (`$(cmd)`), and escape characters:
+Double-quoted strings support variable interpolation (`$var` for alphabetic/underscore names and special variables like `$?`, `$$`, `$!`), expression interpolation (`${expr}`), command substitutions (`$(cmd)`), and escape characters:
 
 ```lsh
 let user = "Alice"
 echo "Hello, $user!"
-echo "Current directory: $(pwd).out"
+echo "Current directory: $(pwd)"
+echo "Sum: ${1 + 2}"
 ```
+
+Note that `$(cmd)` inside a double-quoted string automatically interpolates `cmd`'s stdout with trailing newlines trimmed.
 
 Supported escape sequences:
 
 - `\n` — newline
 - `\t` — tab
 - `\r` — carriage return
+- `\0` — NUL byte
 - `\\` — backslash
 - `\"` — double quote
 - `\'` — single quote
-- `\e` or `\x1b` — ANSI escape code
+- `\$` — literal `$`
 
-#### Single-Quoted Strings (Literal)
+#### Single-Quoted Strings
 
-Single-quoted strings are literal and do not perform variable or command expansion:
+Single-quoted strings do not perform variable (`$var`) or command (`$(...)`) expansion, while still interpreting basic backslash escapes (`\n`, `\r`, `\t`, `\0`, `\\`, `\'`):
 
 ```lsh
 echo 'Literal $user and $(command)'
@@ -128,24 +138,24 @@ Strings support negative indexing (`[-1]` is the last character) and built-in he
 let s = "  Hello, World!  "
 
 # Indexing & length
-echo $s[0]                            # " "
-echo $s[-1]                           # " "
-echo $s.len()                         # 17 (or $s.length)
+let first = $s[0]                     # " "
+let last = $s[-1]                     # " "
+let n = $s.len()                      # 17 (or $s.length / $s.length())
 
 # Trimming
-echo $s.trim()                        # "Hello, World!"
-echo $s.trim_start()                  # "Hello, World!  "
-echo $s.trim_end()                    # "  Hello, World!"
+let trimmed = $s.trim()               # "Hello, World!"
+let left = $s.trim_start()            # "Hello, World!  "
+let right = $s.trim_end()             # "  Hello, World!"
 
 # Case conversion
-echo $s.to_lowercase()                # "  hello, world!  "
-echo $s.to_uppercase()                # "  HELLO, WORLD!  "
+let lower = $s.to_lowercase()         # "  hello, world!  "
+let upper = $s.to_uppercase()         # "  HELLO, WORLD!  "
 
 # Search & Replace
-echo $s.replace("World", "lsh")       # "  Hello, lsh!  "
-echo $s.contains("World")             # true
-echo $s.starts_with("  Hello")        # true
-echo $s.ends_with("!  ")              # true
+let replaced = $s.replace("World", "lsh") # "  Hello, lsh!  "
+let has_world = $s.contains("World")      # true
+let starts = $s.starts_with("  Hello")    # true
+let ends = $s.ends_with("!  ")            # true
 
 # Splitting
 let parts = $s.trim().split(", ")     # ["Hello", "World!"]
@@ -164,6 +174,7 @@ let sum = $a + $b        # 13.5
 let diff = $a - 5        # 5
 let prod = $a * 2        # 20
 let quot = $a / 2        # 5
+let neg = -$a            # -10
 ```
 
 ---
@@ -191,28 +202,28 @@ Arrays are defined with square brackets `[...]` and can hold mixed types:
 let fruits = ["apple", "banana", "cherry"]
 
 # Indexing (supports negative indices)
-echo $fruits[0]                # "apple"
-echo $fruits[-1]               # "cherry"
-echo $fruits.len               # 3 (or $fruits.len())
+let first = $fruits[0]             # "apple"
+let last = $fruits[-1]             # "cherry"
+let count = $fruits.len            # 3 (or $fruits.len())
 
 # Array Methods
-$fruits.push("mango")          # Appends "mango"
-let last = $fruits.pop()       # Removes and returns "mango"
-let csv = $fruits.join(", ")   # "apple, banana, cherry"
-echo $fruits.contains("apple") # true
+$fruits.push("mango")              # Appends "mango"
+let popped = $fruits.pop()         # Removes and returns "mango"
+let csv = $fruits.join(", ")       # "apple, banana, cherry"
+let has_apple = $fruits.contains("apple") # true
 ```
 
 ---
 
 ### Objects & Maps
 
-Objects are key-value maps defined with curly braces `{ ... }`:
+Objects are key-value maps defined with curly braces `{ ... }` using `=` between keys and values:
 
 ```lsh
 let user = {
-    name: "Alice",
-    role: "admin",
-    visits: 5
+    name = "Alice",
+    role = "admin",
+    visits = 5
 }
 
 # Access via dot notation or bracket notation:
@@ -220,7 +231,7 @@ echo $user.name                # "Alice"
 echo $user["role"]             # "admin"
 
 # Modifying properties:
-$user.visits = $user.visits + 1
+$user.visits += 1
 $user["status"] = "online"
 ```
 
@@ -228,10 +239,11 @@ $user["status"] = "online"
 
 ### Null
 
-`null` represents an absent or uninitialised value:
+`null` is returned for absent or uninitialised values (such as reading an undefined variable `$missing`, division by zero `1 / 0`, or returning without a value; note that `null` itself is not a keyword literal):
 
 ```lsh
-let empty = null
+let empty = $missing_var   # null
+let div_zero = 1 / 0       # null
 ```
 
 ---
@@ -241,10 +253,11 @@ let empty = null
 The `typeof` operator returns the type name as a string:
 
 ```lsh
-echo typeof "hello"   # "string"
-echo typeof 42        # "number"
-echo typeof true      # "bool"
-echo typeof [1, 2]    # "array"
-echo typeof { a: 1 }  # "object"
-echo typeof null      # "null"
+let t1 = typeof "hello"    # "string"
+let t2 = typeof 42         # "number"
+let t3 = typeof true       # "bool"
+let t4 = typeof [1, 2]     # "array"
+let t5 = typeof { a = 1 }  # "object"
+let t6 = typeof $missing   # "null"
+echo $(typeof "hello").out # "string"
 ```

@@ -1,6 +1,6 @@
 # lsh
 
-`lsh` is a small non-POSIX compliant shell written in Rust. It supports command composition features like pipelines using `|`, `&&`/`||`, env-prefix assignments, and redirection using `->`.
+`lsh` is a small non-POSIX compliant shell written in Rust. It supports command composition features like pipelines using `|`, `&&`/`||`, background jobs using `&`, env-prefix assignments, and stdout redirection using `->` / `->>`.
 
 ![lsh demo](assets/demo.gif)
 
@@ -67,12 +67,20 @@ echo "saved" -> /tmp/lsh-out.txt
 Current builtins are:
 
 - `alias` (`set`/`list`)
+- `bg` (resume a stopped job in the background)
 - `cd`
+- `complete` (`set`/`list`/`remove` custom tab-completion rules)
+- `disown` (remove jobs from the shell job table)
 - `exec` (run a file in a fresh evaluator)
 - `exit`
 - `export` (set/list environment variables)
+- `fg` (resume a background or stopped job in the foreground)
 - `fmt-cwd`
+- `jobs` (list active and stopped jobs)
+- `kill` (send signals to processes or jobs)
+- `plugin` (`list`/`info`/`load`/`unload`)
 - `source` (run a file in current evaluator)
+- `wait` (wait for background jobs to finish)
 
 ## Config
 
@@ -80,7 +88,7 @@ At startup, `lsh` looks for `config.lsh` in:
 
 - `$LSH_CONFIG_DIR/config.lsh` if `LSH_CONFIG_DIR` is set
 - otherwise your platform config dir (`.../lsh/config.lsh`)
-- fallback: `./config/config.lsh`
+- fallback: `./config/config.lsh` if no platform config directory is available
 
 This repo includes a sample config at [`config/config.lsh`](./config/config.lsh) with prompt customisation and aliases.
 
@@ -103,4 +111,4 @@ DEBUG_PARSER=1 cargo run -q
 ## Notes and current limits
 
 - This is not a POSIX shell implementation.
-- Redirection is handled differently to most shells using `->` instead of `>`.
+- Stdout redirection uses `->` (truncate/create) and `->>` (append) instead of `>` / `>>`.

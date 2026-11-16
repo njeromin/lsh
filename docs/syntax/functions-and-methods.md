@@ -1,6 +1,6 @@
 # Functions & Methods
 
-Functions in `lsh` are first-class values that can be defined by name, written as closures/arrow functions, or bound as methods on objects.
+Functions in `lsh` are first-class values that can be defined by name, written as anonymous arrow functions, or bound as methods on objects. Functions use dynamic scoping and do not capture lexical closures.
 
 ---
 
@@ -45,7 +45,7 @@ echo $result   # 30
 ```
 
 ### 2. Command-style
-Invoke a function like a shell command (arguments separated by spaces):
+Invoke a function like a shell command (arguments separated by spaces); calling a function via `$(...)` captures its return value in `.out`:
 
 ```lsh
 echo $(greet "lsh").out
@@ -54,12 +54,14 @@ echo $(greet "lsh").out
 ---
 
 ## Anonymous & Arrow Functions
-Arrow functions can be assigned to variables, stored in arrays/objects, or passed into hooks:
+Arrow functions can be assigned to variables, stored in arrays/objects, or passed into hooks. Functions do not implicitly return the final expression; use `return` to return a value (otherwise `null` is returned):
 
-### Single Expression Syntax:
+### Single-Statement Body:
 ```lsh
-let square = x => x * x
-echo square(5)   # 25
+let square = x => return $x * $x
+let sq = square(5)
+echo $sq                     # 25
+echo $(square 5).out         # 25
 ```
 
 ### Block Body Syntax:
@@ -67,7 +69,8 @@ echo square(5)   # 25
 let multiply = (a, b) => {
     return $a * $b
 }
-echo multiply(4, 5)  # 20
+let product = multiply(4, 5)
+echo $product                # 20
 
 let log_message = () => {
     echo "Task complete"
@@ -82,17 +85,18 @@ When a function is stored as an object property, it acts as a method. The receiv
 
 ```lsh
 let counter = {
-    count: 0,
-    increment: () => {
-        $this.count = $this.count + 1
+    count = 0,
+    increment = () => {
+        $this.count += 1
         return $this.count
     },
-    get_count: () => {
+    get_count = () => {
         return $this.count
     }
 }
 
-counter.increment()
-counter.increment()
-echo counter.get_count()   # 2
+$counter.increment()
+$counter.increment()
+let total = $counter.get_count()
+echo $total                  # 2
 ```

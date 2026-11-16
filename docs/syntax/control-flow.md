@@ -15,7 +15,7 @@
 ---
 
 ## If / Else If / Else
-Conditions evaluate expressions. Truthy values include `true`, non-zero numbers, and non-empty strings/objects.
+Conditions evaluate expressions. Truthy values include `true`, non-zero numbers, non-empty strings, non-empty arrays, non-empty objects, and functions. Falsy values are `false`, `0`, `""`, `[]`, `{}`, and `null`.
 
 ```lsh
 let score = 85
@@ -39,7 +39,7 @@ let count = 5
 
 while $count > 0 {
     echo $count
-    $count = $count - 1
+    $count -= 1
 }
 
 echo "Liftoff!"
@@ -48,7 +48,7 @@ echo "Liftoff!"
 ---
 
 ## For..In Loops
-Iterates over elements of an array:
+Iterates over elements of an array, lines of a command result object, sorted keys of a regular object, or characters of a string:
 
 ```lsh
 let tools = ["rust", "cargo", "git"]
@@ -58,7 +58,7 @@ for tool in $tools {
 }
 ```
 
-You can also iterate over lines returned from a command:
+You can also iterate over lines returned from a command (either via `.lines()` or directly over the command substitution result):
 
 ```lsh
 for file in $(ls).lines() {
@@ -99,6 +99,6 @@ fn find_user(id) {
     if $id == 1 {
         return "Alice"
     }
-    return null
+    return
 }
 ```
