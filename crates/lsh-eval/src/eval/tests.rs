@@ -1586,3 +1586,86 @@ fn test_append_redirection_thin_arrow() {
 
     assert_eq!(content, "line1\nline2\n");
 }
+
+#[test]
+fn test_unary_not_and_negation() {
+    let mut eval = Evaluator::new();
+    let script = r#"
+        let flag = false
+        let not_flag = !$flag
+        let double_not = !!$flag
+        let not_empty = !""
+        let not_zero = !0
+        let not_null = !$missing_var
+        let x = 7
+        let neg_x = -$x
+        let double_neg = -(-$x)
+        let neg_expr = -(2 + 3)
+        let neg_str = -"abc"
+    "#;
+
+    let prog = Parser::new(0, lexer::lex_input(0, script).unwrap())
+        .parse_program()
+        .unwrap();
+    eval.evaluate(prog);
+
+    assert_eq!(eval.get_var(0, "not_flag"), Some(&Value::Bool(true)));
+    assert_eq!(eval.get_var(0, "double_not"), Some(&Value::Bool(false)));
+    assert_eq!(eval.get_var(0, "not_empty"), Some(&Value::Bool(true)));
+    assert_eq!(eval.get_var(0, "not_zero"), Some(&Value::Bool(true)));
+    assert_eq!(eval.get_var(0, "not_null"), Some(&Value::Bool(true)));
+    assert_eq!(eval.get_var(0, "neg_x"), Some(&Value::Number(-7.0)));
+    assert_eq!(eval.get_var(0, "double_neg"), Some(&Value::Number(7.0)));
+    assert_eq!(eval.get_var(0, "neg_expr"), Some(&Value::Number(-5.0)));
+    assert_eq!(eval.get_var(0, "neg_str"), Some(&Value::Null));
+}
+
+#[test]
+fn test_compound_assignments() {
+    let mut eval = Evaluator::new();
+    let script = r#"
+        let n = 10
+        $n += 5
+        $n -= 3
+        $n *= 2
+        $n /= 4
+
+        let s = "hello"
+        $s += " world"
+
+        let arr = [1, 2]
+        $arr += 3
+        $arr[-1] *= 10
+
+        let obj = { count = 2, nested = { score = 5 } }
+        $obj.count += 8
+        $obj.nested.score -= 2
+    "#;
+
+    let prog = Parser::new(0, lexer::lex_input(0, script).unwrap())
+        .parse_program()
+        .unwrap();
+    eval.evaluate(prog);
+
+    assert_eq!(eval.get_var(0, "n"), Some(&Value::Number(6.0)));
+    assert_eq!(
+        eval.get_var(0, "s"),
+        Some(&Value::String("hello world".to_string()))
+    );
+    assert_eq!(
+        eval.get_var(0, "arr"),
+        Some(&Value::array(vec![
+            Value::Number(1.0),
+            Value::Number(2.0),
+            Value::Number(30.0)
+        ]))
+    );
+    let obj = eval.get_var(0, "obj").unwrap();
+    assert_eq!(obj.get_property("count"), Some(Value::Number(10.0)));
+    assert_eq!(
+        obj.get_property("nested")
+            .unwrap()
+            .get_property("score"),
+        Some(Value::Number(3.0))
+    );
+}

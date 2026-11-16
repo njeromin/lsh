@@ -1,6 +1,6 @@
 use std::{collections::HashMap, env, io, sync::Arc};
 
-use lsh_syntax::ast::{BinaryOp, Expr};
+use lsh_syntax::ast::{BinaryOp, Expr, UnaryOp};
 
 use crate::{
     eval::{
@@ -247,6 +247,16 @@ impl Evaluator {
                     Value::Null
                 }
             }
+            Expr::Unary { op, expr } => {
+                let val = self.evaluate_expr(expr, true, scope_indices);
+                match op {
+                    UnaryOp::Not => Value::Bool(!val.is_truthy()),
+                    UnaryOp::Neg => match val {
+                        Value::Number(n) => Value::Number(-n),
+                        _ => Value::Null,
+                    },
+                }
+            }
             Expr::Binary {
                 op,
                 left: left_box,
@@ -254,98 +264,7 @@ impl Evaluator {
             } => {
                 let left_res = self.evaluate_expr(left_box, true, scope_indices);
                 let right_res = self.evaluate_expr(right_box, true, scope_indices);
-
-                let left_type = left_res.get_type();
-
-                match *op {
-                    BinaryOp::Add => match (left_res, right_res) {
-                        (Value::Number(l), Value::Number(r)) => Value::Number(l + r),
-                        (Value::String(l), Value::String(r)) => Value::String(l + &r),
-                        (Value::String(l), r) => Value::String(l + &r.to_string()),
-                        (Value::Array(a1), Value::Array(a2)) => {
-                            let mut combined = Vec::new();
-                            if let Ok(g1) = a1.read() {
-                                combined.extend(g1.clone());
-                            }
-                            if let Ok(g2) = a2.read() {
-                                combined.extend(g2.clone());
-                            }
-                            Value::array(combined)
-                        }
-                        (Value::Array(a), other) => {
-                            let mut combined = Vec::new();
-                            if let Ok(g) = a.read() {
-                                combined.extend(g.clone());
-                            }
-                            combined.push(other);
-                            Value::array(combined)
-                        }
-                        _ => Value::Null,
-                    },
-
-                    BinaryOp::Sub => match (left_res, right_res.cast(left_type)) {
-                        (Value::Number(l), Value::Number(r)) => Value::Number(l - r),
-                        _ => Value::Null,
-                    },
-
-                    BinaryOp::Mul => match (left_res, right_res) {
-                        (Value::Number(l), Value::Number(r)) => Value::Number(l * r),
-                        (Value::String(s), Value::Number(n))
-                        | (Value::Number(n), Value::String(s)) => {
-                            if n.is_nan() || n <= 0.0 {
-                                Value::String(String::new())
-                            } else if n > 1_000_000.0 || n.is_infinite() {
-                                Value::Null
-                            } else {
-                                Value::String(s.repeat(n.round() as usize))
-                            }
-                        }
-                        _ => Value::Null,
-                    },
-
-                    BinaryOp::Div => match (left_res, right_res.cast(left_type)) {
-                        (Value::Number(l), Value::Number(r)) => {
-                            if r == 0.0 || r.is_nan() {
-                                Value::Null
-                            } else {
-                                Value::Number(l / r)
-                            }
-                        }
-                        _ => Value::Null,
-                    },
-
-                    BinaryOp::Eq => Value::Bool(left_res.check_equality(&right_res)),
-
-                    BinaryOp::Neq => Value::Bool(!left_res.check_equality(&right_res)),
-
-                    BinaryOp::Gt => match (left_res, right_res.cast(left_type)) {
-                        (Value::Number(l), Value::Number(r)) => Value::Bool(l > r),
-                        (Value::String(l), Value::String(r)) => Value::Bool(l > r),
-                        _ => Value::Null,
-                    },
-
-                    BinaryOp::Lt => match (left_res, right_res.cast(left_type)) {
-                        (Value::Number(l), Value::Number(r)) => Value::Bool(l < r),
-                        (Value::String(l), Value::String(r)) => Value::Bool(l < r),
-                        _ => Value::Null,
-                    },
-
-                    BinaryOp::Ge => match (left_res, right_res.cast(left_type)) {
-                        (Value::Number(l), Value::Number(r)) => Value::Bool(l >= r),
-                        (Value::String(l), Value::String(r)) => Value::Bool(l >= r),
-                        _ => Value::Null,
-                    },
-
-                    BinaryOp::Le => match (left_res, right_res.cast(left_type)) {
-                        (Value::Number(l), Value::Number(r)) => Value::Bool(l <= r),
-                        (Value::String(l), Value::String(r)) => Value::Bool(l <= r),
-                        _ => Value::Null,
-                    },
-
-                    BinaryOp::And => Value::Bool(left_res.is_truthy() && right_res.is_truthy()),
-
-                    BinaryOp::Or => Value::Bool(left_res.is_truthy() || right_res.is_truthy()),
-                }
+                Self::eval_binary_op(op, left_res, right_res)
             }
             Expr::Index { object, index } => {
                 let object_value = self.evaluate_expr(object, true, scope_indices);
@@ -586,6 +505,99 @@ impl Evaluator {
                 }
                 Value::array(evaluated)
             }
+        }
+    }
+
+    pub(crate) fn eval_binary_op(op: &BinaryOp, left_res: Value, right_res: Value) -> Value {
+        let left_type = left_res.get_type();
+
+        match *op {
+            BinaryOp::Add => match (left_res, right_res) {
+                (Value::Number(l), Value::Number(r)) => Value::Number(l + r),
+                (Value::String(l), Value::String(r)) => Value::String(l + &r),
+                (Value::String(l), r) => Value::String(l + &r.to_string()),
+                (Value::Array(a1), Value::Array(a2)) => {
+                    let mut combined = Vec::new();
+                    if let Ok(g1) = a1.read() {
+                        combined.extend(g1.clone());
+                    }
+                    if let Ok(g2) = a2.read() {
+                        combined.extend(g2.clone());
+                    }
+                    Value::array(combined)
+                }
+                (Value::Array(a), other) => {
+                    let mut combined = Vec::new();
+                    if let Ok(g) = a.read() {
+                        combined.extend(g.clone());
+                    }
+                    combined.push(other);
+                    Value::array(combined)
+                }
+                _ => Value::Null,
+            },
+
+            BinaryOp::Sub => match (left_res, right_res.cast(left_type)) {
+                (Value::Number(l), Value::Number(r)) => Value::Number(l - r),
+                _ => Value::Null,
+            },
+
+            BinaryOp::Mul => match (left_res, right_res) {
+                (Value::Number(l), Value::Number(r)) => Value::Number(l * r),
+                (Value::String(s), Value::Number(n)) | (Value::Number(n), Value::String(s)) => {
+                    if n.is_nan() || n <= 0.0 {
+                        Value::String(String::new())
+                    } else if n > 1_000_000.0 || n.is_infinite() {
+                        Value::Null
+                    } else {
+                        Value::String(s.repeat(n.round() as usize))
+                    }
+                }
+                _ => Value::Null,
+            },
+
+            BinaryOp::Div => match (left_res, right_res.cast(left_type)) {
+                (Value::Number(l), Value::Number(r)) => {
+                    if r == 0.0 || r.is_nan() {
+                        Value::Null
+                    } else {
+                        Value::Number(l / r)
+                    }
+                }
+                _ => Value::Null,
+            },
+
+            BinaryOp::Eq => Value::Bool(left_res.check_equality(&right_res)),
+
+            BinaryOp::Neq => Value::Bool(!left_res.check_equality(&right_res)),
+
+            BinaryOp::Gt => match (left_res, right_res.cast(left_type)) {
+                (Value::Number(l), Value::Number(r)) => Value::Bool(l > r),
+                (Value::String(l), Value::String(r)) => Value::Bool(l > r),
+                _ => Value::Null,
+            },
+
+            BinaryOp::Lt => match (left_res, right_res.cast(left_type)) {
+                (Value::Number(l), Value::Number(r)) => Value::Bool(l < r),
+                (Value::String(l), Value::String(r)) => Value::Bool(l < r),
+                _ => Value::Null,
+            },
+
+            BinaryOp::Ge => match (left_res, right_res.cast(left_type)) {
+                (Value::Number(l), Value::Number(r)) => Value::Bool(l >= r),
+                (Value::String(l), Value::String(r)) => Value::Bool(l >= r),
+                _ => Value::Null,
+            },
+
+            BinaryOp::Le => match (left_res, right_res.cast(left_type)) {
+                (Value::Number(l), Value::Number(r)) => Value::Bool(l <= r),
+                (Value::String(l), Value::String(r)) => Value::Bool(l <= r),
+                _ => Value::Null,
+            },
+
+            BinaryOp::And => Value::Bool(left_res.is_truthy() && right_res.is_truthy()),
+
+            BinaryOp::Or => Value::Bool(left_res.is_truthy() || right_res.is_truthy()),
         }
     }
 }

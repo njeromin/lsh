@@ -152,6 +152,10 @@ impl Evaluator {
                     self.assign_target(target, assigned_value, scope_indices);
                     last_status = 0;
                 }
+                Statement::CompoundAssign { target, op, value } => {
+                    self.compound_assign_target(target, op, value, scope_indices);
+                    last_status = 0;
+                }
                 Statement::If {
                     condition,
                     then_branch,

@@ -3,7 +3,7 @@ use std::{
     env,
 };
 
-use lsh_syntax::ast::Expr;
+use lsh_syntax::ast::{BinaryOp, Expr};
 
 use crate::eval::{EvalError, Evaluator, value::Value};
 
@@ -173,6 +173,28 @@ impl Evaluator {
         matches!(expr, Expr::Variable(_) | Expr::Word(_) | Expr::Index { .. })
     }
 
+    fn expand_dotted_index_target(object: &Expr, key: &str) -> Expr {
+        let parts: Vec<&str> = key.split('.').collect();
+        let mut current_obj = object.clone();
+        for part in &parts[..parts.len() - 1] {
+            current_obj = Expr::Index {
+                object: Box::new(current_obj),
+                index: Box::new(Expr::String(part.to_string())),
+            };
+        }
+        let last_key = parts.last().unwrap().to_string();
+        Expr::Index {
+            object: Box::new(current_obj),
+            index: Box::new(Expr::String(last_key)),
+        }
+    }
+
+    fn resolve_array_assign_index(len: usize, key: &str) -> Option<usize> {
+        let idx = key.parse::<isize>().ok()?;
+        let actual_idx = if idx < 0 { len as isize + idx } else { idx };
+        (actual_idx >= 0).then_some(actual_idx as usize)
+    }
+
     pub(crate) fn assign_target(
         &mut self,
         target: &Expr,
@@ -194,19 +216,7 @@ impl Evaluator {
                     .unwrap_or_else(|| panic!("Invalid object index for assignment."));
 
                 if key.contains('.') {
-                    let parts: Vec<&str> = key.split('.').collect();
-                    let mut current_obj = *object.clone();
-                    for part in &parts[..parts.len() - 1] {
-                        current_obj = Expr::Index {
-                            object: Box::new(current_obj),
-                            index: Box::new(Expr::String(part.to_string())),
-                        };
-                    }
-                    let last_key = parts.last().unwrap().to_string();
-                    let expanded_target = Expr::Index {
-                        object: Box::new(current_obj),
-                        index: Box::new(Expr::String(last_key)),
-                    };
+                    let expanded_target = Self::expand_dotted_index_target(object, &key);
                     self.assign_target(&expanded_target, value, scope_indices);
                     return;
                 }
@@ -225,21 +235,108 @@ impl Evaluator {
                             Ok(g) => g,
                             Err(p) => p.into_inner(),
                         };
-                        if let Ok(idx) = key.parse::<isize>() {
-                            let actual_idx = if idx < 0 { a.len() as isize + idx } else { idx };
-                            if actual_idx >= 0 {
-                                let u_idx = actual_idx as usize;
-                                if u_idx < a.len() {
-                                    a[u_idx] = value;
-                                } else if u_idx == a.len() {
-                                    a.push(value);
-                                }
+                        if let Some(u_idx) = Self::resolve_array_assign_index(a.len(), &key) {
+                            if u_idx < a.len() {
+                                a[u_idx] = value;
+                            } else if u_idx == a.len() {
+                                a.push(value);
                             }
                         }
                     }
                     Value::Null => {
                         let mut new_map = HashMap::new();
                         new_map.insert(key, value);
+                        self.assign_target(object, Value::object(new_map), scope_indices);
+                    }
+                    _ => panic!("Assignment target must be an object or array member."),
+                }
+            }
+            _ => panic!("Invalid assignment target."),
+        }
+    }
+
+    pub(crate) fn compound_assign_target(
+        &mut self,
+        target: &Expr,
+        op: &BinaryOp,
+        rhs_expr: &Expr,
+        scope_indices: &mut Vec<usize>,
+    ) {
+        match target {
+            Expr::Variable(var_name) | Expr::Word(var_name) => {
+                if var_name.contains('.') {
+                    let expanded_target = Self::path_to_expr(var_name);
+                    self.compound_assign_target(&expanded_target, op, rhs_expr, scope_indices);
+                    return;
+                }
+                let current = self
+                    .scoped_var(var_name, scope_indices)
+                    .or_else(|| env::var(var_name).ok().map(Value::String))
+                    .unwrap_or(Value::Null);
+                let rhs = self.evaluate_expr(rhs_expr, true, scope_indices);
+                let updated = Self::eval_binary_op(op, current, rhs);
+                self.assign_var(var_name, updated, scope_indices);
+            }
+            Expr::Index { object, index } => {
+                let key_value = self.evaluate_expr(index, true, scope_indices);
+                let key = Self::object_index_key(key_value)
+                    .unwrap_or_else(|| panic!("Invalid object index for assignment."));
+
+                if key.contains('.') {
+                    let expanded_target = Self::expand_dotted_index_target(object, &key);
+                    self.compound_assign_target(&expanded_target, op, rhs_expr, scope_indices);
+                    return;
+                }
+
+                let target_obj = self.evaluate_expr(object, true, scope_indices);
+                match target_obj {
+                    Value::Object(map) => {
+                        let current = {
+                            let guard = match map.read() {
+                                Ok(g) => g,
+                                Err(p) => p.into_inner(),
+                            };
+                            guard.get(&key).cloned().unwrap_or(Value::Null)
+                        };
+                        let rhs = self.evaluate_expr(rhs_expr, true, scope_indices);
+                        let updated = Self::eval_binary_op(op, current, rhs);
+                        let mut m = match map.write() {
+                            Ok(g) => g,
+                            Err(p) => p.into_inner(),
+                        };
+                        m.insert(key, updated);
+                    }
+                    Value::Array(arr) => {
+                        let (u_idx, current) = {
+                            let guard = match arr.read() {
+                                Ok(g) => g,
+                                Err(p) => p.into_inner(),
+                            };
+                            let u_idx = Self::resolve_array_assign_index(guard.len(), &key);
+                            let current = u_idx
+                                .and_then(|i| guard.get(i).cloned())
+                                .unwrap_or(Value::Null);
+                            (u_idx, current)
+                        };
+                        let rhs = self.evaluate_expr(rhs_expr, true, scope_indices);
+                        let updated = Self::eval_binary_op(op, current, rhs);
+                        if let Some(u_idx) = u_idx {
+                            let mut a = match arr.write() {
+                                Ok(g) => g,
+                                Err(p) => p.into_inner(),
+                            };
+                            if u_idx < a.len() {
+                                a[u_idx] = updated;
+                            } else if u_idx == a.len() {
+                                a.push(updated);
+                            }
+                        }
+                    }
+                    Value::Null => {
+                        let rhs = self.evaluate_expr(rhs_expr, true, scope_indices);
+                        let updated = Self::eval_binary_op(op, Value::Null, rhs);
+                        let mut new_map = HashMap::new();
+                        new_map.insert(key, updated);
                         self.assign_target(object, Value::object(new_map), scope_indices);
                     }
                     _ => panic!("Assignment target must be an object or array member."),

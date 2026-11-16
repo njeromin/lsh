@@ -7,6 +7,12 @@ pub struct Redirect {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub enum UnaryOp {
+    Not,
+    Neg,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum BinaryOp {
     Add,
     Sub,
@@ -54,6 +60,11 @@ pub enum Expr {
     Array(Vec<Expr>),
     Variable(String),
 
+    // !a, -a
+    Unary {
+        op: UnaryOp,
+        expr: Box<Expr>,
+    },
     // a + b, a - b, ...
     Binary {
         op: BinaryOp,
@@ -90,6 +101,11 @@ pub enum Statement {
     },
     Assign {
         target: Expr,
+        value: Expr,
+    },
+    CompoundAssign {
+        target: Expr,
+        op: BinaryOp,
         value: Expr,
     },
     If {

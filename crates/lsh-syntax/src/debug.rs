@@ -54,6 +54,12 @@ fn print_parser_statement(stmt: &Statement) {
             print!(" = ");
             print_parser_expr(value);
         }
+        Statement::CompoundAssign { target, op, value } => {
+            print!("CompoundAssign({op:?}): ");
+            print_parser_expr(target);
+            print!(" = ");
+            print_parser_expr(value);
+        }
         Statement::If {
             condition,
             then_branch,
@@ -156,6 +162,9 @@ fn print_parser_expr(expr: &Expr) {
         }
         Expr::Variable(var) => {
             println!("Variable({var})");
+        }
+        Expr::Unary { op, expr } => {
+            println!("Unary Expression({op:?} {expr:?})");
         }
         Expr::Binary { left, op, right } => {
             println!("Binary Expression({left:?} {op:?} {right:?})");

@@ -2,7 +2,7 @@ use crate::{diagnostics::DiagnosticKind, lexer::lex_input};
 
 use super::{
     Parser,
-    ast::{BinaryOp, CommandExpr, Expr, Redirect, Statement},
+    ast::{BinaryOp, CommandExpr, Expr, Redirect, Statement, UnaryOp},
 };
 
 fn parse_program(input: &str) -> Vec<Statement> {
@@ -994,4 +994,95 @@ fn parses_background_commands() {
         panic!("Expected CommandExpr::Background");
     };
     assert!(matches!(inner.as_ref(), CommandExpr::Pipeline(_)));
+}
+
+#[test]
+fn parses_unary_not_and_negation() {
+    let body = parse_program("let a = !true\nlet b = !!$flag\nlet c = -$x\nlet d = -(1 + 2)");
+    assert_eq!(body.len(), 4);
+
+    let Statement::Let { value: v1, .. } = &body[0] else {
+        panic!("Expected let statement");
+    };
+    assert!(matches!(
+        v1,
+        Expr::Unary {
+            op: UnaryOp::Not,
+            expr
+        } if matches!(expr.as_ref(), Expr::Bool(true))
+    ));
+
+    let Statement::Let { value: v2, .. } = &body[1] else {
+        panic!("Expected let statement");
+    };
+    assert!(matches!(
+        v2,
+        Expr::Unary {
+            op: UnaryOp::Not,
+            expr
+        } if matches!(expr.as_ref(), Expr::Unary { op: UnaryOp::Not, .. })
+    ));
+
+    let Statement::Let { value: v3, .. } = &body[2] else {
+        panic!("Expected let statement");
+    };
+    assert!(matches!(
+        v3,
+        Expr::Unary {
+            op: UnaryOp::Neg,
+            expr
+        } if matches!(expr.as_ref(), Expr::Variable(name) if name == "x")
+    ));
+
+    let Statement::Let { value: v4, .. } = &body[3] else {
+        panic!("Expected let statement");
+    };
+    assert!(matches!(
+        v4,
+        Expr::Unary {
+            op: UnaryOp::Neg,
+            expr
+        } if matches!(expr.as_ref(), Expr::Binary { op: BinaryOp::Add, .. })
+    ));
+}
+
+#[test]
+fn parses_compound_assignments() {
+    let body = parse_program(
+        "$x += 1\n$x -= 2\n$obj.count *= 3\n$arr[0] /= 4",
+    );
+    assert_eq!(body.len(), 4);
+
+    assert!(matches!(
+        &body[0],
+        Statement::CompoundAssign {
+            target: Expr::Variable(v),
+            op: BinaryOp::Add,
+            value: Expr::Number(n),
+        } if v == "x" && *n == 1.0
+    ));
+    assert!(matches!(
+        &body[1],
+        Statement::CompoundAssign {
+            target: Expr::Variable(v),
+            op: BinaryOp::Sub,
+            value: Expr::Number(n),
+        } if v == "x" && *n == 2.0
+    ));
+    assert!(matches!(
+        &body[2],
+        Statement::CompoundAssign {
+            target: Expr::Index { .. },
+            op: BinaryOp::Mul,
+            value: Expr::Number(n),
+        } if *n == 3.0
+    ));
+    assert!(matches!(
+        &body[3],
+        Statement::CompoundAssign {
+            target: Expr::Index { .. },
+            op: BinaryOp::Div,
+            value: Expr::Number(n),
+        } if *n == 4.0
+    ));
 }

@@ -1,7 +1,7 @@
 use crate::{
     diagnostics::Diagnostic,
     lexer::token::TokenKind,
-    parser::ast::{Expr, Program, Statement},
+    parser::ast::{BinaryOp, Expr, Program, Statement},
 };
 
 use super::Parser;
@@ -89,9 +89,18 @@ impl Parser {
                     _ => false,
                 };
 
-                if self.check_current(&TokenKind::Equals) && is_assignable {
+                let compound_op = match self.current().kind {
+                    TokenKind::PlusEquals => Some(BinaryOp::Add),
+                    TokenKind::MinusEquals => Some(BinaryOp::Sub),
+                    TokenKind::StarEquals => Some(BinaryOp::Mul),
+                    TokenKind::SlashEquals => Some(BinaryOp::Div),
+                    _ => None,
+                };
+
+                if is_assignable && (self.check_current(&TokenKind::Equals) || compound_op.is_some())
+                {
                     let pre_assign_index = self.index;
-                    self.advance(); // Skip '='.
+                    self.advance(); // Skip '=' or compound assignment operator.
                     if let Ok(value) = self.parse_expr() {
                         let statement_ends = self.check_current(&TokenKind::Semicolon)
                             || self.check_current(&TokenKind::NewLine)
@@ -106,7 +115,10 @@ impl Parser {
                                 },
                                 other => other,
                             };
-                            return Ok(Statement::Assign { target, value });
+                            return Ok(match compound_op {
+                                Some(op) => Statement::CompoundAssign { target, op, value },
+                                None => Statement::Assign { target, value },
+                            });
                         }
                     }
                     self.index = pre_assign_index;

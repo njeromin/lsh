@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use crate::{
     diagnostics::Diagnostic,
     lexer::token::{Token, TokenKind},
-    parser::ast::{BinaryOp, Expr, Statement},
+    parser::ast::{BinaryOp, Expr, Statement, UnaryOp},
 };
 
 use super::Parser;
@@ -100,14 +100,14 @@ impl Parser {
     }
 
     fn parse_factor(&mut self) -> Result<Expr, Diagnostic> {
-        let mut expr = self.parse_postfix()?;
+        let mut expr = self.parse_unary()?;
         while let Some(op) = match self.current().kind {
             TokenKind::Star => Some(BinaryOp::Mul),
             TokenKind::Slash => Some(BinaryOp::Div),
             _ => None,
         } {
             self.advance();
-            let right = self.parse_postfix()?;
+            let right = self.parse_unary()?;
             expr = Expr::Binary {
                 op,
                 left: Box::new(expr),
@@ -115,6 +115,25 @@ impl Parser {
             };
         }
         Ok(expr)
+    }
+
+    fn parse_unary(&mut self) -> Result<Expr, Diagnostic> {
+        if self.match_token(&[TokenKind::Not]) {
+            let expr = self.parse_unary()?;
+            return Ok(Expr::Unary {
+                op: UnaryOp::Not,
+                expr: Box::new(expr),
+            });
+        }
+        if self.match_token(&[TokenKind::Minus]) {
+            let expr = self.parse_unary()?;
+            return Ok(Expr::Unary {
+                op: UnaryOp::Neg,
+                expr: Box::new(expr),
+            });
+        }
+
+        self.parse_postfix()
     }
 
     pub(crate) fn parse_postfix(&mut self) -> Result<Expr, Diagnostic> {
