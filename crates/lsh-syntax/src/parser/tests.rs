@@ -6,8 +6,8 @@ use super::{
 };
 
 fn parse_program(input: &str) -> Vec<Statement> {
-    let tokens = lex_input(0, input).expect("lexer should succeed in parser test");
-    let mut parser = Parser::new(0, tokens);
+    let tokens = lex_input(input).expect("lexer should succeed in parser test");
+    let mut parser = Parser::new(tokens);
     parser
         .parse_program()
         .expect("parser should succeed in parser test")
@@ -34,8 +34,8 @@ fn extract_call_parts(statement: &Statement) -> (&Expr, &Vec<Expr>) {
 
 #[test]
 fn returns_parse_diagnostic_for_invalid_let_identifier() {
-    let tokens = lex_input(0, "let = 1").expect("lexer should succeed");
-    let mut parser = Parser::new(0, tokens);
+    let tokens = lex_input("let = 1").expect("lexer should succeed");
+    let mut parser = Parser::new(tokens);
 
     let err = parser
         .parse_program()
@@ -46,8 +46,8 @@ fn returns_parse_diagnostic_for_invalid_let_identifier() {
 
 #[test]
 fn returns_parse_diagnostic_for_unclosed_command_sub_expr() {
-    let tokens = lex_input(0, "echo $(1 + 2").expect("lexer should succeed");
-    let mut parser = Parser::new(0, tokens);
+    let tokens = lex_input("echo $(1 + 2").expect("lexer should succeed");
+    let mut parser = Parser::new(tokens);
 
     let err = parser
         .parse_program()
@@ -58,8 +58,8 @@ fn returns_parse_diagnostic_for_unclosed_command_sub_expr() {
 
 #[test]
 fn returns_parse_diagnostic_for_missing_redirect_target() {
-    let tokens = lex_input(0, "echo hi ->").expect("lexer should succeed");
-    let mut parser = Parser::new(0, tokens);
+    let tokens = lex_input("echo hi ->").expect("lexer should succeed");
+    let mut parser = Parser::new(tokens);
 
     let err = parser
         .parse_program()
@@ -70,8 +70,8 @@ fn returns_parse_diagnostic_for_missing_redirect_target() {
 
 #[test]
 fn returns_parse_diagnostic_with_hint_for_assignment_in_expression() {
-    let tokens = lex_input(0, "if 1 = 1 {}").expect("lexer should succeed");
-    let mut parser = Parser::new(0, tokens);
+    let tokens = lex_input("if 1 = 1 {}").expect("lexer should succeed");
+    let mut parser = Parser::new(tokens);
 
     let err = parser
         .parse_program()

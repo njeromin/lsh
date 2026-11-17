@@ -4,9 +4,7 @@ pub mod lexer;
 pub mod parser;
 pub mod paths;
 
-pub use diagnostics::{
-    Diagnostic, DiagnosticKind, print_diagnostic, print_error, source_map::SourceMap,
-};
+pub use diagnostics::{Diagnostic, DiagnosticKind, print_diagnostic, print_error};
 pub use lexer::{
     lex_input, lex_input_lenient,
     token::{Token, TokenKind},

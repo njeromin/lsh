@@ -1,6 +1,6 @@
 use std::{fs, io::stderr, path::PathBuf};
 
-use lsh_syntax::{SourceMap, debug, lexer, parser::Parser, print_diagnostic, print_error};
+use lsh_syntax::{debug, lexer, parser::Parser, print_diagnostic, print_error};
 
 use crate::eval::{EvalOutcome, Evaluator};
 
@@ -13,27 +13,21 @@ pub fn exec_file_outcome_scoped(
 
     match fs::read_to_string(&path) {
         Ok(input) => {
-            let tokens = match lexer::lex_input(0, input.as_str()) {
+            let tokens = match lexer::lex_input(input.as_str()) {
                 Ok(tokens) => tokens,
-                Err(mut diag) => {
-                    let mut source_map = SourceMap::default();
-                    diag.source.source_id =
-                        source_map.insert(path.to_string_lossy().as_ref(), input.as_str());
-                    print_diagnostic(&mut cerr, &diag, &source_map);
+                Err(diag) => {
+                    print_diagnostic(&mut cerr, &diag, path.to_string_lossy().as_ref(), &input);
                     return Err(diag.message);
                 }
             };
 
             debug::print_lexer(&tokens);
 
-            let mut parser = Parser::new(0, tokens);
+            let mut parser = Parser::new(tokens);
             let prog = match parser.parse_program() {
                 Ok(prog) => prog,
-                Err(mut diag) => {
-                    let mut source_map = SourceMap::default();
-                    diag.source.source_id =
-                        source_map.insert(path.to_string_lossy().as_ref(), input.as_str());
-                    print_diagnostic(&mut cerr, &diag, &source_map);
+                Err(diag) => {
+                    print_diagnostic(&mut cerr, &diag, path.to_string_lossy().as_ref(), &input);
                     return Err(diag.message);
                 }
             };

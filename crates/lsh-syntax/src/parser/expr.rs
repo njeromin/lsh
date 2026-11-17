@@ -256,7 +256,7 @@ impl Parser<'_> {
             TokenKind::Number(n) => Expr::Number(*n),
             TokenKind::QuotedString(s) => Expr::QuotedString(s.as_ref().to_owned()),
             TokenKind::DoubleQuotedString(s) => {
-                Self::parse_interpolated_string(self.src_id, s, self.current().offset)?
+                Self::parse_interpolated_string(s, self.current().offset)?
             }
             TokenKind::String(s) => {
                 // Check if this is the start of an anonymous function: x => ...

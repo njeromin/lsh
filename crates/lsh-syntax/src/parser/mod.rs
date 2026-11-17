@@ -13,18 +13,13 @@ mod statement;
 mod string;
 
 pub struct Parser<'a> {
-    pub(crate) src_id: usize,
     pub(crate) tokens: Vec<Token<'a>>,
     pub(crate) index: usize,
 }
 
 impl<'a> Parser<'a> {
-    pub fn new(src_id: usize, tokens: Vec<Token<'a>>) -> Self {
-        Self {
-            src_id,
-            tokens,
-            index: 0,
-        }
+    pub fn new(tokens: Vec<Token<'a>>) -> Self {
+        Self { tokens, index: 0 }
     }
 
     /// Parses all provided tokens and returns a program which can be evaluated by an Evaluator.
@@ -162,7 +157,7 @@ impl<'a> Parser<'a> {
         let start = token.offset;
         let end = start + Self::token_source_len(token).max(1);
 
-        Diagnostic::new(DiagnosticKind::ParseError, self.src_id, start, end, message)
+        Diagnostic::new(DiagnosticKind::ParseError, start, end, message)
     }
 
     pub(crate) fn diagnostic_here_with_hint(

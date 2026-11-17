@@ -24,7 +24,7 @@ impl SyntaxHighlighter {
 
     pub fn highlight_styled(&self, line: &str) -> StyledText {
         let mut styled = StyledText::new();
-        let tokens = lexer::lex_input_lenient(0, line);
+        let tokens = lexer::lex_input_lenient(line);
 
         if tokens
             .iter()

@@ -8,9 +8,7 @@ use crossterm::{cursor, execute, terminal::SetTitle};
 use dirs::home_dir;
 use lsh_eval::{Evaluator, Value, builtins::fmt_cwd::format_cwd, exec_file};
 use lsh_input::{DefaultHistory, DefaultValidator, Editor, Signal};
-use lsh_syntax::{
-    SourceMap, debug, diagnostics::print_diagnostic, lexer, parser::Parser, print_error,
-};
+use lsh_syntax::{debug, diagnostics::print_diagnostic, lexer, parser::Parser, print_error};
 use lsh_sys::signals::{init_interactive_terminal, reset_interrupted};
 use lsh_terminal::{
     CompletionType, LshCompleter, LshHinter, LshPrompt, Options, SyntaxHighlighter, osc,
@@ -58,7 +56,6 @@ fn get_prompt(eval: &mut Evaluator) -> String {
 
 fn interactive_session(
     eval: &mut Evaluator,
-    src_map: &mut SourceMap,
     config_dir: &Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
     init_interactive_terminal();
@@ -171,29 +168,23 @@ fn interactive_session(
             eval.warned_stopped_jobs = false;
         }
 
-        let tokens = match lexer::lex_input(0, &input) {
+        let tokens = match lexer::lex_input(&input) {
             Ok(tokens) => tokens,
-            Err(mut diag) => {
-                let src_id = src_map.insert("<input>", &input);
-                diag.source.source_id = src_id;
-                print_diagnostic(&mut cerr, &diag, src_map);
+            Err(diag) => {
+                print_diagnostic(&mut cerr, &diag, "<input>", &input);
                 osc::write_133("D;1");
-                let _ = src_map.remove(src_id);
                 continue;
             }
         };
 
         debug::print_lexer(&tokens);
 
-        let mut parser = Parser::new(0, tokens);
+        let mut parser = Parser::new(tokens);
         let prog = match parser.parse_program() {
             Ok(prog) => prog,
-            Err(mut diag) => {
-                let src_id = src_map.insert("<input>", &input);
-                diag.source.source_id = src_id;
-                print_diagnostic(&mut cerr, &diag, src_map);
+            Err(diag) => {
+                print_diagnostic(&mut cerr, &diag, "<input>", &input);
                 osc::write_133("D;1");
-                let _ = src_map.remove(src_id);
                 continue;
             }
         };
@@ -209,7 +200,6 @@ fn interactive_session(
 }
 
 fn main() {
-    let mut src_map = SourceMap::default();
     let mut eval = Evaluator::new().with_globals();
 
     let mut args = env::args();
@@ -261,7 +251,7 @@ fn main() {
 
         let code = exec_file(&mut eval, PathBuf::from(file_path));
         std::process::exit(code);
-    } else if let Err(e) = interactive_session(&mut eval, &mut src_map, &config_dir) {
+    } else if let Err(e) = interactive_session(&mut eval, &config_dir) {
         print_error(&mut io::stderr(), e.to_string().as_str());
         std::process::exit(1);
     }

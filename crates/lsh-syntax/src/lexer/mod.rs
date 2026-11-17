@@ -7,20 +7,16 @@ pub mod token;
 
 type CharIndexedIter<'a> = Peekable<CharIndices<'a>>;
 
-pub fn lex_input(src_id: usize, input: &str) -> Result<Vec<Token<'_>>, Diagnostic> {
-    lex_input_internal(src_id, input, false)
+pub fn lex_input(input: &str) -> Result<Vec<Token<'_>>, Diagnostic> {
+    lex_input_internal(input, false)
 }
 
-pub fn lex_input_lenient(src_id: usize, input: &str) -> Vec<Token<'_>> {
-    lex_input_internal(src_id, input, true)
+pub fn lex_input_lenient(input: &str) -> Vec<Token<'_>> {
+    lex_input_internal(input, true)
         .unwrap_or_else(|_| vec![Token::new(TokenKind::EOF, input.len(), 0)])
 }
 
-fn lex_input_internal(
-    src_id: usize,
-    input: &str,
-    lenient: bool,
-) -> Result<Vec<Token<'_>>, Diagnostic> {
+fn lex_input_internal(input: &str, lenient: bool) -> Result<Vec<Token<'_>>, Diagnostic> {
     let mut tokens = Vec::with_capacity(input.len() / 4 + 2);
 
     let mut chars: CharIndexedIter = input.char_indices().peekable();
@@ -175,7 +171,6 @@ fn lex_input_internal(
                     } else {
                         return Err(Diagnostic::new(
                             DiagnosticKind::LexError,
-                            src_id,
                             offset,
                             offset + char.len_utf8() + next_char.len_utf8(),
                             format!("Unexpected token '{next_char}' after '$'."),
@@ -214,13 +209,11 @@ fn lex_input_internal(
             '[' => tokens.push(Token::new(TokenKind::LeftBracket, offset, 1)),
             ']' => tokens.push(Token::new(TokenKind::RightBracket, offset, 1)),
             '\'' => {
-                let (string, len) =
-                    lex_single_quoted_string(src_id, input, offset, &mut chars, lenient)?;
+                let (string, len) = lex_single_quoted_string(input, offset, &mut chars, lenient)?;
                 tokens.push(Token::new(TokenKind::QuotedString(string), offset, len));
             }
             '"' => {
-                let (string, len) =
-                    lex_double_quoted_string(src_id, input, offset, &mut chars, lenient)?;
+                let (string, len) = lex_double_quoted_string(input, offset, &mut chars, lenient)?;
                 tokens.push(Token::new(
                     TokenKind::DoubleQuotedString(string),
                     offset,
@@ -276,7 +269,6 @@ fn lex_input_internal(
                         // unexpected token.
                         return Err(Diagnostic::new(
                             DiagnosticKind::LexError,
-                            src_id,
                             offset,
                             offset + char.len_utf8(),
                             format!("Unexpected token '{char}'."),
@@ -293,7 +285,6 @@ fn lex_input_internal(
 }
 
 fn lex_single_quoted_string<'a>(
-    src_id: usize,
     input: &'a str,
     start_offset: usize,
     chars: &mut CharIndexedIter<'a>,
@@ -324,7 +315,6 @@ fn lex_single_quoted_string<'a>(
                 }
                 return Err(Diagnostic::new(
                     DiagnosticKind::LexError,
-                    src_id,
                     offset,
                     offset + '\\'.len_utf8(),
                     "Unterminated escape sequence in string literal.",
@@ -357,7 +347,6 @@ fn lex_single_quoted_string<'a>(
         }
         return Err(Diagnostic::new(
             DiagnosticKind::LexError,
-            src_id,
             start_offset,
             input.len(),
             "Unterminated string literal.",
@@ -372,7 +361,6 @@ fn lex_single_quoted_string<'a>(
 }
 
 fn lex_double_quoted_string<'a>(
-    src_id: usize,
     input: &'a str,
     start_offset: usize,
     chars: &mut CharIndexedIter<'a>,
@@ -402,7 +390,6 @@ fn lex_double_quoted_string<'a>(
                 }
                 return Err(Diagnostic::new(
                     DiagnosticKind::LexError,
-                    src_id,
                     offset,
                     offset + '\\'.len_utf8(),
                     "Unterminated escape sequence in string literal.",
@@ -465,7 +452,6 @@ fn lex_double_quoted_string<'a>(
         }
         return Err(Diagnostic::new(
             DiagnosticKind::LexError,
-            src_id,
             start_offset,
             input.len(),
             "Unterminated string literal.",
@@ -674,23 +660,14 @@ fn match_keyword(keyword: &str) -> Option<TokenKind<'static>> {
 
 #[cfg(test)]
 mod tests {
-    use crate::diagnostics::source_map::SourceMap;
-
     use super::*;
 
     fn token_kinds(input: &str) -> Vec<TokenKind<'_>> {
-        let mut src_map = SourceMap::default();
-        let src_id = src_map.insert("<test data>", input);
-
-        let toks = lex_input(src_id, input)
+        lex_input(input)
             .expect("lexer should succeed in test")
             .into_iter()
             .map(|token| token.kind)
-            .collect();
-
-        src_map.remove(src_id);
-
-        toks
+            .collect()
     }
 
     #[test]
@@ -832,9 +809,7 @@ mod tests {
 
     #[test]
     fn lexes_escaped_spaces_in_bare_words() {
-        let mut src_map = SourceMap::default();
-        let src_id = src_map.insert("<test>", "cd My\\ Documents");
-        let tokens = lex_input(src_id, "cd My\\ Documents").expect("lex succeeds");
+        let tokens = lex_input("cd My\\ Documents").expect("lex succeeds");
         assert_eq!(tokens.len(), 3);
         assert!(matches!(&tokens[0].kind, TokenKind::String(s) if s == "cd"));
         assert_eq!(tokens[0].offset, 0);
@@ -948,13 +923,13 @@ mod tests {
 
     #[test]
     fn lenient_lexer_handles_unclosed_quotes() {
-        let tokens = lex_input_lenient(0, "echo \"hello");
+        let tokens = lex_input_lenient("echo \"hello");
         assert_eq!(tokens.len(), 3);
         assert!(matches!(&tokens[0].kind, TokenKind::String(s) if s == "echo"));
         assert!(matches!(&tokens[1].kind, TokenKind::DoubleQuotedString(s) if s == "hello"));
         assert!(matches!(&tokens[2].kind, TokenKind::EOF));
 
-        let single_tokens = lex_input_lenient(0, "echo 'world");
+        let single_tokens = lex_input_lenient("echo 'world");
         assert_eq!(single_tokens.len(), 3);
         assert!(matches!(&single_tokens[0].kind, TokenKind::String(s) if s == "echo"));
         assert!(matches!(&single_tokens[1].kind, TokenKind::QuotedString(s) if s == "world"));
