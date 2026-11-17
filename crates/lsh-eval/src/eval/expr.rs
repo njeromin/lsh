@@ -25,6 +25,7 @@ impl Evaluator {
         args: Vec<Value>,
         receiver: Option<(Expr, Value)>,
     ) -> Value {
+        self.last_error_span = None;
         let mut scope_indices = vec![0];
         match self.try_call_user_function_with_values_and_receiver(
             func,

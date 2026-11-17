@@ -9,8 +9,8 @@ use lsh_sys::signals::STATUS_SIGINT;
 use std::{io, sync::atomic::AtomicBool};
 
 fn eval_str(code: &str) -> i32 {
-    let tokens = lexer::lex_input(code).expect("lex error");
-    let mut parser = Parser::new(tokens);
+    let tokens = lexer::lex_input(0, code).expect("lex error");
+    let mut parser = Parser::new(0, tokens);
     let prog = parser.parse_program().expect("parse error");
     let mut eval = Evaluator::new()
         .with_globals()
@@ -62,8 +62,8 @@ fn eval_var(code: &str, var_name: &str) -> Option<Value> {
 }
 
 fn eval_with_evaluator(code: &str) -> (Evaluator, i32) {
-    let tokens = lexer::lex_input(code).expect("lex error");
-    let mut parser = Parser::new(tokens);
+    let tokens = lexer::lex_input(0, code).expect("lex error");
+    let mut parser = Parser::new(0, tokens);
     let prog = parser.parse_program().expect("parse error");
     let mut eval = Evaluator::new()
         .with_globals()
@@ -81,8 +81,8 @@ fn signal_interrupt_aborts_evaluation_with_status_130() {
             $reached_second = 2
         "#;
 
-    let tokens = lexer::lex_input(code).expect("lex error");
-    let mut parser = Parser::new(tokens);
+    let tokens = lexer::lex_input(0, code).expect("lex error");
+    let mut parser = Parser::new(0, tokens);
     let prog = parser.parse_program().expect("parse error");
     let flag = Arc::new(AtomicBool::new(true));
     let mut eval = Evaluator::new().with_globals().with_interrupt_flag(flag);
@@ -106,8 +106,8 @@ fn signal_interrupt_aborts_while_loop_with_status_130() {
             }
         "#;
 
-    let tokens = lexer::lex_input(code).expect("lex error");
-    let mut parser = Parser::new(tokens);
+    let tokens = lexer::lex_input(0, code).expect("lex error");
+    let mut parser = Parser::new(0, tokens);
     let prog = parser.parse_program().expect("parse error");
     let flag = Arc::new(AtomicBool::new(true));
     let mut eval = Evaluator::new().with_globals().with_interrupt_flag(flag);
@@ -194,10 +194,10 @@ fn build_command_args_expands_unquoted_wildcards_and_preserves_quotes() {
 
     // Unquoted wildcard: echo src/*.rs
     let unquoted_code = "echo src/*.rs";
-    let tokens = lexer::lex_input(unquoted_code).unwrap();
-    let mut parser = Parser::new(tokens);
+    let tokens = lexer::lex_input(0, unquoted_code).unwrap();
+    let mut parser = Parser::new(0, tokens);
     let prog = parser.parse_program().unwrap();
-    let call_args = match &prog.body[0] {
+    let call_args = match &prog.body[0].statement {
         Statement::Command(CommandExpr::Call { args, .. }) => args,
         Statement::Expr(Expr::Call { args, .. }) => args,
         _ => panic!("expected call-like statement"),
@@ -210,10 +210,10 @@ fn build_command_args_expands_unquoted_wildcards_and_preserves_quotes() {
 
     // Quoted wildcard: echo "src/*.rs"
     let quoted_code = "echo \"src/*.rs\"";
-    let tokens = lexer::lex_input(quoted_code).unwrap();
-    let mut parser = Parser::new(tokens);
+    let tokens = lexer::lex_input(0, quoted_code).unwrap();
+    let mut parser = Parser::new(0, tokens);
     let prog = parser.parse_program().unwrap();
-    let call_args = match &prog.body[0] {
+    let call_args = match &prog.body[0].statement {
         Statement::Command(CommandExpr::Call { args, .. }) => args,
         Statement::Expr(Expr::Call { args, .. }) => args,
         _ => panic!("expected call-like statement"),
@@ -225,10 +225,10 @@ fn build_command_args_expands_unquoted_wildcards_and_preserves_quotes() {
 
     // Nonexistent wildcard fallback
     let fallback_code = "echo nonexistent_*.xyz";
-    let tokens = lexer::lex_input(fallback_code).unwrap();
-    let mut parser = Parser::new(tokens);
+    let tokens = lexer::lex_input(0, fallback_code).unwrap();
+    let mut parser = Parser::new(0, tokens);
     let prog = parser.parse_program().unwrap();
-    let call_args = match &prog.body[0] {
+    let call_args = match &prog.body[0].statement {
         Statement::Command(CommandExpr::Call { args, .. }) => args,
         Statement::Expr(Expr::Call { args, .. }) => args,
         _ => panic!("expected call-like statement"),
@@ -449,7 +449,8 @@ fn plugin_return_and_command_execution_with_this() {
 
     let _ = eval.evaluate_statements(
         &lsh_syntax::parser::Parser::new(
-            lsh_syntax::lexer::lex_input("let out = $(echo_prefixed \"hello\").out").unwrap(),
+            0,
+            lsh_syntax::lexer::lex_input(0, "let out = $(echo_prefixed \"hello\").out").unwrap(),
         )
         .parse_program()
         .unwrap()
@@ -634,7 +635,7 @@ fn loads_git_prompt_plugin_from_config_directory() {
         $prompt.segments = ["\n", $fmt_cwd, $git_prompt.git, "\n", "❯ "]
         let out = $prompt.render()
         "#;
-    let statements = Parser::new(lexer::lex_input(script).unwrap())
+    let statements = Parser::new(0, lexer::lex_input(0, script).unwrap())
         .parse_program()
         .unwrap();
     let res = script_eval.evaluate_statements(&statements.body, &mut vec![0]);
@@ -677,7 +678,7 @@ fn prompt_segments_custom_registration_and_unload() {
         let p = import("test-plugin")
         $prompt.segments = $prompt.segments + [$p.alpha, $p.empty_seg]
         "#;
-    let statements = Parser::new(lexer::lex_input(script).unwrap())
+    let statements = Parser::new(0, lexer::lex_input(0, script).unwrap())
         .parse_program()
         .unwrap();
     eval.evaluate_statements(&statements.body, &mut vec![0]);
@@ -766,7 +767,7 @@ fn native_array_literals_indexing_methods_and_operations() {
         let appended = [1, 2] + 3;
         "#;
 
-    let statements = Parser::new(lexer::lex_input(script).unwrap())
+    let statements = Parser::new(0, lexer::lex_input(0, script).unwrap())
         .parse_program()
         .unwrap();
     eval.evaluate_statements(&statements.body, &mut vec![0]);
@@ -840,7 +841,7 @@ fn prompt_char_segment_and_customization() {
         $prompt.text = "❯ "
         let custom = $prompt.render("char")
         "#;
-    let statements = Parser::new(lexer::lex_input(script).unwrap())
+    let statements = Parser::new(0, lexer::lex_input(0, script).unwrap())
         .parse_program()
         .unwrap();
     eval.evaluate_statements(&statements.body, &mut vec![0]);
@@ -852,7 +853,7 @@ fn prompt_char_segment_and_customization() {
         $prompt.segments = ["\n", $fmt_cwd, "\n", "❯ "]
         let rendered_direct = $prompt.render()
         "#;
-    let stmts_direct = Parser::new(lexer::lex_input(script_direct).unwrap())
+    let stmts_direct = Parser::new(0, lexer::lex_input(0, script_direct).unwrap())
         .parse_program()
         .unwrap();
     eval.evaluate_statements(&stmts_direct.body, &mut vec![0]);
@@ -876,7 +877,7 @@ fn fmt_cwd_function_and_lambda_in_prompt_segments() {
         ]
         let rendered = $prompt.render()
         "#;
-    let statements = Parser::new(lexer::lex_input(script).unwrap())
+    let statements = Parser::new(0, lexer::lex_input(0, script).unwrap())
         .parse_program()
         .unwrap();
     eval.evaluate_statements(&statements.body, &mut vec![0]);
@@ -897,7 +898,7 @@ fn command_with_array_expansion_and_indexing() {
         let out_idx = $(echo $words[0] $words[-1]).out;
         "#;
 
-    let statements = Parser::new(lexer::lex_input(script).unwrap())
+    let statements = Parser::new(0, lexer::lex_input(0, script).unwrap())
         .parse_program()
         .unwrap();
     eval.evaluate_statements(&statements.body, &mut vec![0]);
@@ -911,7 +912,7 @@ fn command_with_array_expansion_and_indexing() {
         let out_brackets = $(echo [0-9]).out;
         let out_compound = $(echo --flag=[val]).out;
         "#;
-    let stmts_brackets = Parser::new(lexer::lex_input(script_brackets).unwrap())
+    let stmts_brackets = Parser::new(0, lexer::lex_input(0, script_brackets).unwrap())
         .parse_program()
         .unwrap();
     eval.evaluate_statements(&stmts_brackets.body, &mut vec![0]);
@@ -930,7 +931,7 @@ fn command_with_escapes_and_line_continuations() {
                       let out_escapes = $(echo {} \\; \\$NOT_EXPANDED).out;\n\
                       let out_continuation = $(echo line1 \\\n line2).out;";
 
-    let statements = Parser::new(lexer::lex_input(script).unwrap())
+    let statements = Parser::new(0, lexer::lex_input(0, script).unwrap())
         .parse_program()
         .unwrap();
     eval.evaluate_statements(&statements.body, &mut vec![0]);
@@ -1009,7 +1010,7 @@ fn evaluates_interpolated_string_in_command_arguments() {
             let who = "LSH"
             let out = $(echo "Hello $who!").out
         "#;
-    let statements = Parser::new(lexer::lex_input(script).unwrap())
+    let statements = Parser::new(0, lexer::lex_input(0, script).unwrap())
         .parse_program()
         .unwrap();
     eval.evaluate_statements(&statements.body, &mut vec![0]);
@@ -1035,7 +1036,7 @@ fn hooks_registry_lifecycle_and_methods() {
 
         let counts_before = $hooks.list()
         "#;
-    let statements = Parser::new(lexer::lex_input(script).unwrap())
+    let statements = Parser::new(0, lexer::lex_input(0, script).unwrap())
         .parse_program()
         .unwrap();
     eval.evaluate_statements(&statements.body, &mut vec![0]);
@@ -1058,7 +1059,7 @@ fn hooks_registry_lifecycle_and_methods() {
         $hooks.clear("pre_prompt")
         let counts_after = $hooks.list()
         "#;
-    let stmts_clear = Parser::new(lexer::lex_input(script_clear).unwrap())
+    let stmts_clear = Parser::new(0, lexer::lex_input(0, script_clear).unwrap())
         .parse_program()
         .unwrap();
     eval.evaluate_statements(&stmts_clear.body, &mut vec![0]);
@@ -1128,7 +1129,7 @@ fn property_access_method_binding_with_this() {
         let extracted_fn = $counter.get_count
         let res = $extracted_fn()
         "#;
-    let statements = Parser::new(lexer::lex_input(script).unwrap())
+    let statements = Parser::new(0, lexer::lex_input(0, script).unwrap())
         .parse_program()
         .unwrap();
     eval.evaluate_statements(&statements.body, &mut vec![0]);
@@ -1146,7 +1147,7 @@ fn test_time_segment_config_example() {
         }
         $prompt.segments.push(time_segment)
         "#;
-    let prog = Parser::new(lexer::lex_input(script).unwrap())
+    let prog = Parser::new(0, lexer::lex_input(0, script).unwrap())
         .parse_program()
         .unwrap();
     let status = eval.evaluate(prog);
@@ -1185,7 +1186,7 @@ fn test_string_methods() {
         let has_sub = $trimmed.contains("lo wo")
         let first_char = $trimmed[0]
         "#;
-    let prog = Parser::new(lexer::lex_input(script).unwrap())
+    let prog = Parser::new(0, lexer::lex_input(0, script).unwrap())
         .parse_program()
         .unwrap();
     let status = eval.evaluate(prog);
@@ -1235,7 +1236,7 @@ fn test_command_result_methods() {
         let lines = $(printf "alpha\nbeta\ngamma\n").lines()
         let empty_lines = $(echo -n "").lines()
         "#;
-    let prog = Parser::new(lexer::lex_input(script).unwrap())
+    let prog = Parser::new(0, lexer::lex_input(0, script).unwrap())
         .parse_program()
         .unwrap();
     let status = eval.evaluate(prog);
@@ -1318,7 +1319,7 @@ fn test_for_loops_and_break_continue() {
         }
         let even = find_first_even([1, 3, 4, 5])
         "#;
-    let prog = Parser::new(lexer::lex_input(script).unwrap())
+    let prog = Parser::new(0, lexer::lex_input(0, script).unwrap())
         .parse_program()
         .unwrap();
     let status = eval.evaluate(prog);
@@ -1389,7 +1390,7 @@ fn test_while_loops_and_break_continue_return() {
         }
         let early_ret = find_while_threshold()
         "#;
-    let prog = Parser::new(lexer::lex_input(script).unwrap())
+    let prog = Parser::new(0, lexer::lex_input(0, script).unwrap())
         .parse_program()
         .unwrap();
     let status = eval.evaluate(prog);
@@ -1549,7 +1550,7 @@ fn test_special_variables_and_bare_dollar() {
         let msg = "code: $?, pid: $$"
     "#;
 
-    let prog = Parser::new(lexer::lex_input(script).unwrap())
+    let prog = Parser::new(0, lexer::lex_input(0, script).unwrap())
         .parse_program()
         .unwrap();
     let res = eval.evaluate(prog);
@@ -1580,7 +1581,7 @@ fn test_append_redirection_thin_arrow() {
     let path_str = tmp_path.to_str().unwrap();
     let script = format!("echo line1 -> {path_str}\necho line2 ->> {path_str}\n");
 
-    let prog = Parser::new(lexer::lex_input(&script).unwrap())
+    let prog = Parser::new(0, lexer::lex_input(0, &script).unwrap())
         .parse_program()
         .unwrap();
     let status = eval.evaluate(prog);
@@ -1609,7 +1610,7 @@ fn test_unary_not_and_negation() {
         let neg_str = -"abc"
     "#;
 
-    let prog = Parser::new(lexer::lex_input(script).unwrap())
+    let prog = Parser::new(0, lexer::lex_input(0, script).unwrap())
         .parse_program()
         .unwrap();
     eval.evaluate(prog);
@@ -1647,7 +1648,7 @@ fn test_compound_assignments() {
         $obj.nested.score -= 2
     "#;
 
-    let prog = Parser::new(lexer::lex_input(script).unwrap())
+    let prog = Parser::new(0, lexer::lex_input(0, script).unwrap())
         .parse_program()
         .unwrap();
     eval.evaluate(prog);
@@ -1686,7 +1687,7 @@ fn test_runtime_errors_do_not_panic_and_clean_up_scopes() {
 
     for script in cases {
         let mut eval = Evaluator::new();
-        let prog = Parser::new(lexer::lex_input(script).unwrap())
+        let prog = Parser::new(0, lexer::lex_input(0, script).unwrap())
             .parse_program()
             .unwrap();
         let status = eval.evaluate(prog);
@@ -1701,15 +1702,18 @@ fn test_runtime_errors_do_not_panic_and_clean_up_scopes() {
 
     // Verify try_evaluate_program returns structured EvalError variants.
     let mut eval = Evaluator::new();
-    let prog = Parser::new(lexer::lex_input("let x = 5\n$x.a = 1").unwrap())
+    let prog = Parser::new(0, lexer::lex_input(0, "let x = 5\n$x.a = 1").unwrap())
         .parse_program()
         .unwrap();
     let err = eval.try_evaluate_program(prog).unwrap_err();
     assert!(matches!(err, crate::eval::EvalError::TypeError(_)));
 
-    let prog2 = Parser::new(lexer::lex_input("let obj = {}\n$obj[true] = 1").unwrap())
-        .parse_program()
-        .unwrap();
+    let prog2 = Parser::new(
+        0,
+        lexer::lex_input(0, "let obj = {}\n$obj[true] = 1").unwrap(),
+    )
+    .parse_program()
+    .unwrap();
     let err2 = eval.try_evaluate_program(prog2).unwrap_err();
     assert!(matches!(err2, crate::eval::EvalError::InvalidIndex(_)));
 }
@@ -1726,7 +1730,7 @@ fn test_command_with_trailing_expression_call_and_index_args() {
         let out = $(echo $s.trim() $mul(4, 5) $parts[0] $parts[1]).out.trim()
     "#;
 
-    let prog = Parser::new(lexer::lex_input(script).unwrap())
+    let prog = Parser::new(0, lexer::lex_input(0, script).unwrap())
         .parse_program()
         .unwrap();
     let status = eval.evaluate(prog);
@@ -1735,4 +1739,39 @@ fn test_command_with_trailing_expression_call_and_index_args() {
         eval.get_var(0, "out"),
         Some(&Value::String("hi 20 alpha beta".to_string()))
     );
+}
+
+#[test]
+fn runtime_error_records_statement_span_and_formats_diagnostic() {
+    let mut eval = Evaluator::new();
+    let script = "fn fail() {\n    let x = 5\n    $x.a = 1\n}\nfail()";
+    let src_id = eval.source_map.insert("plugin.lsh", script);
+    let prog = Parser::new(src_id, lexer::lex_input(src_id, script).unwrap())
+        .parse_program()
+        .unwrap();
+
+    let err = eval.try_evaluate_program(prog).unwrap_err();
+    let span = eval
+        .last_error_span
+        .take()
+        .expect("runtime error should capture offending statement span");
+    assert_eq!(span.source_id, src_id);
+    assert_eq!(&script[span.start..span.end], "$x.a = 1");
+
+    let diag = lsh_syntax::Diagnostic::new(
+        lsh_syntax::DiagnosticKind::RuntimeError,
+        span.source_id,
+        span.start,
+        span.end,
+        err.to_string(),
+    );
+    let mut buf = Vec::new();
+    lsh_syntax::print_diagnostic(&mut buf, &diag, &eval.source_map);
+    let rendered = String::from_utf8(buf).expect("valid utf-8");
+
+    assert!(rendered.contains("runtime error"));
+    assert!(rendered.contains("Cannot assign member 'a' on value of type 'number'."));
+    assert!(rendered.contains("plugin.lsh:3:5"));
+    assert!(rendered.contains("$x.a = 1"));
+    assert!(rendered.contains("^^^^^^^^"));
 }

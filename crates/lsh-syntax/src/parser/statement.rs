@@ -1,7 +1,7 @@
 use crate::{
-    diagnostics::Diagnostic,
+    diagnostics::{Diagnostic, SourceInfo},
     lexer::token::TokenKind,
-    parser::ast::{BinaryOp, Expr, Program, Statement},
+    parser::ast::{BinaryOp, Expr, Program, SpannedStatement, Statement},
 };
 
 use super::Parser;
@@ -19,9 +19,38 @@ impl Parser<'_> {
         Ok(Program { body })
     }
 
-    pub(crate) fn parse_statement(&mut self) -> Result<Statement, Diagnostic> {
+    pub(crate) fn parse_statement(&mut self) -> Result<SpannedStatement, Diagnostic> {
         self.skip_statement_separators();
 
+        let start_index = self.index;
+        let start = self.current().offset;
+        let statement = self.parse_statement_inner()?;
+
+        let mut last_idx = self.index.saturating_sub(1).max(start_index);
+        if last_idx > start_index
+            && matches!(
+                self.tokens.get(last_idx).map(|t| &t.kind),
+                Some(TokenKind::Semicolon)
+            )
+        {
+            last_idx -= 1;
+        }
+        let end = self
+            .tokens
+            .get(last_idx)
+            .map_or(start + 1, |t| (t.offset + t.len).max(start + 1));
+
+        Ok(SpannedStatement {
+            statement,
+            span: SourceInfo {
+                source_id: self.src_id,
+                start,
+                end,
+            },
+        })
+    }
+
+    fn parse_statement_inner(&mut self) -> Result<Statement, Diagnostic> {
         match &self.current().kind {
             TokenKind::Let => self.parse_let(),
             TokenKind::If => self.parse_if(),
@@ -157,10 +186,16 @@ impl Parser<'_> {
         Ok(Statement::Let { name, value: expr })
     }
 
-    pub(crate) fn parse_block_or_single_statement(&mut self) -> Result<Vec<Statement>, Diagnostic> {
-        Ok(match self.parse_statement()? {
+    pub(crate) fn parse_block_or_single_statement(
+        &mut self,
+    ) -> Result<Vec<SpannedStatement>, Diagnostic> {
+        let spanned = self.parse_statement()?;
+        Ok(match spanned.statement {
             Statement::Block(stmts) => stmts,
-            stmt => vec![stmt],
+            statement => vec![SpannedStatement {
+                statement,
+                span: spanned.span,
+            }],
         })
     }
 

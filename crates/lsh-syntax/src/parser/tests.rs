@@ -6,12 +6,15 @@ use super::{
 };
 
 fn parse_program(input: &str) -> Vec<Statement> {
-    let tokens = lex_input(input).expect("lexer should succeed in parser test");
-    let mut parser = Parser::new(tokens);
+    let tokens = lex_input(0, input).expect("lexer should succeed in parser test");
+    let mut parser = Parser::new(0, tokens);
     parser
         .parse_program()
         .expect("parser should succeed in parser test")
         .body
+        .into_iter()
+        .map(|s| s.statement)
+        .collect()
 }
 
 fn assert_command_identifier(identifier: &Expr, expected: &str) {
@@ -34,8 +37,8 @@ fn extract_call_parts(statement: &Statement) -> (&Expr, &Vec<Expr>) {
 
 #[test]
 fn returns_parse_diagnostic_for_invalid_let_identifier() {
-    let tokens = lex_input("let = 1").expect("lexer should succeed");
-    let mut parser = Parser::new(tokens);
+    let tokens = lex_input(0, "let = 1").expect("lexer should succeed");
+    let mut parser = Parser::new(0, tokens);
 
     let err = parser
         .parse_program()
@@ -46,8 +49,8 @@ fn returns_parse_diagnostic_for_invalid_let_identifier() {
 
 #[test]
 fn returns_parse_diagnostic_for_unclosed_command_sub_expr() {
-    let tokens = lex_input("echo $(1 + 2").expect("lexer should succeed");
-    let mut parser = Parser::new(tokens);
+    let tokens = lex_input(0, "echo $(1 + 2").expect("lexer should succeed");
+    let mut parser = Parser::new(0, tokens);
 
     let err = parser
         .parse_program()
@@ -58,8 +61,8 @@ fn returns_parse_diagnostic_for_unclosed_command_sub_expr() {
 
 #[test]
 fn returns_parse_diagnostic_for_missing_redirect_target() {
-    let tokens = lex_input("echo hi ->").expect("lexer should succeed");
-    let mut parser = Parser::new(tokens);
+    let tokens = lex_input(0, "echo hi ->").expect("lexer should succeed");
+    let mut parser = Parser::new(0, tokens);
 
     let err = parser
         .parse_program()
@@ -70,8 +73,8 @@ fn returns_parse_diagnostic_for_missing_redirect_target() {
 
 #[test]
 fn returns_parse_diagnostic_with_hint_for_assignment_in_expression() {
-    let tokens = lex_input("if 1 = 1 {}").expect("lexer should succeed");
-    let mut parser = Parser::new(tokens);
+    let tokens = lex_input(0, "if 1 = 1 {}").expect("lexer should succeed");
+    let mut parser = Parser::new(0, tokens);
 
     let err = parser
         .parse_program()
@@ -731,7 +734,7 @@ fn parses_block_with_trailing_separator_before_right_curly() {
         panic!("Expected if statement");
     };
     assert_eq!(then_branch.len(), 1);
-    let (identifier, _args) = extract_call_parts(&then_branch[0]);
+    let (identifier, _args) = extract_call_parts(&then_branch[0].statement);
     assert_command_identifier(identifier, "echo");
 }
 
@@ -883,7 +886,7 @@ fn parses_block_containing_command_with_braces() {
     } = &body[0]
     {
         assert_eq!(if_body.len(), 1);
-        if let Statement::Command(CommandExpr::Call { args, .. }) = &if_body[0] {
+        if let Statement::Command(CommandExpr::Call { args, .. }) = &if_body[0].statement {
             assert_eq!(args.len(), 1);
         } else {
             panic!("Expected command inside block");
@@ -988,13 +991,13 @@ fn parses_for_loop_and_break_continue() {
         then_branch,
         else_branch,
         ..
-    } = &loop_body[0]
+    } = &loop_body[0].statement
     else {
         panic!("Expected if statement in for body");
     };
-    assert!(matches!(&then_branch[0], Statement::Break));
+    assert!(matches!(&then_branch[0].statement, Statement::Break));
     assert!(matches!(
-        &else_branch.as_ref().unwrap()[0],
+        &else_branch.as_ref().unwrap()[0].statement,
         Statement::Continue
     ));
 }

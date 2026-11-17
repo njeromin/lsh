@@ -48,6 +48,7 @@ impl Parser<'_> {
     }
 
     fn lex_and_parse_embedded(
+        src_id: usize,
         snippet: &str,
         offset_shift: usize,
         parse_fn: impl FnOnce(&mut Parser) -> Result<Expr, Diagnostic>,
@@ -58,12 +59,16 @@ impl Parser<'_> {
             diag
         };
 
-        let tokens = crate::lexer::lex_input(snippet).map_err(shift_diag)?;
-        let mut parser = Parser::new(tokens);
+        let tokens = crate::lexer::lex_input(src_id, snippet).map_err(shift_diag)?;
+        let mut parser = Parser::new(src_id, tokens);
         parse_fn(&mut parser).map_err(shift_diag)
     }
 
-    pub fn parse_interpolated_string(raw: &str, base_offset: usize) -> Result<Expr, Diagnostic> {
+    pub fn parse_interpolated_string(
+        src_id: usize,
+        raw: &str,
+        base_offset: usize,
+    ) -> Result<Expr, Diagnostic> {
         if !raw.contains(['\\', '$']) {
             return Ok(Expr::QuotedString(raw.to_owned()));
         }
@@ -80,6 +85,7 @@ impl Parser<'_> {
                 let Some((esc_idx, next_ch)) = chars.next() else {
                     return Err(Diagnostic::new(
                         DiagnosticKind::ParseError,
+                        src_id,
                         content_base + idx,
                         content_base + idx + 1,
                         "Unterminated escape sequence in string literal.",
@@ -101,6 +107,7 @@ impl Parser<'_> {
                     else {
                         return Err(Diagnostic::new(
                             DiagnosticKind::ParseError,
+                            src_id,
                             content_base + idx,
                             content_base + raw.len(),
                             "Unterminated command substitution in string interpolation.",
@@ -108,6 +115,7 @@ impl Parser<'_> {
                     };
 
                     let parsed_expr = Self::lex_and_parse_embedded(
+                        src_id,
                         &raw[idx..=sub_end_idx],
                         content_base + idx,
                         |p| p.parse_primary(),
@@ -129,6 +137,7 @@ impl Parser<'_> {
                     else {
                         return Err(Diagnostic::new(
                             DiagnosticKind::ParseError,
+                            src_id,
                             content_base + idx,
                             content_base + raw.len(),
                             "Unterminated expression substitution in string interpolation.",
@@ -139,6 +148,7 @@ impl Parser<'_> {
                     if expr_str.trim().is_empty() {
                         return Err(Diagnostic::new(
                             DiagnosticKind::ParseError,
+                            src_id,
                             content_base + idx,
                             content_base + sub_end_idx + 1,
                             "Empty expression in string interpolation.",
@@ -146,6 +156,7 @@ impl Parser<'_> {
                     }
 
                     let parsed_expr = Self::lex_and_parse_embedded(
+                        src_id,
                         expr_str,
                         content_base + expr_start_idx,
                         |p| p.parse_expr(),

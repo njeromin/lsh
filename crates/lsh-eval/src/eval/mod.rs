@@ -27,7 +27,9 @@ use std::{
 
 use hooks::HookRegistry;
 use lsh_completions::CompletionRegistry;
-use lsh_syntax::print_error;
+use lsh_syntax::{
+    Diagnostic, DiagnosticKind, SourceInfo, SourceMap, print_diagnostic, print_error,
+};
 use lsh_sys::signals::get_interrupt_flag;
 
 use crate::{eval::value::Value, jobs::JobManager, plugins::PluginManager};
@@ -66,6 +68,8 @@ pub struct Evaluator {
     pub job_manager: JobManager,
     pub warned_stopped_jobs: bool,
     pub completions_dirty: bool,
+    pub source_map: SourceMap,
+    pub last_error_span: Option<SourceInfo>,
 }
 
 impl Evaluator {
@@ -87,6 +91,8 @@ impl Evaluator {
             job_manager: JobManager::new(),
             warned_stopped_jobs: false,
             completions_dirty: true,
+            source_map: SourceMap::default(),
+            last_error_span: None,
         }
     }
 
@@ -105,7 +111,20 @@ impl Evaluator {
 
     pub(crate) fn report_runtime_error(&mut self, err: &EvalError) {
         let mut cerr = io::stderr();
-        print_error(&mut cerr, &err.to_string());
+        if let Some(span) = self.last_error_span.take()
+            && self.source_map.get(span.source_id).is_some()
+        {
+            let diag = Diagnostic::new(
+                DiagnosticKind::RuntimeError,
+                span.source_id,
+                span.start,
+                span.end,
+                err.to_string(),
+            );
+            print_diagnostic(&mut cerr, &diag, &self.source_map);
+        } else {
+            print_error(&mut cerr, &err.to_string());
+        }
         self.last_status = 1;
     }
 }

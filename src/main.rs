@@ -168,10 +168,13 @@ fn interactive_session(
             eval.warned_stopped_jobs = false;
         }
 
-        let tokens = match lexer::lex_input(&input) {
+        let src_id = eval.source_map.insert("<input>", &input);
+
+        let tokens = match lexer::lex_input(src_id, &input) {
             Ok(tokens) => tokens,
             Err(diag) => {
-                print_diagnostic(&mut cerr, &diag, "<input>", &input);
+                print_diagnostic(&mut cerr, &diag, &eval.source_map);
+                let _ = eval.source_map.remove(src_id);
                 osc::write_133("D;1");
                 continue;
             }
@@ -179,11 +182,12 @@ fn interactive_session(
 
         debug::print_lexer(&tokens);
 
-        let mut parser = Parser::new(tokens);
+        let mut parser = Parser::new(src_id, tokens);
         let prog = match parser.parse_program() {
             Ok(prog) => prog,
             Err(diag) => {
-                print_diagnostic(&mut cerr, &diag, "<input>", &input);
+                print_diagnostic(&mut cerr, &diag, &eval.source_map);
+                let _ = eval.source_map.remove(src_id);
                 osc::write_133("D;1");
                 continue;
             }

@@ -13,34 +13,39 @@ pub fn exec_file_outcome_scoped(
 
     match fs::read_to_string(&path) {
         Ok(input) => {
-            let tokens = match lexer::lex_input(input.as_str()) {
+            let src_id = evaluator
+                .source_map
+                .insert(path.to_string_lossy().as_ref(), input.as_str());
+
+            let tokens = match lexer::lex_input(src_id, input.as_str()) {
                 Ok(tokens) => tokens,
                 Err(diag) => {
-                    print_diagnostic(&mut cerr, &diag, path.to_string_lossy().as_ref(), &input);
+                    print_diagnostic(&mut cerr, &diag, &evaluator.source_map);
+                    let _ = evaluator.source_map.remove(src_id);
                     return Err(diag.message);
                 }
             };
 
             debug::print_lexer(&tokens);
 
-            let mut parser = Parser::new(tokens);
+            let mut parser = Parser::new(src_id, tokens);
             let prog = match parser.parse_program() {
                 Ok(prog) => prog,
                 Err(diag) => {
-                    print_diagnostic(&mut cerr, &diag, path.to_string_lossy().as_ref(), &input);
+                    print_diagnostic(&mut cerr, &diag, &evaluator.source_map);
+                    let _ = evaluator.source_map.remove(src_id);
                     return Err(diag.message);
                 }
             };
 
             debug::print_parser(&prog);
 
+            evaluator.last_error_span = None;
             let outcome = evaluator
                 .try_evaluate_statements(&prog.body, scope_indices)
                 .map_err(|err| {
-                    evaluator.last_status = 1;
-                    let msg = err.to_string();
-                    print_error(&mut cerr, &msg);
-                    msg
+                    evaluator.report_runtime_error(&err);
+                    err.to_string()
                 })?;
 
             Ok(outcome)

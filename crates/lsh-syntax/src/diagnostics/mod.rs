@@ -3,14 +3,19 @@ use crossterm::{
     style::{self, Stylize},
 };
 
+use crate::diagnostics::source_map::SourceMap;
+
 pub fn print_error<W: std::io::Write>(writer: &mut W, err: &str) {
     let _ = writeln!(writer, "\x1b[38;5;9m{err}\x1b[0m");
 }
+
+pub mod source_map;
 
 #[derive(Debug)]
 pub enum DiagnosticKind {
     LexError,
     ParseError,
+    RuntimeError,
 }
 
 #[derive(Debug)]
@@ -22,18 +27,29 @@ pub struct Diagnostic {
 }
 
 impl Diagnostic {
-    pub fn new(kind: DiagnosticKind, start: usize, end: usize, message: impl Into<String>) -> Self {
+    pub fn new(
+        kind: DiagnosticKind,
+        source_id: usize,
+        start: usize,
+        end: usize,
+        message: impl Into<String>,
+    ) -> Self {
         Self {
             kind,
             message: message.into(),
-            source: SourceInfo { start, end },
+            source: SourceInfo {
+                source_id,
+                start,
+                end,
+            },
             hint: None,
         }
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct SourceInfo {
+    pub source_id: usize,
     pub start: usize,
     pub end: usize,
 }
@@ -65,15 +81,18 @@ fn format_kind(kind: &DiagnosticKind) -> &'static str {
     match kind {
         DiagnosticKind::LexError => "lex error",
         DiagnosticKind::ParseError => "parse error",
+        DiagnosticKind::RuntimeError => "runtime error",
     }
 }
 
-pub fn print_diagnostic<W: std::io::Write>(
-    out: &mut W,
-    diag: &Diagnostic,
-    source_name: &str,
-    source: &str,
-) {
+pub fn print_diagnostic<W: std::io::Write>(out: &mut W, diag: &Diagnostic, source_map: &SourceMap) {
+    let Some(src) = source_map.get(diag.source.source_id) else {
+        print_error(out, &diag.message);
+        return;
+    };
+
+    let source_name = src.name.as_str();
+    let source = src.contents.as_str();
     let (line_num, col_num, line_start, line_end) = line_span_at_offset(source, diag.source.start);
     let line_text = &source[line_start..line_end];
     let underline_start = diag.source.start.clamp(line_start, line_end);
@@ -112,16 +131,21 @@ mod tests {
 
     #[test]
     fn prints_diagnostic_with_line_number_gutter_and_hint() {
-        let source = "let x = 1\nlet = 2";
+        let mut source_map = SourceMap::default();
+        let src_id = source_map.insert("test.lsh", "let x = 1\nlet = 2");
         let diag = Diagnostic {
             kind: DiagnosticKind::ParseError,
             message: "Expected identifier after 'let'.".to_string(),
-            source: SourceInfo { start: 14, end: 15 },
+            source: SourceInfo {
+                source_id: src_id,
+                start: 14,
+                end: 15,
+            },
             hint: Some("Provide a variable name.".to_string()),
         };
 
         let mut buf = Vec::new();
-        print_diagnostic(&mut buf, &diag, "test.lsh", source);
+        print_diagnostic(&mut buf, &diag, &source_map);
         let rendered = String::from_utf8(buf).expect("valid utf-8");
 
         assert!(rendered.contains("parse error"));
@@ -136,12 +160,13 @@ mod tests {
 
     #[test]
     fn underlines_multibyte_utf8_by_char_count() {
-        let source = "echo \"héllo\"";
+        let mut source_map = SourceMap::default();
+        let src_id = source_map.insert("<input>", "echo \"héllo\"");
         // Span covering "héllo" (bytes 6..12, 5 chars, 6 bytes).
-        let diag = Diagnostic::new(DiagnosticKind::LexError, 6, 12, "Bad token.");
+        let diag = Diagnostic::new(DiagnosticKind::LexError, src_id, 6, 12, "Bad token.");
 
         let mut buf = Vec::new();
-        print_diagnostic(&mut buf, &diag, "<input>", source);
+        print_diagnostic(&mut buf, &diag, &source_map);
         let rendered = String::from_utf8(buf).expect("valid utf-8");
 
         assert!(rendered.contains("^^^^^"));

@@ -1,4 +1,6 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, ops::Deref};
+
+use crate::diagnostics::SourceInfo;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Redirect {
@@ -87,8 +89,22 @@ pub enum Expr {
     CommandSubCommand(Box<CommandExpr>),
     AnonymousFunction {
         params: Vec<String>,
-        body: Vec<Statement>,
+        body: Vec<SpannedStatement>,
     },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SpannedStatement {
+    pub statement: Statement,
+    pub span: SourceInfo,
+}
+
+impl Deref for SpannedStatement {
+    type Target = Statement;
+
+    fn deref(&self) -> &Self::Target {
+        &self.statement
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -110,30 +126,30 @@ pub enum Statement {
     },
     If {
         condition: Expr,
-        then_branch: Vec<Statement>,
-        else_branch: Option<Vec<Statement>>,
+        then_branch: Vec<SpannedStatement>,
+        else_branch: Option<Vec<SpannedStatement>>,
     },
     While {
         condition: Expr,
-        body: Vec<Statement>,
+        body: Vec<SpannedStatement>,
     },
     For {
         variable: String,
         iterable: Expr,
-        body: Vec<Statement>,
+        body: Vec<SpannedStatement>,
     },
     Break,
     Continue,
     FunctionDeclaration {
         target: Expr,
         params: Vec<String>,
-        body: Vec<Statement>,
+        body: Vec<SpannedStatement>,
     },
     Return(Option<Expr>),
-    Block(Vec<Statement>),
+    Block(Vec<SpannedStatement>),
 }
 
 #[derive(Debug)]
 pub struct Program {
-    pub body: Vec<Statement>,
+    pub body: Vec<SpannedStatement>,
 }

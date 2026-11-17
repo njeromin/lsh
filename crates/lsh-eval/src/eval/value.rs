@@ -4,7 +4,7 @@ use std::{
     sync::{Arc, RwLock},
 };
 
-use lsh_syntax::ast::Statement;
+use lsh_syntax::ast::SpannedStatement;
 
 use crate::eval::Evaluator;
 
@@ -19,7 +19,7 @@ pub enum FunctionKind {
 #[derive(Clone)]
 pub struct FunctionValue {
     pub params: Vec<String>,
-    pub body: Vec<Statement>,
+    pub body: Vec<SpannedStatement>,
     pub kind: FunctionKind,
     pub bound_this: Option<Value>,
 }
@@ -41,7 +41,7 @@ impl fmt::Debug for FunctionValue {
 }
 
 impl FunctionValue {
-    pub fn ast(params: Vec<String>, body: Vec<Statement>) -> Self {
+    pub fn ast(params: Vec<String>, body: Vec<SpannedStatement>) -> Self {
         Self {
             params,
             body,

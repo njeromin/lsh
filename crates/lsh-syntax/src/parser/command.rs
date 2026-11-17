@@ -224,7 +224,7 @@ impl Parser<'_> {
         }
 
         if let TokenKind::DoubleQuotedString(s) = &self.current().kind {
-            let parsed = Self::parse_interpolated_string(s, self.current().offset)?;
+            let parsed = Self::parse_interpolated_string(self.src_id, s, self.current().offset)?;
             self.advance();
             return Ok(Some(parsed));
         }
