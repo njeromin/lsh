@@ -1134,3 +1134,48 @@ fn parses_compound_assignments() {
         } if *n == 4.0
     ));
 }
+
+#[test]
+fn requires_dollar_prefix_for_variable_and_member_assignments() {
+    let valid = parse_program("$x = 1\n$obj.prop = 2\n$arr[0] = 3");
+    assert_eq!(valid.len(), 3);
+    assert!(matches!(
+        &valid[0],
+        Statement::Assign {
+            target: Expr::Variable(v),
+            value: Expr::Number(n),
+        } if v == "x" && *n == 1.0
+    ));
+    assert!(matches!(
+        &valid[1],
+        Statement::Assign {
+            target: Expr::Index { object, .. },
+            value: Expr::Number(n),
+        } if matches!(object.as_ref(), Expr::Variable(v) if v == "obj") && *n == 2.0
+    ));
+    assert!(matches!(
+        &valid[2],
+        Statement::Assign {
+            target: Expr::Index { object, .. },
+            value: Expr::Number(n),
+        } if matches!(object.as_ref(), Expr::Variable(v) if v == "arr") && *n == 3.0
+    ));
+
+    let commands = parse_program("x = 1\nobj.prop = 1\narr[0] = 1");
+    assert_eq!(commands.len(), 3);
+    for stmt in &commands {
+        assert!(
+            matches!(stmt, Statement::Command(_)),
+            "Expected unprefixed assignment-like syntax to parse as command, got {stmt:?}"
+        );
+    }
+
+    for invalid in ["arr[0] += 1", "foo() = 1"] {
+        let tokens = lex_input(0, invalid).expect("lexer should succeed");
+        let mut parser = Parser::new(0, tokens);
+        let err = parser.parse_program().expect_err(
+            "unprefixed compound assignment or call assignment should not parse as assignment",
+        );
+        assert!(matches!(err.kind, DiagnosticKind::ParseError));
+    }
+}

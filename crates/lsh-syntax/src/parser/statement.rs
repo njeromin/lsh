@@ -114,13 +114,7 @@ impl Parser<'_> {
                 };
 
                 // Assignment is only valid for assignable targets.
-                let is_assignable = match &expr {
-                    Expr::Variable(_) | Expr::Index { .. } => true,
-                    Expr::Call { target, args } if args.is_empty() => {
-                        matches!(target.as_ref(), Expr::Word(_))
-                    }
-                    _ => false,
-                };
+                let is_assignable = Self::is_assignable_target(&expr);
 
                 let compound_op = match self.current().kind {
                     TokenKind::PlusEquals => Some(BinaryOp::Add),
@@ -138,16 +132,16 @@ impl Parser<'_> {
                     if let Ok(value) = self.parse_expr()
                         && self.is_statement_end()
                     {
-                        let target = match expr {
-                            Expr::Call { target, args } if args.is_empty() => match *target {
-                                Expr::Word(name) => Expr::Variable(name),
-                                other => other,
-                            },
-                            other => other,
-                        };
                         return Ok(match compound_op {
-                            Some(op) => Statement::CompoundAssign { target, op, value },
-                            None => Statement::Assign { target, value },
+                            Some(op) => Statement::CompoundAssign {
+                                target: expr,
+                                op,
+                                value,
+                            },
+                            None => Statement::Assign {
+                                target: expr,
+                                value,
+                            },
                         });
                     }
                     self.index = pre_assign_index;
@@ -290,6 +284,14 @@ impl Parser<'_> {
         }
 
         Ok(Statement::Return(value))
+    }
+
+    fn is_assignable_target(expr: &Expr) -> bool {
+        match expr {
+            Expr::Variable(_) => true,
+            Expr::Index { object, .. } => Self::is_assignable_target(object),
+            _ => false,
+        }
     }
 
     fn can_start_postfix_or_assign(&self) -> bool {

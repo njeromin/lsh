@@ -204,7 +204,11 @@ impl Evaluator {
     }
 
     pub(crate) fn is_assignable(expr: &Expr) -> bool {
-        matches!(expr, Expr::Variable(_) | Expr::Word(_) | Expr::Index { .. })
+        match expr {
+            Expr::Variable(_) => true,
+            Expr::Index { object, .. } => Self::is_assignable(object),
+            _ => false,
+        }
     }
 
     fn expand_dotted_index_target(object: &Expr, key: &str) -> Expr {
@@ -243,7 +247,7 @@ impl Evaluator {
         scope_indices: &mut Vec<usize>,
     ) -> Result<(), EvalError> {
         match target {
-            Expr::Variable(var_name) | Expr::Word(var_name) => {
+            Expr::Variable(var_name) => {
                 if var_name.contains('.') {
                     let expanded_target = Self::path_to_expr(var_name);
                     return self.assign_target(&expanded_target, value, scope_indices);
@@ -309,7 +313,7 @@ impl Evaluator {
         scope_indices: &mut Vec<usize>,
     ) -> Result<(), EvalError> {
         match target {
-            Expr::Variable(var_name) | Expr::Word(var_name) => {
+            Expr::Variable(var_name) => {
                 if var_name.contains('.') {
                     let expanded_target = Self::path_to_expr(var_name);
                     return self.compound_assign_target(
