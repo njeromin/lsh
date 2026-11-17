@@ -54,18 +54,18 @@ impl Parser<'_> {
         &mut self,
         terminators: &[TokenKind<'_>],
     ) -> Result<CommandExpr, Diagnostic> {
-        let mut stages = vec![self.parse_command_call(terminators)?];
+        let first = self.parse_command_call(terminators)?;
+        if !self.check_current(&TokenKind::Pipe) {
+            return Ok(first);
+        }
 
+        let mut stages = vec![first];
         while self.check_current(&TokenKind::Pipe) {
             self.advance(); // Skip '|'
             stages.push(self.parse_command_call(terminators)?);
         }
 
-        if stages.len() == 1 {
-            Ok(stages.remove(0))
-        } else {
-            Ok(CommandExpr::Pipeline(stages))
-        }
+        Ok(CommandExpr::Pipeline(stages))
     }
 
     fn parse_command_call(

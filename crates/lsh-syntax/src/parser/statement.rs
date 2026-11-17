@@ -70,6 +70,10 @@ impl Parser<'_> {
             | TokenKind::QuotedString(_)
             | TokenKind::DoubleQuotedString(_)
             | TokenKind::Variable(_) => {
+                if !self.can_start_postfix_or_assign() {
+                    return Ok(Statement::Command(self.parse_command_expr()?));
+                }
+
                 let initial_index = self.index;
                 let expr = match self.parse_postfix() {
                     Ok(expr) => expr,
@@ -251,5 +255,29 @@ impl Parser<'_> {
         }
 
         Ok(Statement::Return(value))
+    }
+
+    fn can_start_postfix_or_assign(&self) -> bool {
+        let Some(current) = self.tokens.get(self.index) else {
+            return false;
+        };
+        let Some(next) = self.tokens.get(self.index + 1) else {
+            return false;
+        };
+        let contiguous = next.offset == current.offset + Self::token_source_len(current);
+
+        match next.kind {
+            TokenKind::Dot => matches!(
+                self.tokens.get(self.index + 2).map(|t| &t.kind),
+                Some(TokenKind::String(_))
+            ),
+            TokenKind::LeftParen | TokenKind::LeftBracket => contiguous,
+            TokenKind::Equals
+            | TokenKind::PlusEquals
+            | TokenKind::MinusEquals
+            | TokenKind::StarEquals
+            | TokenKind::SlashEquals => matches!(current.kind, TokenKind::Variable(_)),
+            _ => false,
+        }
     }
 }
