@@ -162,13 +162,7 @@ impl<'a> Parser<'a> {
         let start = token.offset;
         let end = start + Self::token_source_len(token).max(1);
 
-        Diagnostic::new(
-            DiagnosticKind::ParseError,
-            self.src_id,
-            start,
-            end,
-            message,
-        )
+        Diagnostic::new(DiagnosticKind::ParseError, self.src_id, start, end, message)
     }
 
     pub(crate) fn diagnostic_here_with_hint(
