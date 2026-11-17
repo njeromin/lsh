@@ -5,8 +5,8 @@ use crate::{
     parser::ast::{Expr, Program, Statement},
 };
 
-static DEBUG_LEXER: LazyLock<bool> = LazyLock::new(|| env_flag("DEBUG_LEXER"));
-static DEBUG_PARSER: LazyLock<bool> = LazyLock::new(|| env_flag("DEBUG_PARSER"));
+static DEBUG_LEXER: LazyLock<bool> = LazyLock::new(|| env_flag("LSH_DEBUG_LEXER"));
+static DEBUG_PARSER: LazyLock<bool> = LazyLock::new(|| env_flag("LSH_DEBUG_PARSER"));
 
 fn env_flag(name: &str) -> bool {
     matches!(env::var(name).as_deref(), Ok("1" | "true"))

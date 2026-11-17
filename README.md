@@ -104,8 +104,8 @@ cargo test -q
 Optional parser/lexer debug output:
 
 ```bash
-DEBUG_LEXER=1 cargo run -q
-DEBUG_PARSER=1 cargo run -q
+LSH_DEBUG_LEXER=1 cargo run -q
+LSH_DEBUG_PARSER=1 cargo run -q
 ```
 
 ## Notes and current limits
