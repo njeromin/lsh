@@ -1,16 +1,19 @@
-use std::env;
+use std::{env, sync::LazyLock};
 
 use crate::{
     lexer::token::Token,
     parser::ast::{Expr, Program, Statement},
 };
 
-pub fn get_debug_env(var_name: &str) -> bool {
-    env::var_os(var_name).is_some_and(|debug_var| debug_var == "1" || debug_var == "true")
+static DEBUG_LEXER: LazyLock<bool> = LazyLock::new(|| env_flag("DEBUG_LEXER"));
+static DEBUG_PARSER: LazyLock<bool> = LazyLock::new(|| env_flag("DEBUG_PARSER"));
+
+fn env_flag(name: &str) -> bool {
+    matches!(env::var(name).as_deref(), Ok("1" | "true"))
 }
 
 pub fn print_lexer(tokens: &[Token<'_>]) {
-    if !get_debug_env("DEBUG_LEXER") {
+    if !*DEBUG_LEXER {
         return;
     }
 
@@ -20,7 +23,7 @@ pub fn print_lexer(tokens: &[Token<'_>]) {
 }
 
 pub fn print_parser(prog: &Program) {
-    if !get_debug_env("DEBUG_PARSER") {
+    if !*DEBUG_PARSER {
         return;
     }
 
