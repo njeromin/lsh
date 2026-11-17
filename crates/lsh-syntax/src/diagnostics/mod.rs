@@ -33,11 +33,11 @@ impl Diagnostic {
         source_id: usize,
         start: usize,
         end: usize,
-        message: &str,
+        message: impl Into<String>,
     ) -> Self {
         Self {
             kind,
-            message: message.to_string(),
+            message: message.into(),
             source: SourceInfo {
                 source_id,
                 start,
@@ -77,11 +77,6 @@ fn line_col_from_offset(source: &str, offset: usize) -> (usize, usize) {
     (line, col)
 }
 
-fn line_text_at_offset(source: &str, offset: usize) -> String {
-    let (line_start, line_end) = line_bounds_at_offset(source, offset);
-    source[line_start..line_end].to_string()
-}
-
 fn line_bounds_at_offset(source: &str, offset: usize) -> (usize, usize) {
     let clamped_offset = offset.min(source.len());
     let line_start = source[..clamped_offset]
@@ -113,8 +108,8 @@ pub fn print_diagnostic<W: std::io::Write>(out: &mut W, diag: &Diagnostic, sourc
     let src = src.unwrap();
 
     let (line_num, col_num) = line_col_from_offset(&src.contents, src_info.start);
-    let line_text = line_text_at_offset(&src.contents, src_info.start);
     let (line_start, line_end) = line_bounds_at_offset(&src.contents, src_info.start);
+    let line_text = &src.contents[line_start..line_end];
     let underline_start = src_info.start.clamp(line_start, line_end);
     let underline_end = src_info.end.clamp(underline_start, line_end);
     let underline_len = (underline_end.saturating_sub(underline_start)).max(1);

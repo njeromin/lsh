@@ -69,6 +69,10 @@ impl Parser<'_> {
         raw: &str,
         base_offset: usize,
     ) -> Result<Expr, Diagnostic> {
+        if !raw.contains(['\\', '$']) {
+            return Ok(Expr::QuotedString(raw.to_owned()));
+        }
+
         let mut parts: Vec<Expr> = Vec::new();
         let mut current_literal = String::new();
         let mut chars = raw.char_indices().peekable();
@@ -173,13 +177,13 @@ impl Parser<'_> {
                 }
 
                 // Variable substitution: $var
-                if let Some(&(_, next_c)) = chars.peek()
+                if let Some(&(var_start, next_c)) = chars.peek()
                     && (next_c == '_' || next_c.is_ascii_alphabetic())
                 {
-                    let mut var_name = String::new();
-                    while let Some(&(_, var_c)) = chars.peek() {
+                    let mut var_end = var_start;
+                    while let Some(&(char_idx, var_c)) = chars.peek() {
                         if var_c == '_' || var_c.is_ascii_alphanumeric() {
-                            var_name.push(var_c);
+                            var_end = char_idx + var_c.len_utf8();
                             chars.next();
                         } else {
                             break;
@@ -189,7 +193,7 @@ impl Parser<'_> {
                     if !current_literal.is_empty() {
                         parts.push(Expr::QuotedString(std::mem::take(&mut current_literal)));
                     }
-                    parts.push(Expr::Variable(var_name));
+                    parts.push(Expr::Variable(raw[var_start..var_end].to_owned()));
                     continue;
                 }
 

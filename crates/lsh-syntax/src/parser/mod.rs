@@ -167,7 +167,7 @@ impl<'a> Parser<'a> {
             self.src_id,
             start,
             end,
-            message.into().as_str(),
+            message,
         )
     }
 

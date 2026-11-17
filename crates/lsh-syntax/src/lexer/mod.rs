@@ -178,7 +178,7 @@ fn lex_input_internal(
                             src_id,
                             offset,
                             offset + char.len_utf8() + next_char.len_utf8(),
-                            format!("Unexpected token '{next_char}' after '$'.").as_str(),
+                            format!("Unexpected token '{next_char}' after '$'."),
                         ));
                     }
                 } else {
@@ -279,7 +279,7 @@ fn lex_input_internal(
                             src_id,
                             offset,
                             offset + char.len_utf8(),
-                            format!("Unexpected token '{char}'.").as_str(),
+                            format!("Unexpected token '{char}'."),
                         ));
                     }
                 }
