@@ -5,18 +5,12 @@ use crate::{
     parser::ast::{Expr, Program, Statement},
 };
 
-pub fn get_debug_env(name: &str) -> bool {
-    let var_name = "DEBUG_".to_string() + name;
-
-    if let Ok(debug_var) = env::var(var_name) {
-        return matches!(debug_var.as_str(), "1" | "true");
-    }
-
-    false
+pub fn get_debug_env(var_name: &str) -> bool {
+    env::var_os(var_name).is_some_and(|debug_var| debug_var == "1" || debug_var == "true")
 }
 
 pub fn print_lexer(tokens: &[Token<'_>]) {
-    if !get_debug_env("LEXER") {
+    if !get_debug_env("DEBUG_LEXER") {
         return;
     }
 
@@ -26,7 +20,7 @@ pub fn print_lexer(tokens: &[Token<'_>]) {
 }
 
 pub fn print_parser(prog: &Program) {
-    if !get_debug_env("PARSER") {
+    if !get_debug_env("DEBUG_PARSER") {
         return;
     }
 

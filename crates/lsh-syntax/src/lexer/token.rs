@@ -58,71 +58,7 @@ pub enum TokenKind<'a> {
 
 impl fmt::Display for TokenKind<'_> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Self::Variable(var) => write!(f, "TokenKind::Variable({var})"),
-            Self::String(str) => write!(f, "TokenKind::String({str})"),
-            Self::QuotedString(str) => write!(f, "TokenKind::QuotedString({str})"),
-            Self::DoubleQuotedString(str) => write!(f, "TokenKind::DoubleQuotedString({str})"),
-            Self::Number(num) => write!(f, "TokenKind::Number({num})"),
-            Self::Bool(bool) => write!(f, "TokenKind::Bool({bool})"),
-            other => {
-                let name = match other {
-                    Self::Plus => "Plus",
-                    Self::Minus => "Minus",
-                    Self::PlusEquals => "PlusEquals",
-                    Self::MinusEquals => "MinusEquals",
-                    Self::Star => "Star",
-                    Self::Slash => "Slash",
-                    Self::StarEquals => "StarEquals",
-                    Self::SlashEquals => "SlashEquals",
-                    Self::Pipe => "Pipe",
-                    Self::Ampersand => "Ampersand",
-                    Self::And => "And",
-                    Self::Or => "Or",
-                    Self::Equals => "Equals",
-                    Self::EqualsEquals => "EqualsEquals",
-                    Self::GreaterThan => "GreaterThan",
-                    Self::GtEquals => "GtEquals",
-                    Self::LessThan => "LessThan",
-                    Self::LtEquals => "LtEquals",
-                    Self::Not => "Not",
-                    Self::NotEquals => "NotEquals",
-                    Self::DollarLeftParen => "DollarLeftParen",
-                    Self::Let => "Let",
-                    Self::If => "If",
-                    Self::Else => "Else",
-                    Self::While => "While",
-                    Self::For => "For",
-                    Self::In => "In",
-                    Self::Break => "Break",
-                    Self::Continue => "Continue",
-                    Self::Fn => "Fn",
-                    Self::TypeOf => "TypeOf",
-                    Self::Return => "Return",
-                    Self::FatArrow => "FatArrow",
-                    Self::ThinArrow => "ThinArrow",
-                    Self::ThinArrowAppend => "ThinArrowAppend",
-                    Self::LeftCurly => "LeftCurly",
-                    Self::RightCurly => "RightCurly",
-                    Self::LeftParen => "LeftParen",
-                    Self::RightParen => "RightParen",
-                    Self::LeftBracket => "LeftBracket",
-                    Self::RightBracket => "RightBracket",
-                    Self::Comma => "Comma",
-                    Self::Dot => "Dot",
-                    Self::Semicolon => "Semicolon",
-                    Self::NewLine => "NewLine",
-                    Self::EOF => "EOF",
-                    Self::Variable(_)
-                    | Self::String(_)
-                    | Self::QuotedString(_)
-                    | Self::DoubleQuotedString(_)
-                    | Self::Number(_)
-                    | Self::Bool(_) => unreachable!(),
-                };
-                write!(f, "TokenKind::{name}")
-            }
-        }
+        write!(f, "TokenKind::{self:?}")
     }
 }
 

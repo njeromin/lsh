@@ -171,11 +171,7 @@ fn lex_input_internal(
                             ';' | '|' | '&' | ')' | '}' | ']' | ',' | '/' | '\\' | '"' | '\'' | '='
                         )
                     {
-                        tokens.push(Token::new(
-                            TokenKind::String(Cow::Borrowed("$")),
-                            offset,
-                            1,
-                        ));
+                        tokens.push(Token::new(TokenKind::String(Cow::Borrowed("$")), offset, 1));
                     } else {
                         return Err(Diagnostic::new(
                             DiagnosticKind::LexError,
@@ -186,11 +182,7 @@ fn lex_input_internal(
                         ));
                     }
                 } else {
-                    tokens.push(Token::new(
-                        TokenKind::String(Cow::Borrowed("$")),
-                        offset,
-                        1,
-                    ));
+                    tokens.push(Token::new(TokenKind::String(Cow::Borrowed("$")), offset, 1));
                 }
             }
             '/' => match chars.peek().copied().map(|(_, c)| c) {
@@ -603,7 +595,10 @@ fn lex_identifier_rest<'a>(
         }
     }
 
-    let ident = owned.map_or_else(|| Cow::Borrowed(&input[start_offset..end_offset]), Cow::Owned);
+    let ident = owned.map_or_else(
+        || Cow::Borrowed(&input[start_offset..end_offset]),
+        Cow::Owned,
+    );
 
     push_identifier_or_number(
         tokens,
@@ -1014,10 +1009,19 @@ mod tests {
     fn borrows_unescaped_tokens_and_allocates_only_for_escapes() {
         let kinds = token_kinds("echo $PATH $? 'plain' \"hi\\n$x\" foo\\ bar \\let 'a\\nb'");
 
-        assert!(matches!(&kinds[0], TokenKind::String(Cow::Borrowed("echo"))));
-        assert!(matches!(&kinds[1], TokenKind::Variable(Cow::Borrowed("PATH"))));
+        assert!(matches!(
+            &kinds[0],
+            TokenKind::String(Cow::Borrowed("echo"))
+        ));
+        assert!(matches!(
+            &kinds[1],
+            TokenKind::Variable(Cow::Borrowed("PATH"))
+        ));
         assert!(matches!(&kinds[2], TokenKind::Variable(Cow::Borrowed("?"))));
-        assert!(matches!(&kinds[3], TokenKind::QuotedString(Cow::Borrowed("plain"))));
+        assert!(matches!(
+            &kinds[3],
+            TokenKind::QuotedString(Cow::Borrowed("plain"))
+        ));
         assert!(matches!(
             &kinds[4],
             TokenKind::DoubleQuotedString(Cow::Borrowed("hi\\n$x"))
