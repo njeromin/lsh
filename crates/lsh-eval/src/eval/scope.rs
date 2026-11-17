@@ -189,7 +189,11 @@ impl Evaluator {
         if let Some(scope_index) = scope_indices.last().copied()
             && let Some(scope) = self.scopes.get_mut(scope_index)
         {
-            if scope.vars.insert(var_name.to_owned(), value.clone()).is_none() {
+            if scope
+                .vars
+                .insert(var_name.to_owned(), value.clone())
+                .is_none()
+            {
                 self.completions_dirty = true;
             }
             self.sync_env_var_if_exported(var_name, &value);
