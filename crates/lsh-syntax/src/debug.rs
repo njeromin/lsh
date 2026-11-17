@@ -15,7 +15,7 @@ pub fn get_debug_env(name: &str) -> bool {
     false
 }
 
-pub fn print_lexer(tokens: &[Token]) {
+pub fn print_lexer(tokens: &[Token<'_>]) {
     if !get_debug_env("LEXER") {
         return;
     }

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, ops::ControlFlow};
 
 use crate::{
     diagnostics::Diagnostic,
@@ -8,7 +8,7 @@ use crate::{
 
 use super::Parser;
 
-impl Parser {
+impl Parser<'_> {
     pub(crate) fn parse_expr(&mut self) -> Result<Expr, Diagnostic> {
         self.parse_or()
     }
@@ -144,7 +144,7 @@ impl Parser {
     pub(crate) fn parse_target(&mut self) -> Result<Expr, Diagnostic> {
         let expr = match &self.current().kind {
             TokenKind::String(name) => {
-                let name = name.clone();
+                let name = name.as_ref().to_owned();
                 self.advance();
                 Expr::Variable(name)
             }
@@ -160,10 +160,10 @@ impl Parser {
         &mut self,
         expr: Expr,
         require_contiguous_bracket: bool,
-    ) -> Result<Option<Expr>, Diagnostic> {
+    ) -> Result<ControlFlow<Expr, Expr>, Diagnostic> {
         if self.check_current(&TokenKind::LeftBracket) {
             if require_contiguous_bracket && !self.is_contiguous_with_prev() {
-                return Ok(None);
+                return Ok(ControlFlow::Break(expr));
             }
 
             self.advance(); // Skip '['.
@@ -173,7 +173,7 @@ impl Parser {
                 "Expected ']' after object index expression.",
             )?;
 
-            return Ok(Some(Expr::Index {
+            return Ok(ControlFlow::Continue(Expr::Index {
                 object: Box::new(expr),
                 index: Box::new(index_expr),
             }));
@@ -182,7 +182,7 @@ impl Parser {
         if self.check_current(&TokenKind::Dot) {
             self.advance(); // Skip '.'.
             let key = match &self.current().kind {
-                TokenKind::String(s) => s.clone(),
+                TokenKind::String(s) => s.as_ref().to_owned(),
                 other => {
                     return self.error_here(format!(
                         "Expected identifier after '.', found {}.",
@@ -192,20 +192,22 @@ impl Parser {
             };
             self.advance();
 
-            return Ok(Some(Expr::Index {
+            return Ok(ControlFlow::Continue(Expr::Index {
                 object: Box::new(expr),
                 index: Box::new(Expr::String(key)),
             }));
         }
 
-        Ok(None)
+        Ok(ControlFlow::Break(expr))
     }
 
     fn parse_target_on_current(&mut self, mut expr: Expr) -> Result<Expr, Diagnostic> {
-        while let Some(next_expr) = self.parse_index_or_dot_postfix(expr.clone(), false)? {
-            expr = next_expr;
+        loop {
+            match self.parse_index_or_dot_postfix(expr, false)? {
+                ControlFlow::Continue(next_expr) => expr = next_expr,
+                ControlFlow::Break(done_expr) => return Ok(done_expr),
+            }
         }
-        Ok(expr)
     }
 
     pub(crate) fn parse_postfix_on_current(&mut self, mut expr: Expr) -> Result<Expr, Diagnostic> {
@@ -236,10 +238,11 @@ impl Parser {
                     target: Box::new(expr),
                     args,
                 };
-            } else if let Some(next_expr) = self.parse_index_or_dot_postfix(expr.clone(), true)? {
-                expr = next_expr;
             } else {
-                break;
+                match self.parse_index_or_dot_postfix(expr, true)? {
+                    ControlFlow::Continue(next_expr) => expr = next_expr,
+                    ControlFlow::Break(done_expr) => return Ok(done_expr),
+                }
             }
         }
 
@@ -251,7 +254,7 @@ impl Parser {
 
         let expr = match &self.current().kind {
             TokenKind::Number(n) => Expr::Number(*n),
-            TokenKind::QuotedString(s) => Expr::QuotedString(s.clone()),
+            TokenKind::QuotedString(s) => Expr::QuotedString(s.as_ref().to_owned()),
             TokenKind::DoubleQuotedString(s) => {
                 Self::parse_interpolated_string(self.src_id, s, self.current().offset)?
             }
@@ -261,10 +264,10 @@ impl Parser {
                     should_advance = false;
                     self.parse_anonymous_function()?
                 } else {
-                    Expr::Word(s.to_owned())
+                    Expr::Word(s.as_ref().to_owned())
                 }
             }
-            TokenKind::Variable(var) => Expr::Variable(var.to_owned()),
+            TokenKind::Variable(var) => Expr::Variable(var.as_ref().to_owned()),
             TokenKind::Bool(value) => Expr::Bool(*value),
             TokenKind::TypeOf => {
                 self.advance(); // Skip past 'typeof'.
@@ -364,8 +367,8 @@ impl Parser {
                     let key = match &self.current().kind {
                         TokenKind::String(s)
                         | TokenKind::QuotedString(s)
-                        | TokenKind::DoubleQuotedString(s) => s.clone(),
-                        TokenKind::Variable(v) => v.clone(),
+                        | TokenKind::DoubleQuotedString(s) => s.as_ref().to_owned(),
+                        TokenKind::Variable(v) => v.as_ref().to_owned(),
                         TokenKind::Number(n) => n.to_string(),
                         _ => return self.error_here("Expected object key"),
                     };
@@ -484,7 +487,7 @@ impl Parser {
         } else {
             // Single parameter without parens: x => ...
             let param = match &self.current().kind {
-                TokenKind::String(p) => p.clone(),
+                TokenKind::String(p) => p.as_ref().to_owned(),
                 other => {
                     return self.error_here(format!(
                         "Expected parameter name, found {}.",

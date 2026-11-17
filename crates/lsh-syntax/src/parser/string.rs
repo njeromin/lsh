@@ -8,7 +8,7 @@ use crate::{
 
 use super::Parser;
 
-impl Parser {
+impl Parser<'_> {
     fn scan_balanced_delimited(
         chars: &mut Peekable<CharIndices<'_>>,
         open: char,

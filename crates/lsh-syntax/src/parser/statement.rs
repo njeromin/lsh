@@ -6,7 +6,7 @@ use crate::{
 
 use super::Parser;
 
-impl Parser {
+impl Parser<'_> {
     pub(crate) fn parse_program_unchecked(&mut self) -> Result<Program, Diagnostic> {
         let mut body = vec![];
 
@@ -139,8 +139,8 @@ impl Parser {
     }
 
     fn parse_let(&mut self) -> Result<Statement, Diagnostic> {
-        let name = if let TokenKind::String(name) = self.advance().kind.clone() {
-            name
+        let name = if let TokenKind::String(name) = &self.advance().kind {
+            name.as_ref().to_owned()
         } else {
             return self.error_here("Expected identifier after 'let'.");
         };
@@ -193,13 +193,8 @@ impl Parser {
         let has_paren = self.match_token(&[TokenKind::LeftParen]);
 
         let variable = match &self.current().kind {
-            TokenKind::String(name) => {
-                let name = name.clone();
-                self.advance();
-                name
-            }
-            TokenKind::Variable(name) => {
-                let name = name.clone();
+            TokenKind::String(name) | TokenKind::Variable(name) => {
+                let name = name.as_ref().to_owned();
                 self.advance();
                 name
             }

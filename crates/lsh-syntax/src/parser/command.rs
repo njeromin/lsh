@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use crate::{
     diagnostics::Diagnostic,
     lexer::token::TokenKind,
@@ -6,7 +8,7 @@ use crate::{
 
 use super::Parser;
 
-impl Parser {
+impl Parser<'_> {
     pub(crate) fn parse_command_expr(&mut self) -> Result<CommandExpr, Diagnostic> {
         self.parse_command_expr_until(&[
             TokenKind::NewLine,
@@ -18,7 +20,7 @@ impl Parser {
 
     pub(crate) fn parse_command_expr_until(
         &mut self,
-        terminators: &[TokenKind],
+        terminators: &[TokenKind<'_>],
     ) -> Result<CommandExpr, Diagnostic> {
         let mut expr = self.parse_command_pipeline(terminators)?;
 
@@ -50,7 +52,7 @@ impl Parser {
 
     fn parse_command_pipeline(
         &mut self,
-        terminators: &[TokenKind],
+        terminators: &[TokenKind<'_>],
     ) -> Result<CommandExpr, Diagnostic> {
         let mut stages = vec![self.parse_command_call(terminators)?];
 
@@ -66,7 +68,10 @@ impl Parser {
         }
     }
 
-    fn parse_command_call(&mut self, terminators: &[TokenKind]) -> Result<CommandExpr, Diagnostic> {
+    fn parse_command_call(
+        &mut self,
+        terminators: &[TokenKind<'_>],
+    ) -> Result<CommandExpr, Diagnostic> {
         let mut env_assignments = vec![];
         while let Some(assignment) = self.try_parse_env_assignment_prefix(terminators)? {
             env_assignments.push(assignment);
@@ -125,18 +130,19 @@ impl Parser {
 
     fn try_parse_env_assignment_prefix(
         &mut self,
-        terminators: &[TokenKind],
+        terminators: &[TokenKind<'_>],
     ) -> Result<Option<(String, Expr)>, Diagnostic> {
         let start_index = self.index;
 
-        let (name, name_offset) = match &self.current().kind {
-            TokenKind::String(name) => (name.clone(), self.current().offset),
+        let (name_len, name_offset) = match &self.current().kind {
+            TokenKind::String(name) => {
+                if !Self::is_valid_env_name(name.as_ref()) {
+                    return Ok(None);
+                }
+                (name.len(), self.current().offset)
+            }
             _ => return Ok(None),
         };
-
-        if !Self::is_valid_env_name(name.as_str()) {
-            return Ok(None);
-        }
 
         let Some(eq_token) = self.tokens.get(self.index + 1) else {
             return Ok(None);
@@ -146,7 +152,7 @@ impl Parser {
         }
         let eq_offset = eq_token.offset;
         let eq_len = Self::token_source_len(eq_token);
-        if eq_offset != name_offset + name.len() {
+        if eq_offset != name_offset + name_len {
             return Ok(None);
         }
 
@@ -158,6 +164,10 @@ impl Parser {
             || self.check_current(&TokenKind::Or)
             || terminators.iter().any(|term| self.check_current(term))
         {
+            let name = match &self.tokens[start_index].kind {
+                TokenKind::String(name) => name.as_ref().to_owned(),
+                _ => unreachable!(),
+            };
             return Ok(Some((name, Expr::String(String::new()))));
         }
 
@@ -169,6 +179,11 @@ impl Parser {
             self.index = start_index;
             return Ok(None);
         }
+
+        let name = match &self.tokens[start_index].kind {
+            TokenKind::String(name) => name.as_ref().to_owned(),
+            _ => unreachable!(),
+        };
 
         let Some(value_expr) = self.parse_command_argument()? else {
             return Ok(Some((name, Expr::String(String::new()))));
@@ -209,8 +224,8 @@ impl Parser {
         }
 
         if let TokenKind::DoubleQuotedString(s) = &self.current().kind {
-            let token = self.current().to_owned();
-            let parsed = Self::parse_interpolated_string(self.src_id, s, token.offset)?;
+            let parsed =
+                Self::parse_interpolated_string(self.src_id, s, self.current().offset)?;
             self.advance();
             return Ok(Some(parsed));
         }
@@ -221,7 +236,7 @@ impl Parser {
         }
 
         if let TokenKind::Variable(var) = &self.current().kind {
-            let var_name = var.clone();
+            let var_name = var.as_ref().to_owned();
             self.advance(); // Move to token after variable.
             let sub_expr = self.parse_postfix_on_current(Expr::Variable(var_name))?;
             return Ok(Some(sub_expr));
@@ -237,8 +252,15 @@ impl Parser {
     }
 
     fn try_parse_command_equals_compound_arg(&mut self) -> Option<Expr> {
+        if !self.check_peek(1, &TokenKind::Equals) {
+            return None;
+        }
+        let next_kind = &self.tokens.get(self.index + 2)?.kind;
+        Self::token_kind_to_compound_command_part(next_kind)?;
+
         let start_index = self.index;
-        let mut value = Self::token_kind_to_compound_command_part(&self.current().kind)?;
+        let mut value =
+            Self::token_kind_to_compound_command_part(&self.current().kind)?.into_owned();
         self.advance();
 
         let mut consumed_equals = false;
@@ -257,7 +279,7 @@ impl Parser {
 
             consumed_equals = true;
             value.push('=');
-            value.push_str(&next_value);
+            value.push_str(next_value.as_ref());
 
             self.advance(); // Skip '='.
             self.advance(); // Move to and consume next literal part.
@@ -271,24 +293,24 @@ impl Parser {
         }
     }
 
-    fn token_kind_to_word_str(kind: &TokenKind) -> Option<String> {
+    fn token_kind_to_word_str(kind: &TokenKind<'_>) -> Option<&'static str> {
         match kind {
-            TokenKind::For => Some("for".to_string()),
-            TokenKind::In => Some("in".to_string()),
-            TokenKind::Break => Some("break".to_string()),
-            TokenKind::Continue => Some("continue".to_string()),
-            TokenKind::LeftBracket => Some("[".to_string()),
-            TokenKind::RightBracket => Some("]".to_string()),
-            TokenKind::LeftCurly => Some("{".to_string()),
-            TokenKind::RightCurly => Some("}".to_string()),
+            TokenKind::For => Some("for"),
+            TokenKind::In => Some("in"),
+            TokenKind::Break => Some("break"),
+            TokenKind::Continue => Some("continue"),
+            TokenKind::LeftBracket => Some("["),
+            TokenKind::RightBracket => Some("]"),
+            TokenKind::LeftCurly => Some("{"),
+            TokenKind::RightCurly => Some("}"),
             _ => None,
         }
     }
 
-    fn token_kind_to_command_literal(kind: &TokenKind) -> Option<Expr> {
+    fn token_kind_to_command_literal(kind: &TokenKind<'_>) -> Option<Expr> {
         match kind {
-            TokenKind::String(s) => Some(Expr::String(s.clone())),
-            TokenKind::QuotedString(s) => Some(Expr::QuotedString(s.clone())),
+            TokenKind::String(s) => Some(Expr::String(s.as_ref().to_owned())),
+            TokenKind::QuotedString(s) => Some(Expr::QuotedString(s.as_ref().to_owned())),
             TokenKind::Number(n) => Some(Expr::Number(*n)),
             TokenKind::Bool(b) => Some(Expr::Bool(*b)),
             // Treat punctuation/operator tokens as literal string arguments in command context.
@@ -302,16 +324,16 @@ impl Parser {
             TokenKind::Not => Some(Expr::String("!".to_string())),
             TokenKind::GreaterThan => Some(Expr::String(">".to_string())),
             TokenKind::LessThan => Some(Expr::String("<".to_string())),
-            other => Self::token_kind_to_word_str(other).map(Expr::String),
+            other => Self::token_kind_to_word_str(other).map(|s| Expr::String(s.to_owned())),
         }
     }
 
-    fn token_kind_to_compound_command_part(kind: &TokenKind) -> Option<String> {
+    fn token_kind_to_compound_command_part<'b>(kind: &'b TokenKind<'_>) -> Option<Cow<'b, str>> {
         match kind {
-            TokenKind::String(s) | TokenKind::QuotedString(s) => Some(s.clone()),
-            TokenKind::Number(n) => Some(n.to_string()),
-            TokenKind::Bool(b) => Some(b.to_string()),
-            other => Self::token_kind_to_word_str(other),
+            TokenKind::String(s) | TokenKind::QuotedString(s) => Some(Cow::Borrowed(s.as_ref())),
+            TokenKind::Number(n) => Some(Cow::Owned(n.to_string())),
+            TokenKind::Bool(b) => Some(Cow::Borrowed(if *b { "true" } else { "false" })),
+            other => Self::token_kind_to_word_str(other).map(Cow::Borrowed),
         }
     }
 

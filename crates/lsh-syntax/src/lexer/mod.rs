@@ -1,4 +1,4 @@
-use std::{char, iter::Peekable, str::CharIndices};
+use std::{borrow::Cow, char, iter::Peekable, str::CharIndices};
 
 use crate::diagnostics::{Diagnostic, DiagnosticKind};
 use crate::lexer::token::{Token, TokenKind};
@@ -7,16 +7,20 @@ pub mod token;
 
 type CharIndexedIter<'a> = Peekable<CharIndices<'a>>;
 
-pub fn lex_input(src_id: usize, input: &str) -> Result<Vec<Token>, Diagnostic> {
+pub fn lex_input(src_id: usize, input: &str) -> Result<Vec<Token<'_>>, Diagnostic> {
     lex_input_internal(src_id, input, false)
 }
 
-pub fn lex_input_lenient(src_id: usize, input: &str) -> Vec<Token> {
+pub fn lex_input_lenient(src_id: usize, input: &str) -> Vec<Token<'_>> {
     lex_input_internal(src_id, input, true)
         .unwrap_or_else(|_| vec![Token::new(TokenKind::EOF, input.len(), 0)])
 }
 
-fn lex_input_internal(src_id: usize, input: &str, lenient: bool) -> Result<Vec<Token>, Diagnostic> {
+fn lex_input_internal(
+    src_id: usize,
+    input: &str,
+    lenient: bool,
+) -> Result<Vec<Token<'_>>, Diagnostic> {
     let mut tokens = vec![];
 
     let mut chars: CharIndexedIter = input.char_indices().peekable();
@@ -81,7 +85,8 @@ fn lex_input_internal(src_id: usize, input: &str, lenient: bool) -> Result<Vec<T
                             tokens.push(Token::new(TokenKind::Plus, offset, 1))
                         }
                         _ => {
-                            if lex_identifier(&mut tokens, '+', offset, &mut chars).is_none() {
+                            if lex_identifier(input, &mut tokens, '+', offset, &mut chars).is_none()
+                            {
                                 tokens.push(Token::new(TokenKind::Plus, offset, 1));
                             }
                         }
@@ -107,12 +112,12 @@ fn lex_input_internal(src_id: usize, input: &str, lenient: bool) -> Result<Vec<T
                     tokens.push(Token::new(TokenKind::Minus, offset, 1))
                 }
                 Some((_, c)) if c.is_ascii_digit() => {
-                    if lex_identifier(&mut tokens, char, offset, &mut chars).is_none() {
+                    if lex_identifier(input, &mut tokens, char, offset, &mut chars).is_none() {
                         tokens.push(Token::new(TokenKind::Minus, offset, 1));
                     }
                 }
                 Some(_) => {
-                    if lex_identifier(&mut tokens, '-', offset, &mut chars).is_none() {
+                    if lex_identifier(input, &mut tokens, '-', offset, &mut chars).is_none() {
                         tokens.push(Token::new(TokenKind::Minus, offset, 1));
                     }
                 }
@@ -128,9 +133,11 @@ fn lex_input_internal(src_id: usize, input: &str, lenient: bool) -> Result<Vec<T
             '$' => {
                 if let Some(&(_, next_char)) = chars.peek() {
                     if matches!(next_char, '?' | '$' | '!' | '#' | '*' | '@') {
-                        chars.next();
+                        let (next_offset, _) = chars.next().unwrap();
                         tokens.push(Token::new(
-                            TokenKind::Variable(next_char.to_string()),
+                            TokenKind::Variable(Cow::Borrowed(
+                                &input[next_offset..next_offset + next_char.len_utf8()],
+                            )),
                             offset,
                             1 + next_char.len_utf8(),
                         ));
@@ -138,12 +145,10 @@ fn lex_input_internal(src_id: usize, input: &str, lenient: bool) -> Result<Vec<T
                         let (first_offset, first_var_char) = chars
                             .next()
                             .expect("Failed to get starting character of environment variable.");
-                        let mut var_string = String::from(first_var_char);
                         let mut end_offset = first_offset + first_var_char.len_utf8();
 
                         while let Some(&(var_char_offset, var_char)) = chars.peek() {
                             if var_char == '_' || var_char.is_ascii_alphanumeric() {
-                                var_string.push(var_char);
                                 end_offset = var_char_offset + var_char.len_utf8();
                                 chars.next();
                             } else {
@@ -152,7 +157,7 @@ fn lex_input_internal(src_id: usize, input: &str, lenient: bool) -> Result<Vec<T
                         }
 
                         tokens.push(Token::new(
-                            TokenKind::Variable(var_string),
+                            TokenKind::Variable(Cow::Borrowed(&input[first_offset..end_offset])),
                             offset,
                             end_offset - offset,
                         ));
@@ -166,7 +171,11 @@ fn lex_input_internal(src_id: usize, input: &str, lenient: bool) -> Result<Vec<T
                             ';' | '|' | '&' | ')' | '}' | ']' | ',' | '/' | '\\' | '"' | '\'' | '='
                         )
                     {
-                        tokens.push(Token::new(TokenKind::String("$".to_string()), offset, 1));
+                        tokens.push(Token::new(
+                            TokenKind::String(Cow::Borrowed("$")),
+                            offset,
+                            1,
+                        ));
                     } else {
                         return Err(Diagnostic::new(
                             DiagnosticKind::LexError,
@@ -177,7 +186,11 @@ fn lex_input_internal(src_id: usize, input: &str, lenient: bool) -> Result<Vec<T
                         ));
                     }
                 } else {
-                    tokens.push(Token::new(TokenKind::String("$".to_string()), offset, 1));
+                    tokens.push(Token::new(
+                        TokenKind::String(Cow::Borrowed("$")),
+                        offset,
+                        1,
+                    ));
                 }
             }
             '/' => match chars.peek().copied().map(|(_, c)| c) {
@@ -186,7 +199,7 @@ fn lex_input_internal(src_id: usize, input: &str, lenient: bool) -> Result<Vec<T
                     tokens.push(Token::new(TokenKind::SlashEquals, offset, 2));
                 }
                 Some(_) | None => {
-                    if lex_identifier(&mut tokens, '/', offset, &mut chars).is_none() {
+                    if lex_identifier(input, &mut tokens, '/', offset, &mut chars).is_none() {
                         tokens.push(Token::new(TokenKind::Slash, offset, 1));
                     }
                 }
@@ -238,24 +251,31 @@ fn lex_input_internal(src_id: usize, input: &str, lenient: bool) -> Result<Vec<T
                     let has_escapes = true;
 
                     lex_identifier_rest(
+                        input,
                         &mut tokens,
                         offset,
                         end_offset,
-                        ident_string,
+                        Some(ident_string),
                         has_escapes,
                         &mut chars,
                     );
                 } else {
-                    tokens.push(Token::new(TokenKind::String("\\".to_string()), offset, 1));
+                    tokens.push(Token::new(
+                        TokenKind::String(Cow::Borrowed("\\")),
+                        offset,
+                        1,
+                    ));
                 }
             }
             _ => {
-                if lex_identifier(&mut tokens, char, offset, &mut chars).is_some() {
+                if lex_identifier(input, &mut tokens, char, offset, &mut chars).is_some() {
                     continue;
                 } else if !is_whitespace(&char) {
                     if lenient {
                         tokens.push(Token::new(
-                            TokenKind::String(char.to_string()),
+                            TokenKind::String(Cow::Borrowed(
+                                &input[offset..offset + char.len_utf8()],
+                            )),
                             offset,
                             char.len_utf8(),
                         ));
@@ -280,28 +300,33 @@ fn lex_input_internal(src_id: usize, input: &str, lenient: bool) -> Result<Vec<T
     Ok(tokens)
 }
 
-fn lex_single_quoted_string(
+fn lex_single_quoted_string<'a>(
     src_id: usize,
-    input: &str,
+    input: &'a str,
     start_offset: usize,
-    chars: &mut CharIndexedIter,
+    chars: &mut CharIndexedIter<'a>,
     lenient: bool,
-) -> Result<(String, usize), Diagnostic> {
-    let mut string = String::new();
+) -> Result<(Cow<'a, str>, usize), Diagnostic> {
+    let content_start = start_offset + '\''.len_utf8();
+    let mut owned: Option<String> = None;
     let mut closed = false;
-    let mut end_offset = start_offset + '\''.len_utf8();
+    let mut end_offset = content_start;
+    let mut content_end = content_start;
 
     while let Some((offset, str_char)) = chars.next() {
         if str_char == '\'' {
             closed = true;
             end_offset = offset + '\''.len_utf8();
+            content_end = offset;
             break;
         }
 
         if str_char == '\\' {
             let Some((esc_offset, escaped)) = chars.next() else {
                 if lenient {
-                    string.push('\\');
+                    let buf =
+                        owned.get_or_insert_with(|| String::from(&input[content_start..offset]));
+                    buf.push('\\');
                     end_offset = input.len();
                     break;
                 }
@@ -314,20 +339,29 @@ fn lex_single_quoted_string(
                 ));
             };
 
+            let buf = owned.get_or_insert_with(|| String::from(&input[content_start..offset]));
             let resolved = resolve_basic_escape(escaped);
 
-            string.push(resolved);
+            buf.push(resolved);
             end_offset = esc_offset + escaped.len_utf8();
+            content_end = end_offset;
             continue;
         }
 
-        string.push(str_char);
+        if let Some(buf) = &mut owned {
+            buf.push(str_char);
+        }
         end_offset = offset + str_char.len_utf8();
+        content_end = end_offset;
     }
 
     if !closed {
         if lenient {
-            return Ok((string, input.len().saturating_sub(start_offset)));
+            let value = owned.map_or_else(
+                || Cow::Borrowed(&input[content_start..input.len()]),
+                Cow::Owned,
+            );
+            return Ok((value, input.len().saturating_sub(start_offset)));
         }
         return Err(Diagnostic::new(
             DiagnosticKind::LexError,
@@ -338,19 +372,23 @@ fn lex_single_quoted_string(
         ));
     }
 
-    Ok((string, end_offset - start_offset))
+    let value = owned.map_or_else(
+        || Cow::Borrowed(&input[content_start..content_end]),
+        Cow::Owned,
+    );
+    Ok((value, end_offset - start_offset))
 }
 
-fn lex_double_quoted_string(
+fn lex_double_quoted_string<'a>(
     src_id: usize,
-    input: &str,
+    input: &'a str,
     start_offset: usize,
-    chars: &mut CharIndexedIter,
+    chars: &mut CharIndexedIter<'a>,
     lenient: bool,
-) -> Result<(String, usize), Diagnostic> {
-    let mut string = String::new();
+) -> Result<(Cow<'a, str>, usize), Diagnostic> {
+    let content_start = start_offset + '"'.len_utf8();
     let mut closed = false;
-    let mut end_offset = start_offset + '"'.len_utf8();
+    let mut end_offset = content_start;
     let mut paren_depth = 0usize;
     let mut brace_depth = 0usize;
 
@@ -362,9 +400,7 @@ fn lex_double_quoted_string(
         }
 
         if str_char == '\\' {
-            string.push('\\');
             if let Some((esc_offset, escaped)) = chars.next() {
-                string.push(escaped);
                 end_offset = esc_offset + escaped.len_utf8();
                 continue;
             } else {
@@ -385,16 +421,12 @@ fn lex_double_quoted_string(
         // Check for $( and ${
         if str_char == '$' {
             if let Some(&(_, '(')) = chars.peek() {
-                string.push('$');
                 chars.next();
-                string.push('(');
                 paren_depth += 1;
                 end_offset = offset + 2;
                 continue;
             } else if let Some(&(_, '{')) = chars.peek() {
-                string.push('$');
                 chars.next();
-                string.push('{');
                 brace_depth += 1;
                 end_offset = offset + 2;
                 continue;
@@ -413,13 +445,10 @@ fn lex_double_quoted_string(
                 brace_depth -= 1;
             } else if str_char == '"' || str_char == '\'' {
                 let quote = str_char;
-                string.push(quote);
                 while let Some((q_offset, qc)) = chars.next() {
-                    string.push(qc);
                     if qc == '\\'
                         && let Some((esc_offset, q_esc)) = chars.next()
                     {
-                        string.push(q_esc);
                         end_offset = esc_offset + q_esc.len_utf8();
                         continue;
                     }
@@ -432,13 +461,15 @@ fn lex_double_quoted_string(
             }
         }
 
-        string.push(str_char);
         end_offset = offset + str_char.len_utf8();
     }
 
     if !closed {
         if lenient {
-            return Ok((string, input.len().saturating_sub(start_offset)));
+            return Ok((
+                Cow::Borrowed(&input[content_start..input.len()]),
+                input.len().saturating_sub(start_offset),
+            ));
         }
         return Err(Diagnostic::new(
             DiagnosticKind::LexError,
@@ -449,7 +480,10 @@ fn lex_double_quoted_string(
         ));
     }
 
-    Ok((string, end_offset - start_offset))
+    Ok((
+        Cow::Borrowed(&input[content_start..end_offset - '"'.len_utf8()]),
+        end_offset - start_offset,
+    ))
 }
 
 fn is_ident_char(c: char) -> bool {
@@ -476,22 +510,23 @@ fn is_ident_char(c: char) -> bool {
         )
 }
 
-fn lex_identifier(
-    tokens: &mut Vec<Token>,
+fn lex_identifier<'a>(
+    input: &'a str,
+    tokens: &mut Vec<Token<'a>>,
     start_char: char,
     start_offset: usize,
-    chars: &mut CharIndexedIter,
+    chars: &mut CharIndexedIter<'a>,
 ) -> Option<()> {
     if is_ident_char(start_char) {
-        let ident_string = String::from(start_char);
         let end_offset = start_offset + start_char.len_utf8();
         let has_escapes = false;
 
         lex_identifier_rest(
+            input,
             tokens,
             start_offset,
             end_offset,
-            ident_string,
+            None,
             has_escapes,
             chars,
         );
@@ -530,52 +565,58 @@ pub(crate) fn resolve_basic_escape(escaped: char) -> char {
     }
 }
 
-fn lex_identifier_rest(
-    tokens: &mut Vec<Token>,
+fn lex_identifier_rest<'a>(
+    input: &'a str,
+    tokens: &mut Vec<Token<'a>>,
     start_offset: usize,
     mut end_offset: usize,
-    mut ident_string: String,
+    mut owned: Option<String>,
     mut has_escapes: bool,
-    chars: &mut CharIndexedIter,
+    chars: &mut CharIndexedIter<'a>,
 ) {
     while let Some(&(peek_offset, peek_char)) = chars.peek() {
         if peek_char == '\\' {
+            let buf = owned.get_or_insert_with(|| String::from(&input[start_offset..peek_offset]));
             chars.next(); // Consume '\\'
             has_escapes = true;
             if consume_line_continuation(chars) {
                 continue;
             }
             if let Some((esc_offset, esc_char)) = chars.next() {
-                ident_string.push(esc_char);
+                buf.push(esc_char);
                 end_offset = esc_offset + esc_char.len_utf8();
                 continue;
             }
-            ident_string.push('\\');
+            buf.push('\\');
             end_offset = peek_offset + 1;
             break;
         }
 
         if is_ident_char(peek_char) {
             let (char_offset, c) = chars.next().unwrap();
-            ident_string.push(c);
+            if let Some(buf) = &mut owned {
+                buf.push(c);
+            }
             end_offset = char_offset + c.len_utf8();
         } else {
             break;
         }
     }
 
+    let ident = owned.map_or_else(|| Cow::Borrowed(&input[start_offset..end_offset]), Cow::Owned);
+
     push_identifier_or_number(
         tokens,
-        ident_string,
+        ident,
         start_offset,
         end_offset - start_offset,
         has_escapes,
     );
 }
 
-fn push_identifier_or_number(
-    tokens: &mut Vec<Token>,
-    ident_string: String,
+fn push_identifier_or_number<'a>(
+    tokens: &mut Vec<Token<'a>>,
+    ident_string: Cow<'a, str>,
     offset: usize,
     len: usize,
     has_escapes: bool,
@@ -596,7 +637,7 @@ fn push_identifier_or_number(
             return;
         }
 
-        if let Some(keyword_kind) = match_keyword(ident_string.as_str()) {
+        if let Some(keyword_kind) = match_keyword(&ident_string) {
             tokens.push(Token::new(keyword_kind, offset, len));
             return;
         }
@@ -617,7 +658,7 @@ fn is_whitespace(char: &char) -> bool {
     matches!(char, ' ' | '\n' | '\t')
 }
 
-fn match_keyword(keyword: &str) -> Option<TokenKind> {
+fn match_keyword(keyword: &str) -> Option<TokenKind<'static>> {
     match keyword {
         "let" => Some(TokenKind::Let),
         "if" => Some(TokenKind::If),
@@ -642,7 +683,7 @@ mod tests {
 
     use super::*;
 
-    fn token_kinds(input: &str) -> Vec<TokenKind> {
+    fn token_kinds(input: &str) -> Vec<TokenKind<'_>> {
         let mut src_map = SourceMap::default();
         let src_id = src_map.insert("<test data>", input);
 
@@ -967,5 +1008,23 @@ mod tests {
         assert!(matches!(&expr_minus[1], TokenKind::Minus));
         assert!(matches!(&expr_minus[2], TokenKind::Number(n) if *n == 2.0));
         assert!(matches!(&expr_minus[3], TokenKind::EOF));
+    }
+
+    #[test]
+    fn borrows_unescaped_tokens_and_allocates_only_for_escapes() {
+        let kinds = token_kinds("echo $PATH $? 'plain' \"hi\\n$x\" foo\\ bar \\let 'a\\nb'");
+
+        assert!(matches!(&kinds[0], TokenKind::String(Cow::Borrowed("echo"))));
+        assert!(matches!(&kinds[1], TokenKind::Variable(Cow::Borrowed("PATH"))));
+        assert!(matches!(&kinds[2], TokenKind::Variable(Cow::Borrowed("?"))));
+        assert!(matches!(&kinds[3], TokenKind::QuotedString(Cow::Borrowed("plain"))));
+        assert!(matches!(
+            &kinds[4],
+            TokenKind::DoubleQuotedString(Cow::Borrowed("hi\\n$x"))
+        ));
+        assert!(matches!(&kinds[5], TokenKind::String(Cow::Owned(s)) if s == "foo bar"));
+        assert!(matches!(&kinds[6], TokenKind::String(Cow::Owned(s)) if s == "let"));
+        assert!(matches!(&kinds[7], TokenKind::QuotedString(Cow::Owned(s)) if s == "a\nb"));
+        assert!(matches!(&kinds[8], TokenKind::EOF));
     }
 }

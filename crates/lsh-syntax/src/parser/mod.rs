@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use crate::{
     diagnostics::{Diagnostic, DiagnosticKind},
     lexer::token::{Token, TokenKind},
@@ -10,14 +12,14 @@ mod expr;
 mod statement;
 mod string;
 
-pub struct Parser {
+pub struct Parser<'a> {
     pub(crate) src_id: usize,
-    pub(crate) tokens: Vec<Token>,
+    pub(crate) tokens: Vec<Token<'a>>,
     pub(crate) index: usize,
 }
 
-impl Parser {
-    pub fn new(src_id: usize, tokens: Vec<Token>) -> Self {
+impl<'a> Parser<'a> {
+    pub fn new(src_id: usize, tokens: Vec<Token<'a>>) -> Self {
         Self {
             src_id,
             tokens,
@@ -39,19 +41,19 @@ impl Parser {
         }
     }
 
-    pub(crate) fn current(&self) -> &Token {
+    pub(crate) fn current(&self) -> &Token<'a> {
         self.tokens
             .get(self.index)
             .unwrap_or_else(|| self.tokens.last().expect("Failed to get current token."))
     }
 
-    pub(crate) fn peek_token(&self, distance: usize) -> &Token {
+    pub(crate) fn peek_token(&self, distance: usize) -> &Token<'a> {
         self.tokens
             .get(self.index + distance)
             .unwrap_or_else(|| self.tokens.last().expect("Failed to get last token."))
     }
 
-    pub(crate) fn advance(&mut self) -> &Token {
+    pub(crate) fn advance(&mut self) -> &Token<'a> {
         // Only index if it is possible.
         if self.index < self.tokens.len() {
             self.index += 1;
@@ -60,15 +62,15 @@ impl Parser {
         self.current()
     }
 
-    pub(crate) fn check_current(&self, kind_y: &TokenKind) -> bool {
+    pub(crate) fn check_current(&self, kind_y: &TokenKind<'_>) -> bool {
         self.current().kind.compare(kind_y)
     }
 
-    pub(crate) fn check_peek(&self, distance: usize, kind_y: &TokenKind) -> bool {
+    pub(crate) fn check_peek(&self, distance: usize, kind_y: &TokenKind<'_>) -> bool {
         self.peek_token(distance).kind.compare(kind_y)
     }
 
-    pub(crate) fn match_token(&mut self, kinds: &[TokenKind]) -> bool {
+    pub(crate) fn match_token(&mut self, kinds: &[TokenKind<'_>]) -> bool {
         for kind in kinds {
             if self.check_current(kind) {
                 self.advance();
@@ -79,9 +81,13 @@ impl Parser {
         false
     }
 
-    pub(crate) fn consume(&mut self, kind: &TokenKind, err_msg: &str) -> Result<Token, Diagnostic> {
+    pub(crate) fn consume(
+        &mut self,
+        kind: &TokenKind<'_>,
+        err_msg: &str,
+    ) -> Result<&Token<'a>, Diagnostic> {
         if self.check_current(kind) {
-            return Ok(self.advance().to_owned());
+            return Ok(self.advance());
         }
 
         let expected = Self::token_kind_label(kind);
@@ -90,64 +96,64 @@ impl Parser {
         self.error_here(msg)
     }
 
-    pub(crate) fn token_kind_label(kind: &TokenKind) -> String {
+    pub(crate) fn token_kind_label(kind: &TokenKind<'_>) -> Cow<'static, str> {
         match kind {
-            TokenKind::String(s) => format!("'{s}'"),
-            TokenKind::QuotedString(s) => format!("'{s}'"),
-            TokenKind::DoubleQuotedString(s) => format!("\"{s}\""),
-            TokenKind::Variable(v) => format!("'${v}'"),
-            TokenKind::Number(n) => format!("'{n}'"),
-            TokenKind::Bool(b) => format!("'{b}'"),
-            TokenKind::Let => "'let'".to_string(),
-            TokenKind::If => "'if'".to_string(),
-            TokenKind::Else => "'else'".to_string(),
-            TokenKind::While => "'while'".to_string(),
-            TokenKind::For => "'for'".to_string(),
-            TokenKind::In => "'in'".to_string(),
-            TokenKind::Break => "'break'".to_string(),
-            TokenKind::Continue => "'continue'".to_string(),
-            TokenKind::Fn => "'fn'".to_string(),
-            TokenKind::TypeOf => "'typeof'".to_string(),
-            TokenKind::Return => "'return'".to_string(),
-            TokenKind::Pipe => "'|'".to_string(),
-            TokenKind::And => "'&&'".to_string(),
-            TokenKind::Or => "'||'".to_string(),
-            TokenKind::Plus => "'+'".to_string(),
-            TokenKind::Minus => "'-'".to_string(),
-            TokenKind::Star => "'*'".to_string(),
-            TokenKind::Slash => "'/'".to_string(),
-            TokenKind::Equals => "'='".to_string(),
-            TokenKind::EqualsEquals => "'=='".to_string(),
-            TokenKind::Not => "'!'".to_string(),
-            TokenKind::NotEquals => "'!='".to_string(),
-            TokenKind::LessThan => "'<'".to_string(),
-            TokenKind::LtEquals => "'<='".to_string(),
-            TokenKind::GreaterThan => "'>'".to_string(),
-            TokenKind::GtEquals => "'>='".to_string(),
-            TokenKind::PlusEquals => "'+='".to_string(),
-            TokenKind::MinusEquals => "'-='".to_string(),
-            TokenKind::StarEquals => "'*='".to_string(),
-            TokenKind::SlashEquals => "'/='".to_string(),
-            TokenKind::FatArrow => "'=>'".to_string(),
-            TokenKind::ThinArrow => "'->'".to_string(),
-            TokenKind::ThinArrowAppend => "'->>'".to_string(),
-            TokenKind::DollarLeftParen => "'$('".to_string(),
-            TokenKind::LeftCurly => "'{'".to_string(),
-            TokenKind::RightCurly => "'}'".to_string(),
-            TokenKind::LeftParen => "'('".to_string(),
-            TokenKind::RightParen => "')'".to_string(),
-            TokenKind::LeftBracket => "'['".to_string(),
-            TokenKind::RightBracket => "']'".to_string(),
-            TokenKind::Comma => "','".to_string(),
-            TokenKind::Dot => "'.'".to_string(),
-            TokenKind::Semicolon => "';'".to_string(),
-            TokenKind::NewLine => "newline".to_string(),
-            TokenKind::EOF => "end of input".to_string(),
-            TokenKind::Ampersand => "'&'".to_string(),
+            TokenKind::String(s) => Cow::Owned(format!("'{s}'")),
+            TokenKind::QuotedString(s) => Cow::Owned(format!("'{s}'")),
+            TokenKind::DoubleQuotedString(s) => Cow::Owned(format!("\"{s}\"")),
+            TokenKind::Variable(v) => Cow::Owned(format!("'${v}'")),
+            TokenKind::Number(n) => Cow::Owned(format!("'{n}'")),
+            TokenKind::Bool(b) => Cow::Owned(format!("'{b}'")),
+            TokenKind::Let => Cow::Borrowed("'let'"),
+            TokenKind::If => Cow::Borrowed("'if'"),
+            TokenKind::Else => Cow::Borrowed("'else'"),
+            TokenKind::While => Cow::Borrowed("'while'"),
+            TokenKind::For => Cow::Borrowed("'for'"),
+            TokenKind::In => Cow::Borrowed("'in'"),
+            TokenKind::Break => Cow::Borrowed("'break'"),
+            TokenKind::Continue => Cow::Borrowed("'continue'"),
+            TokenKind::Fn => Cow::Borrowed("'fn'"),
+            TokenKind::TypeOf => Cow::Borrowed("'typeof'"),
+            TokenKind::Return => Cow::Borrowed("'return'"),
+            TokenKind::Pipe => Cow::Borrowed("'|'"),
+            TokenKind::And => Cow::Borrowed("'&&'"),
+            TokenKind::Or => Cow::Borrowed("'||'"),
+            TokenKind::Plus => Cow::Borrowed("'+'"),
+            TokenKind::Minus => Cow::Borrowed("'-'"),
+            TokenKind::Star => Cow::Borrowed("'*'"),
+            TokenKind::Slash => Cow::Borrowed("'/'"),
+            TokenKind::Equals => Cow::Borrowed("'='"),
+            TokenKind::EqualsEquals => Cow::Borrowed("'=='"),
+            TokenKind::Not => Cow::Borrowed("'!'"),
+            TokenKind::NotEquals => Cow::Borrowed("'!='"),
+            TokenKind::LessThan => Cow::Borrowed("'<'"),
+            TokenKind::LtEquals => Cow::Borrowed("'<='"),
+            TokenKind::GreaterThan => Cow::Borrowed("'>'"),
+            TokenKind::GtEquals => Cow::Borrowed("'>='"),
+            TokenKind::PlusEquals => Cow::Borrowed("'+='"),
+            TokenKind::MinusEquals => Cow::Borrowed("'-='"),
+            TokenKind::StarEquals => Cow::Borrowed("'*='"),
+            TokenKind::SlashEquals => Cow::Borrowed("'/='"),
+            TokenKind::FatArrow => Cow::Borrowed("'=>'"),
+            TokenKind::ThinArrow => Cow::Borrowed("'->'"),
+            TokenKind::ThinArrowAppend => Cow::Borrowed("'->>'"),
+            TokenKind::DollarLeftParen => Cow::Borrowed("'$('"),
+            TokenKind::LeftCurly => Cow::Borrowed("'{'"),
+            TokenKind::RightCurly => Cow::Borrowed("'}'"),
+            TokenKind::LeftParen => Cow::Borrowed("'('"),
+            TokenKind::RightParen => Cow::Borrowed("')'"),
+            TokenKind::LeftBracket => Cow::Borrowed("'['"),
+            TokenKind::RightBracket => Cow::Borrowed("']'"),
+            TokenKind::Comma => Cow::Borrowed("','"),
+            TokenKind::Dot => Cow::Borrowed("'.'"),
+            TokenKind::Semicolon => Cow::Borrowed("';'"),
+            TokenKind::NewLine => Cow::Borrowed("newline"),
+            TokenKind::EOF => Cow::Borrowed("end of input"),
+            TokenKind::Ampersand => Cow::Borrowed("'&'"),
         }
     }
 
-    pub(crate) fn current_token_label(&self) -> String {
+    pub(crate) fn current_token_label(&self) -> Cow<'static, str> {
         Self::token_kind_label(&self.current().kind)
     }
 
@@ -187,7 +193,7 @@ impl Parser {
         Err(self.diagnostic_here_with_hint(message, hint))
     }
 
-    pub(crate) fn token_source_len(token: &Token) -> usize {
+    pub(crate) fn token_source_len(token: &Token<'_>) -> usize {
         token.len
     }
 
@@ -217,7 +223,7 @@ impl Parser {
         if !self.check_current(&TokenKind::RightParen) {
             loop {
                 match &self.current().kind {
-                    TokenKind::String(p) => params.push(p.clone()),
+                    TokenKind::String(p) => params.push(p.as_ref().to_owned()),
                     other => {
                         return self.error_here(format!(
                             "Expected parameter name, found {}.",

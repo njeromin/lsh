@@ -1,11 +1,11 @@
-use std::{fmt, mem};
+use std::{borrow::Cow, fmt, mem};
 
 #[derive(Debug, Clone)]
-pub enum TokenKind {
-    Variable(String),
-    String(String),
-    QuotedString(String),
-    DoubleQuotedString(String),
+pub enum TokenKind<'a> {
+    Variable(Cow<'a, str>),
+    String(Cow<'a, str>),
+    QuotedString(Cow<'a, str>),
+    DoubleQuotedString(Cow<'a, str>),
     Number(f64),
     Bool(bool),
     Plus,
@@ -56,84 +56,91 @@ pub enum TokenKind {
     EOF,
 }
 
-impl fmt::Display for TokenKind {
+impl fmt::Display for TokenKind<'_> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f,
-            "TokenKind::{}",
-            match self {
-                Self::Variable(var) => format!("Variable({var})"),
-                Self::String(str) => format!("String({str})"),
-                Self::QuotedString(str) => format!("QuotedString({str})"),
-                Self::DoubleQuotedString(str) => format!("DoubleQuotedString({str})"),
-                Self::Number(num) => format!("Number({num})"),
-                Self::Bool(bool) => format!("Bool({bool})"),
-                Self::Plus => "Plus".to_string(),
-                Self::Minus => "Minus".to_string(),
-                Self::PlusEquals => "PlusEquals".to_string(),
-                Self::MinusEquals => "MinusEquals".to_string(),
-                Self::Star => "Star".to_string(),
-                Self::Slash => "Slash".to_string(),
-                Self::StarEquals => "StarEquals".to_string(),
-                Self::SlashEquals => "SlashEquals".to_string(),
-                Self::Pipe => "Pipe".to_string(),
-                Self::Ampersand => "Ampersand".to_string(),
-                Self::And => "And".to_string(),
-                Self::Or => "Or".to_string(),
-                Self::Equals => "Equals".to_string(),
-                Self::EqualsEquals => "EqualsEquals".to_string(),
-                Self::GreaterThan => "GreaterThan".to_string(),
-                Self::GtEquals => "GtEquals".to_string(),
-                Self::LessThan => "LessThan".to_string(),
-                Self::LtEquals => "LtEquals".to_string(),
-                Self::Not => "Not".to_string(),
-                Self::NotEquals => "NotEquals".to_string(),
-                Self::DollarLeftParen => "DollarLeftParen".to_string(),
-                Self::Let => "Let".to_string(),
-                Self::If => "If".to_string(),
-                Self::Else => "Else".to_string(),
-                Self::While => "While".to_string(),
-                Self::For => "For".to_string(),
-                Self::In => "In".to_string(),
-                Self::Break => "Break".to_string(),
-                Self::Continue => "Continue".to_string(),
-                Self::Fn => "Fn".to_string(),
-                Self::TypeOf => "TypeOf".to_string(),
-                Self::Return => "Return".to_string(),
-                Self::FatArrow => "FatArrow".to_string(),
-                Self::ThinArrow => "ThinArrow".to_string(),
-                Self::ThinArrowAppend => "ThinArrowAppend".to_string(),
-                Self::LeftCurly => "LeftCurly".to_string(),
-                Self::RightCurly => "RightCurly".to_string(),
-                Self::LeftParen => "LeftParen".to_string(),
-                Self::RightParen => "RightParen".to_string(),
-                Self::LeftBracket => "LeftBracket".to_string(),
-                Self::RightBracket => "RightBracket".to_string(),
-                Self::Comma => "Comma".to_string(),
-                Self::Dot => "Dot".to_string(),
-                Self::Semicolon => "Semicolon".to_string(),
-                Self::NewLine => "NewLine".to_string(),
-                Self::EOF => "EOF".to_string(),
-            },
-        )
+        match self {
+            Self::Variable(var) => write!(f, "TokenKind::Variable({var})"),
+            Self::String(str) => write!(f, "TokenKind::String({str})"),
+            Self::QuotedString(str) => write!(f, "TokenKind::QuotedString({str})"),
+            Self::DoubleQuotedString(str) => write!(f, "TokenKind::DoubleQuotedString({str})"),
+            Self::Number(num) => write!(f, "TokenKind::Number({num})"),
+            Self::Bool(bool) => write!(f, "TokenKind::Bool({bool})"),
+            other => {
+                let name = match other {
+                    Self::Plus => "Plus",
+                    Self::Minus => "Minus",
+                    Self::PlusEquals => "PlusEquals",
+                    Self::MinusEquals => "MinusEquals",
+                    Self::Star => "Star",
+                    Self::Slash => "Slash",
+                    Self::StarEquals => "StarEquals",
+                    Self::SlashEquals => "SlashEquals",
+                    Self::Pipe => "Pipe",
+                    Self::Ampersand => "Ampersand",
+                    Self::And => "And",
+                    Self::Or => "Or",
+                    Self::Equals => "Equals",
+                    Self::EqualsEquals => "EqualsEquals",
+                    Self::GreaterThan => "GreaterThan",
+                    Self::GtEquals => "GtEquals",
+                    Self::LessThan => "LessThan",
+                    Self::LtEquals => "LtEquals",
+                    Self::Not => "Not",
+                    Self::NotEquals => "NotEquals",
+                    Self::DollarLeftParen => "DollarLeftParen",
+                    Self::Let => "Let",
+                    Self::If => "If",
+                    Self::Else => "Else",
+                    Self::While => "While",
+                    Self::For => "For",
+                    Self::In => "In",
+                    Self::Break => "Break",
+                    Self::Continue => "Continue",
+                    Self::Fn => "Fn",
+                    Self::TypeOf => "TypeOf",
+                    Self::Return => "Return",
+                    Self::FatArrow => "FatArrow",
+                    Self::ThinArrow => "ThinArrow",
+                    Self::ThinArrowAppend => "ThinArrowAppend",
+                    Self::LeftCurly => "LeftCurly",
+                    Self::RightCurly => "RightCurly",
+                    Self::LeftParen => "LeftParen",
+                    Self::RightParen => "RightParen",
+                    Self::LeftBracket => "LeftBracket",
+                    Self::RightBracket => "RightBracket",
+                    Self::Comma => "Comma",
+                    Self::Dot => "Dot",
+                    Self::Semicolon => "Semicolon",
+                    Self::NewLine => "NewLine",
+                    Self::EOF => "EOF",
+                    Self::Variable(_)
+                    | Self::String(_)
+                    | Self::QuotedString(_)
+                    | Self::DoubleQuotedString(_)
+                    | Self::Number(_)
+                    | Self::Bool(_) => unreachable!(),
+                };
+                write!(f, "TokenKind::{name}")
+            }
+        }
     }
 }
 
-impl TokenKind {
+impl TokenKind<'_> {
     /// Compares two TokenKind instances for equality based on their discriminants.
-    pub fn compare(&self, other: &TokenKind) -> bool {
+    pub fn compare(&self, other: &TokenKind<'_>) -> bool {
         mem::discriminant(self) == mem::discriminant(other)
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct Token {
-    pub kind: TokenKind,
+pub struct Token<'a> {
+    pub kind: TokenKind<'a>,
     pub offset: usize,
     pub len: usize,
 }
 
-impl fmt::Display for Token {
+impl fmt::Display for Token<'_> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
@@ -143,8 +150,8 @@ impl fmt::Display for Token {
     }
 }
 
-impl Token {
-    pub fn new(kind: TokenKind, offset: usize, len: usize) -> Self {
+impl<'a> Token<'a> {
+    pub fn new(kind: TokenKind<'a>, offset: usize, len: usize) -> Self {
         Token { kind, offset, len }
     }
 }

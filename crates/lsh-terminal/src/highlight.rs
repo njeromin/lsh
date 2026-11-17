@@ -112,7 +112,7 @@ impl TextFormatter for SyntaxHighlighter {
     }
 }
 
-fn token_end(line: &str, tokens: &[Token], index: usize) -> usize {
+fn token_end(line: &str, tokens: &[Token<'_>], index: usize) -> usize {
     let start = tokens[index].offset.min(line.len());
     let mut end = tokens
         .iter()
@@ -136,7 +136,7 @@ fn token_end(line: &str, tokens: &[Token], index: usize) -> usize {
 }
 
 fn token_content_style(
-    token: &Token,
+    token: &Token<'_>,
     _span: &str,
     is_command_sub_close: bool,
 ) -> Option<ContentStyle> {
