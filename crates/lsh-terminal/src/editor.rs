@@ -81,8 +81,7 @@ pub fn parse_command_args(segment: &str) -> (Option<&str>, Vec<String>, &str, us
     let mut in_double = false;
     let mut token_start: Option<usize> = None;
 
-    let chars: Vec<(usize, char)> = segment.char_indices().collect();
-    for &(idx, c) in &chars {
+    for (idx, c) in segment.char_indices() {
         if c == '\'' && !in_double {
             in_single = !in_single;
             if token_start.is_none() {

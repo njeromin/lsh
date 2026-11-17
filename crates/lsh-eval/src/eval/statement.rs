@@ -142,7 +142,9 @@ impl Evaluator {
                     if let Some(last_scope_index) = scope_indices.last()
                         && let Some(scope) = self.scopes.get_mut(*last_scope_index)
                     {
-                        scope.vars.insert(name.to_owned(), expr.clone());
+                        if scope.vars.insert(name.to_owned(), expr.clone()).is_none() {
+                            self.completions_dirty = true;
+                        }
                         self.sync_env_var_if_exported(name, &expr);
                     } else {
                         return Err(EvalError::ScopeNotFound);

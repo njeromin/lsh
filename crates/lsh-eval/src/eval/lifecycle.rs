@@ -265,8 +265,9 @@ impl Evaluator {
             // Register in plugin_manager if manifest has a non-empty name
             if let Some(Value::String(ref name)) = export_val.get_property("name")
                 && !name.trim().is_empty()
+                && self.plugin_manager.register(export_val.clone()).is_ok()
             {
-                let _ = self.plugin_manager.register(export_val.clone());
+                self.completions_dirty = true;
             }
         }
 
@@ -292,6 +293,7 @@ impl Evaluator {
         let name = self
             .plugin_manager
             .register_with_default_name(default_name, manifest_val)?;
+        self.completions_dirty = true;
         Ok(name)
     }
 
@@ -315,7 +317,11 @@ impl Evaluator {
                 }
             }
         }
-        self.plugin_manager.unregister(name)
+        let removed = self.plugin_manager.unregister(name);
+        if removed {
+            self.completions_dirty = true;
+        }
+        removed
     }
 
     pub fn on_plugin_registered(&mut self, _plugin_name: &str) {}

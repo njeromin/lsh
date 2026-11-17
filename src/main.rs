@@ -119,10 +119,6 @@ fn interactive_session(
         }
 
         completer.reset_prompt_marks();
-        let mut commands = eval.get_aliases().keys().cloned().collect::<Vec<_>>();
-        commands.extend(eval.plugin_manager.list_commands());
-        completer.set_aliases(commands);
-        completer.set_vars(eval.get_var_names());
         completer.refresh_binaries_if_path_changed();
 
         let cwd_path = current_dir().unwrap_or_else(|_| PathBuf::from("."));
@@ -134,6 +130,13 @@ fn interactive_session(
         osc::write_7_cwd(&cwd_path);
 
         let prompt_str = get_prompt(eval);
+        if eval.completions_dirty {
+            let mut commands = eval.get_aliases().keys().cloned().collect::<Vec<_>>();
+            commands.extend(eval.plugin_manager.list_commands());
+            completer.set_aliases(commands);
+            completer.set_vars(eval.get_var_names());
+            eval.completions_dirty = false;
+        }
         let prompt = LshPrompt::new(prompt_str);
 
         let input = match line_editor.read_line(&prompt) {

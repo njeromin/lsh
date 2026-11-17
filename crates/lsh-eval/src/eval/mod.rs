@@ -65,6 +65,7 @@ pub struct Evaluator {
     pub exported_vars: HashSet<String>,
     pub job_manager: JobManager,
     pub warned_stopped_jobs: bool,
+    pub completions_dirty: bool,
 }
 
 impl Evaluator {
@@ -85,6 +86,7 @@ impl Evaluator {
             exported_vars,
             job_manager: JobManager::new(),
             warned_stopped_jobs: false,
+            completions_dirty: true,
         }
     }
 

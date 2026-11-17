@@ -14,11 +14,12 @@ pub struct Scope {
 
 impl Evaluator {
     pub fn is_exported(&self, name: &str) -> bool {
-        name == "PATH" || self.exported_vars.contains(name) || env::var(name).is_ok()
+        self.exported_vars.contains(name)
     }
 
     pub fn export_var(&mut self, name: &str, value: &str) {
         self.exported_vars.insert(name.to_string());
+        self.completions_dirty = true;
         unsafe {
             env::set_var(name, value);
         }
@@ -31,7 +32,6 @@ impl Evaluator {
 
     pub fn sync_env_var_if_exported(&mut self, name: &str, value: &Value) {
         if self.is_exported(name) {
-            self.exported_vars.insert(name.to_string());
             unsafe {
                 env::set_var(name, value.to_string());
             }
@@ -41,6 +41,9 @@ impl Evaluator {
     pub fn push_var(&mut self, scope_index: usize, name: String, value: Value) {
         if let Some(scope) = self.scopes.get_mut(scope_index) {
             scope.vars.insert(name, value);
+            if scope_index == 0 {
+                self.completions_dirty = true;
+            }
         }
     }
 
@@ -61,6 +64,9 @@ impl Evaluator {
     pub fn set_var(&mut self, scope: usize, name: &str, value: Value) -> Result<(), EvalError> {
         let s = self.scopes.get_mut(scope).ok_or(EvalError::ScopeNotFound)?;
         s.vars.insert(name.to_string(), value.clone());
+        if scope == 0 {
+            self.completions_dirty = true;
+        }
         self.sync_env_var_if_exported(name, &value);
 
         Ok(())
@@ -72,6 +78,7 @@ impl Evaluator {
     }
 
     pub fn set_alias(&mut self, name: String, value: String) -> Option<String> {
+        self.completions_dirty = true;
         self.aliases.insert(name, value)
     }
 
@@ -171,9 +178,9 @@ impl Evaluator {
     ) -> Result<(), EvalError> {
         for scope_index in scope_indices.iter().rev() {
             if let Some(scope) = self.scopes.get_mut(*scope_index)
-                && scope.vars.contains_key(var_name)
+                && let Some(existing) = scope.vars.get_mut(var_name)
             {
-                scope.vars.insert(var_name.to_owned(), value.clone());
+                *existing = value.clone();
                 self.sync_env_var_if_exported(var_name, &value);
                 return Ok(());
             }
@@ -182,7 +189,9 @@ impl Evaluator {
         if let Some(scope_index) = scope_indices.last().copied()
             && let Some(scope) = self.scopes.get_mut(scope_index)
         {
-            scope.vars.insert(var_name.to_owned(), value.clone());
+            if scope.vars.insert(var_name.to_owned(), value.clone()).is_none() {
+                self.completions_dirty = true;
+            }
             self.sync_env_var_if_exported(var_name, &value);
             Ok(())
         } else {
