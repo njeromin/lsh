@@ -75,12 +75,14 @@ impl Parser<'_> {
 
         let mut parts: Vec<Expr> = Vec::new();
         let mut current_literal = String::new();
+        let mut lit_start = 0usize;
         let mut chars = raw.char_indices().peekable();
         let content_base = base_offset + 1; // skip leading '"'
 
         while let Some((idx, ch)) = chars.next() {
             if ch == '\\' {
-                let Some((_, next_ch)) = chars.next() else {
+                current_literal.push_str(&raw[lit_start..idx]);
+                let Some((esc_idx, next_ch)) = chars.next() else {
                     return Err(Diagnostic::new(
                         DiagnosticKind::ParseError,
                         src_id,
@@ -94,6 +96,7 @@ impl Parser<'_> {
                     '$' => current_literal.push('$'),
                     other => current_literal.push(resolve_basic_escape(other)),
                 }
+                lit_start = esc_idx + next_ch.len_utf8();
                 continue;
             }
 
@@ -118,10 +121,12 @@ impl Parser<'_> {
                         |p| p.parse_primary(),
                     )?;
 
+                    current_literal.push_str(&raw[lit_start..idx]);
                     if !current_literal.is_empty() {
                         parts.push(Expr::QuotedString(std::mem::take(&mut current_literal)));
                     }
                     parts.push(parsed_expr);
+                    lit_start = sub_end_idx + 1;
                     continue;
                 }
 
@@ -157,10 +162,12 @@ impl Parser<'_> {
                         |p| p.parse_expr(),
                     )?;
 
+                    current_literal.push_str(&raw[lit_start..idx]);
                     if !current_literal.is_empty() {
                         parts.push(Expr::QuotedString(std::mem::take(&mut current_literal)));
                     }
                     parts.push(parsed_expr);
+                    lit_start = sub_end_idx + 1;
                     continue;
                 }
 
@@ -168,11 +175,14 @@ impl Parser<'_> {
                 if let Some(&(_, next_c)) = chars.peek()
                     && matches!(next_c, '?' | '$' | '!' | '#' | '*' | '@')
                 {
-                    chars.next();
+                    let (next_idx, _) = chars.next().unwrap();
+                    current_literal.push_str(&raw[lit_start..idx]);
                     if !current_literal.is_empty() {
                         parts.push(Expr::QuotedString(std::mem::take(&mut current_literal)));
                     }
-                    parts.push(Expr::Variable(next_c.to_string()));
+                    let next_end = next_idx + next_c.len_utf8();
+                    parts.push(Expr::Variable(raw[next_idx..next_end].to_owned()));
+                    lit_start = next_end;
                     continue;
                 }
 
@@ -190,20 +200,21 @@ impl Parser<'_> {
                         }
                     }
 
+                    current_literal.push_str(&raw[lit_start..idx]);
                     if !current_literal.is_empty() {
                         parts.push(Expr::QuotedString(std::mem::take(&mut current_literal)));
                     }
                     parts.push(Expr::Variable(raw[var_start..var_end].to_owned()));
+                    lit_start = var_end;
                     continue;
                 }
 
                 // Literal '$'
-                current_literal.push('$');
                 continue;
             }
-
-            current_literal.push(ch);
         }
+
+        current_literal.push_str(&raw[lit_start..]);
 
         if parts.is_empty() {
             Ok(Expr::QuotedString(current_literal))

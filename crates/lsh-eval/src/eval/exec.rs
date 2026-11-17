@@ -13,12 +13,12 @@ pub fn exec_file_outcome_scoped(
 
     match fs::read_to_string(&path) {
         Ok(input) => {
-            let mut source_map = SourceMap::default();
-            let src_id = source_map.insert(path.to_string_lossy().as_ref(), input.as_str());
-
-            let tokens = match lexer::lex_input(src_id, input.as_str()) {
+            let tokens = match lexer::lex_input(0, input.as_str()) {
                 Ok(tokens) => tokens,
-                Err(diag) => {
+                Err(mut diag) => {
+                    let mut source_map = SourceMap::default();
+                    diag.source.source_id =
+                        source_map.insert(path.to_string_lossy().as_ref(), input.as_str());
                     print_diagnostic(&mut cerr, &diag, &source_map);
                     return Err(diag.message);
                 }
@@ -26,10 +26,13 @@ pub fn exec_file_outcome_scoped(
 
             debug::print_lexer(&tokens);
 
-            let mut parser = Parser::new(src_id, tokens);
+            let mut parser = Parser::new(0, tokens);
             let prog = match parser.parse_program() {
                 Ok(prog) => prog,
-                Err(diag) => {
+                Err(mut diag) => {
+                    let mut source_map = SourceMap::default();
+                    diag.source.source_id =
+                        source_map.insert(path.to_string_lossy().as_ref(), input.as_str());
                     print_diagnostic(&mut cerr, &diag, &source_map);
                     return Err(diag.message);
                 }

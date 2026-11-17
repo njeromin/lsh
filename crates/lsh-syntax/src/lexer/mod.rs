@@ -21,7 +21,7 @@ fn lex_input_internal(
     input: &str,
     lenient: bool,
 ) -> Result<Vec<Token<'_>>, Diagnostic> {
-    let mut tokens = vec![];
+    let mut tokens = Vec::with_capacity(input.len() / 4 + 2);
 
     let mut chars: CharIndexedIter = input.char_indices().peekable();
 
