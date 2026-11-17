@@ -101,20 +101,6 @@ pub fn plugin<R: io::Read, W: io::Write, WE: io::Write>(
             );
             0
         }
-        "load" => {
-            let Some(target) = args.get(1) else {
-                print_error(&mut io.err, "Usage: plugin load <name_or_path>");
-                return 1;
-            };
-
-            match eval.load_plugin(target) {
-                Ok(_) => 0,
-                Err(err) => {
-                    print_error(&mut io.err, &format!("Failed to load plugin: {err}"));
-                    1
-                }
-            }
-        }
         "unload" => {
             let Some(name) = args.get(1) else {
                 print_error(&mut io.err, "Usage: plugin unload <name>");
@@ -132,7 +118,7 @@ pub fn plugin<R: io::Read, W: io::Write, WE: io::Write>(
         _ => {
             print_error(
                 &mut io.err,
-                &format!("Unknown subcommand '{subcommand}'. Available: list, info, load, unload"),
+                &format!("Unknown subcommand '{subcommand}'. Available: list, info, unload"),
             );
             1
         }

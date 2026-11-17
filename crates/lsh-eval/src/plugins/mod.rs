@@ -54,19 +54,6 @@ impl PluginManager {
             _ => return Err("Plugin manifest must contain a non-empty 'name' string.".to_string()),
         };
 
-        self.register_with_default_name(&name, manifest)
-    }
-
-    pub fn register_with_default_name(
-        &mut self,
-        default_name: &str,
-        manifest: Value,
-    ) -> Result<String, String> {
-        let name = match manifest.get_property("name") {
-            Some(Value::String(s)) if !s.trim().is_empty() => s.trim().to_string(),
-            _ => default_name.to_string(),
-        };
-
         let version = manifest.get_property("version").and_then(|v| match v {
             Value::String(s) => Some(s),
             Value::Number(n) => Some(n.to_string()),

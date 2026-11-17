@@ -1,6 +1,5 @@
 use std::{
     io::{self},
-    path::Path,
     sync::Arc,
 };
 
@@ -277,24 +276,6 @@ impl Evaluator {
             .insert(canonical_path, export_val.clone());
 
         Ok(export_val)
-    }
-
-    pub fn load_plugin(&mut self, name_or_path: &str) -> Result<String, String> {
-        let manifest_val = self.import_module(name_or_path)?;
-        let Value::Object(_) = manifest_val else {
-            return Err(format!(
-                "Plugin '{name_or_path}' must return an object manifest (e.g. 'return {{ name = \"...\", ... }}')."
-            ));
-        };
-        let default_name = Path::new(name_or_path)
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or(name_or_path);
-        let name = self
-            .plugin_manager
-            .register_with_default_name(default_name, manifest_val)?;
-        self.completions_dirty = true;
-        Ok(name)
     }
 
     pub fn unload_plugin(&mut self, name: &str) -> bool {

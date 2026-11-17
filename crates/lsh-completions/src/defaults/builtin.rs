@@ -69,10 +69,6 @@ pub fn populate_builtin_rules(rules: &mut HashMap<String, CompletionRule>) {
         CompletionRule::new().with_description("Display details for a loaded plugin"),
     );
     plugin_rule.subcommands.insert(
-        "load".to_string(),
-        CompletionRule::new().with_description("Load a plugin from directory or path"),
-    );
-    plugin_rule.subcommands.insert(
         "unload".to_string(),
         CompletionRule::new().with_description("Unload a plugin by name"),
     );

@@ -132,11 +132,10 @@ kill -l
 ```
 
 ### `plugin`
-Manage plugins:
+Manage loaded plugins (plugins are loaded using `import("my-plugin")`):
 
 ```lsh
 plugin list
-plugin load ./plugins/my-plugin
 plugin unload my-plugin
 plugin info my-plugin
 ```

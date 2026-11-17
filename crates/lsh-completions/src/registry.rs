@@ -504,7 +504,6 @@ mod tests {
             CompletionResolution::Items(items) => {
                 assert!(items.iter().any(|it| it.replacement == "list"));
                 assert!(items.iter().any(|it| it.replacement == "info"));
-                assert!(items.iter().any(|it| it.replacement == "load"));
                 assert!(items.iter().any(|it| it.replacement == "unload"));
             }
             _ => panic!("Expected Items resolution for plugin"),

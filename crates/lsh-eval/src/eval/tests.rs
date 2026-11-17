@@ -444,8 +444,10 @@ fn plugin_return_and_command_execution_with_this() {
 
     let (mut eval, _) = eval_with_evaluator("");
     eval.plugin_manager.search_paths.insert(0, temp_dir.clone());
-    let res = eval.load_plugin("test-plugin");
-    assert_eq!(res, Ok("test-plugin".to_string()));
+    assert!(matches!(
+        eval.import_module("test-plugin"),
+        Ok(Value::Object(_))
+    ));
 
     let _ = eval.evaluate_statements(
         &lsh_syntax::parser::Parser::new(
@@ -486,7 +488,10 @@ fn plugin_lifecycle_hooks_mutate_plugin_state() {
 
     let (mut eval, _) = eval_with_evaluator("");
     eval.plugin_manager.search_paths.insert(0, temp_dir.clone());
-    assert_eq!(eval.load_plugin("git-plugin"), Ok("git-plugin".to_string()));
+    assert!(matches!(
+        eval.import_module("git-plugin"),
+        Ok(Value::Object(_))
+    ));
 
     eval.trigger_chpwd("/home/user", "/home/user/projects");
     eval.trigger_pre_prompt();
@@ -522,10 +527,10 @@ fn plugin_unload_removes_commands_and_hooks() {
 
     let (mut eval, _) = eval_with_evaluator("");
     eval.plugin_manager.search_paths.insert(0, temp_dir.clone());
-    assert_eq!(
-        eval.load_plugin("temp-plugin"),
-        Ok("temp-plugin".to_string())
-    );
+    assert!(matches!(
+        eval.import_module("temp-plugin"),
+        Ok(Value::Object(_))
+    ));
 
     assert!(eval.plugin_manager.get("temp-plugin").is_some());
     assert!(eval.plugin_manager.get_command("temp_cmd").is_some());
@@ -552,8 +557,8 @@ fn plugin_load_from_file_registers_manifest() {
     );
 
     let (mut eval, _) = eval_with_evaluator("");
-    let load_res = eval.load_plugin(plugin_file.to_str().unwrap());
-    assert_eq!(load_res, Ok("file-plugin".to_string()));
+    let load_res = eval.import_module(plugin_file.to_str().unwrap());
+    assert!(matches!(load_res, Ok(Value::Object(_))));
 
     let plugin = eval.plugin_manager.get("file-plugin");
     assert!(plugin.is_some());
@@ -575,13 +580,9 @@ fn plugin_fails_to_load_if_not_returning_object() {
     );
 
     let (mut eval, _) = eval_with_evaluator("");
-    let load_res = eval.load_plugin(plugin_file.to_str().unwrap());
-    assert!(load_res.is_err());
-    assert!(
-        load_res
-            .unwrap_err()
-            .contains("must return an object manifest")
-    );
+    let load_res = eval.import_module(plugin_file.to_str().unwrap());
+    assert_eq!(load_res, Ok(Value::Null));
+    assert!(eval.plugin_manager.get("invalid-plugin").is_none());
 
     let _ = std::fs::remove_dir_all(&temp_dir);
 }
@@ -602,8 +603,8 @@ fn loads_git_prompt_plugin_from_config_directory() {
         .search_paths
         .insert(0, manifest_path.clone());
 
-    let load_res = eval.load_plugin("git-prompt");
-    assert_eq!(load_res, Ok("git-prompt".to_string()));
+    let load_res = eval.import_module("git-prompt");
+    assert!(matches!(load_res, Ok(Value::Object(_))));
 
     let prompt_obj = eval.get_var(0, "prompt").expect("prompt should exist");
     let segments = prompt_obj
@@ -668,10 +669,6 @@ fn prompt_segments_custom_registration_and_unload() {
 
     let (mut eval, _) = eval_with_evaluator("");
     eval.plugin_manager.search_paths.insert(0, temp_dir.clone());
-    assert_eq!(
-        eval.load_plugin("test-plugin"),
-        Ok("test-plugin".to_string())
-    );
 
     // Explicitly register imported segments into $prompt.segments
     let script = r#"
