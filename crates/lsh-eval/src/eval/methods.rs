@@ -189,8 +189,9 @@ impl Evaluator {
                 let pat = args.first().map(|v| v.to_string()).unwrap_or_default();
                 Value::Bool(s_string.contains(&pat))
             })),
-            "json" => Value::function(FunctionValue::native("json", move |_, _, _| {
-                crate::eval::json::parse_json(&s_string).unwrap_or(Value::Null)
+            "json" => Value::function(FunctionValue::try_native("json", move |_, _, _| {
+                crate::eval::json::parse_json(&s_string)
+                    .map_err(|e| EvalError::InvalidJson(format!("Invalid JSON: {e}")))
             })),
             _ => Value::Null,
         }
@@ -254,9 +255,12 @@ impl Evaluator {
                     Some(Value::String(s)) => s.clone(),
                     _ => String::new(),
                 };
-                Some(Value::function(FunctionValue::native(
+                Some(Value::function(FunctionValue::try_native(
                     "json",
-                    move |_, _, _| crate::eval::json::parse_json(&out).unwrap_or(Value::Null),
+                    move |_, _, _| {
+                        crate::eval::json::parse_json(&out)
+                            .map_err(|e| EvalError::InvalidJson(format!("Invalid JSON: {e}")))
+                    },
                 )))
             }
             _ => None,

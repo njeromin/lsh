@@ -103,7 +103,7 @@ Command substitution captures the output of a command and returns a structured *
 - `.is_ok()` (or `.ok()`) — Boolean (`true` if exit code is 0)
 - `.is_err()` (or `.err()`) — Boolean (`true` if exit code is non-zero)
 - `.lines()` — Array of stdout lines
-- `.json()` — Parse stdout as JSON (returns `null` on parse failure)
+- `.json()` — Parse stdout as JSON (raises a runtime error on invalid JSON)
 
 ### Examples:
 

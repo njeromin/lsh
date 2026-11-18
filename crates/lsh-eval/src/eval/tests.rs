@@ -1781,7 +1781,7 @@ fn test_json_command_result_method_and_global() {
         let parsed_name = $parsed.name
         let parsed_item = $parsed.items[1]
         let parsed_ok = $parsed.ok
-        let invalid = $(echo "not valid json").json()
+        let parsed_null = $json.parse("null")
 
         let raw_str = '{"hello":"world\\n\\u2603\\ud83d\\ude80","num":-12.5}'
         let str_parsed = $raw_str.json()
@@ -1809,7 +1809,7 @@ fn test_json_command_result_method_and_global() {
     );
     assert_eq!(eval.get_var(0, "parsed_item"), Some(&Value::Number(2.0)));
     assert_eq!(eval.get_var(0, "parsed_ok"), Some(&Value::Bool(true)));
-    assert_eq!(eval.get_var(0, "invalid"), Some(&Value::Null));
+    assert_eq!(eval.get_var(0, "parsed_null"), Some(&Value::Null));
 
     assert_eq!(
         eval.get_var(0, "str_hello"),
@@ -1832,4 +1832,23 @@ fn test_json_command_result_method_and_global() {
         ))
     );
     assert_eq!(eval.get_var(0, "roundtrip"), eval.get_var(0, "obj"));
+
+    for bad_script in [
+        r#"$(echo "not valid json").json()"#,
+        r#"$json.parse("not valid json")"#,
+    ] {
+        let mut err_eval = Evaluator::new().with_globals();
+        let err_prog = Parser::new(0, lexer::lex_input(0, bad_script).unwrap())
+            .parse_program()
+            .unwrap();
+        let err = err_eval
+            .try_evaluate_program(err_prog)
+            .expect_err("expected invalid JSON runtime error");
+        assert!(matches!(err, crate::eval::EvalError::InvalidJson(_)));
+
+        let eval_prog = Parser::new(0, lexer::lex_input(0, bad_script).unwrap())
+            .parse_program()
+            .unwrap();
+        assert_eq!(err_eval.evaluate(eval_prog), 1);
+    }
 }

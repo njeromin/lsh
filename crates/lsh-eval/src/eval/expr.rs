@@ -76,7 +76,7 @@ impl Evaluator {
 
         if let crate::eval::value::FunctionKind::Native { ref func, .. } = func.kind {
             let this_val = effective_receiver.map(|(_, ref v)| v.clone());
-            return Ok((func.clone())(self, evaluated_args, this_val));
+            return (func.clone())(self, evaluated_args, this_val);
         }
 
         let (outcome_res, final_this) = self.with_scope(

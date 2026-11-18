@@ -1,7 +1,7 @@
 use std::{collections::HashMap, env, sync::Arc};
 
 use crate::eval::{
-    Evaluator,
+    EvalError, Evaluator,
     value::{FunctionValue, Value},
 };
 
@@ -188,26 +188,38 @@ impl Evaluator {
             .vars
             .insert(String::from("hooks"), Value::object(hooks_map));
 
-        let json_parse_fn = Value::function(FunctionValue::native("parse", |_eval, args, _| {
-            let Some(arg) = args.first() else {
-                return Value::Null;
-            };
-            match arg {
-                Value::String(s) => crate::eval::json::parse_json(s).unwrap_or(Value::Null),
-                Value::Object(map) => {
-                    let guard = match map.read() {
-                        Ok(g) => g,
-                        Err(p) => p.into_inner(),
-                    };
-                    if let Some(Value::String(out)) = guard.get("out") {
-                        crate::eval::json::parse_json(out).unwrap_or(Value::Null)
-                    } else {
-                        Value::Null
+        let json_parse_fn =
+            Value::function(FunctionValue::try_native("parse", |_eval, args, _| {
+                let Some(arg) = args.first() else {
+                    return Err(EvalError::InvalidJson(
+                        "Expected JSON string or command result argument to json.parse()."
+                            .to_string(),
+                    ));
+                };
+                match arg {
+                    Value::String(s) => crate::eval::json::parse_json(s)
+                        .map_err(|e| EvalError::InvalidJson(format!("Invalid JSON: {e}"))),
+                    Value::Object(map) => {
+                        let guard = match map.read() {
+                            Ok(g) => g,
+                            Err(p) => p.into_inner(),
+                        };
+                        if let Some(Value::String(out)) = guard.get("out") {
+                            crate::eval::json::parse_json(out)
+                                .map_err(|e| EvalError::InvalidJson(format!("Invalid JSON: {e}")))
+                        } else {
+                            Err(EvalError::TypeError(
+                                "Cannot parse JSON from object without 'out' string property."
+                                    .to_string(),
+                            ))
+                        }
                     }
+                    other => Err(EvalError::TypeError(format!(
+                        "Cannot parse JSON from value of type '{}'.",
+                        other.get_type()
+                    ))),
                 }
-                _ => Value::Null,
-            }
-        }));
+            }));
 
         let json_stringify_fn =
             Value::function(FunctionValue::native("stringify", |_eval, args, _| {

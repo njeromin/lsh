@@ -6,9 +6,11 @@ use std::{
 
 use lsh_syntax::ast::SpannedStatement;
 
-use crate::eval::Evaluator;
+use crate::eval::{EvalError, Evaluator};
 
-pub type NativeFn = Arc<dyn Fn(&mut Evaluator, Vec<Value>, Option<Value>) -> Value + Send + Sync>;
+pub type NativeFn = Arc<
+    dyn Fn(&mut Evaluator, Vec<Value>, Option<Value>) -> Result<Value, EvalError> + Send + Sync,
+>;
 
 #[derive(Clone)]
 pub enum FunctionKind {
@@ -53,6 +55,16 @@ impl FunctionValue {
     pub fn native<F>(name: impl Into<String>, func: F) -> Self
     where
         F: Fn(&mut Evaluator, Vec<Value>, Option<Value>) -> Value + Send + Sync + 'static,
+    {
+        Self::try_native(name, move |eval, args, this| Ok(func(eval, args, this)))
+    }
+
+    pub fn try_native<F>(name: impl Into<String>, func: F) -> Self
+    where
+        F: Fn(&mut Evaluator, Vec<Value>, Option<Value>) -> Result<Value, EvalError>
+            + Send
+            + Sync
+            + 'static,
     {
         Self {
             params: vec![],
