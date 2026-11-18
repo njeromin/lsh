@@ -136,33 +136,7 @@ impl fmt::Display for Value {
             Self::String(str) => write!(f, "{str}"),
             Self::Number(num) => write!(f, "{num}"),
             Self::Bool(bool) => write!(f, "{bool}"),
-            Self::Object(map) => {
-                // TODO: Proper recursive object printing.
-                writeln!(f, "{{")?;
-
-                if let Ok(guard) = map.read() {
-                    for (key, value) in guard.iter() {
-                        writeln!(f, "  {}: {:?}", key, value.to_string())?;
-                    }
-                }
-
-                writeln!(f, "}}")
-            }
-            Self::Array(arr) => {
-                write!(f, "[")?;
-                if let Ok(guard) = arr.read() {
-                    for (i, item) in guard.iter().enumerate() {
-                        if i > 0 {
-                            write!(f, ", ")?;
-                        }
-                        match item {
-                            Self::String(s) => write!(f, "\"{s}\"")?,
-                            _ => write!(f, "{item}")?,
-                        }
-                    }
-                }
-                write!(f, "]")
-            }
+            Self::Object(_) | Self::Array(_) => self.fmt_nested(f, 0, 0),
             Self::Function(func) => match &func.kind {
                 FunctionKind::Ast => write!(
                     f,
@@ -178,6 +152,60 @@ impl fmt::Display for Value {
 }
 
 impl Value {
+    fn fmt_nested(&self, f: &mut fmt::Formatter<'_>, indent: usize, depth: usize) -> fmt::Result {
+        if depth > 64 {
+            return write!(f, "...");
+        }
+
+        match self {
+            Self::String(s) => write!(f, "{s:?}"),
+            Self::Number(n) => write!(f, "{n}"),
+            Self::Bool(b) => write!(f, "{b}"),
+            Self::Null => write!(f, "null"),
+            Self::Function(_) => write!(f, "{self}"),
+            Self::Array(arr) => {
+                write!(f, "[")?;
+                if let Ok(guard) = arr.read() {
+                    for (i, item) in guard.iter().enumerate() {
+                        if i > 0 {
+                            write!(f, ", ")?;
+                        }
+                        item.fmt_nested(f, indent, depth + 1)?;
+                    }
+                }
+                write!(f, "]")
+            }
+            Self::Object(map) => {
+                let Ok(guard) = map.read() else {
+                    return write!(f, "{{}}");
+                };
+                if guard.is_empty() {
+                    return write!(f, "{{}}");
+                }
+                let mut entries: Vec<(&String, &Value)> = guard.iter().collect();
+                entries.sort_by_key(|(k, _)| *k);
+
+                writeln!(f, "{{")?;
+                for (i, (key, value)) in entries.iter().enumerate() {
+                    for _ in 0..(indent + 2) {
+                        write!(f, " ")?;
+                    }
+                    write!(f, "{key} = ")?;
+                    value.fmt_nested(f, indent + 2, depth + 1)?;
+                    if i + 1 < entries.len() {
+                        writeln!(f, ",")?;
+                    } else {
+                        writeln!(f)?;
+                    }
+                }
+                for _ in 0..indent {
+                    write!(f, " ")?;
+                }
+                write!(f, "}}")
+            }
+        }
+    }
+
     pub fn object(map: HashMap<String, Value>) -> Self {
         Self::Object(Arc::new(RwLock::new(map)))
     }
@@ -525,5 +553,35 @@ mod tests {
 
         assert_eq!(f1, f1_clone);
         assert_ne!(f1, f2);
+    }
+
+    #[test]
+    fn object_display_uses_equals_and_formats_recursively() {
+        let nested = Value::object(HashMap::from([
+            ("enabled".to_string(), Value::Bool(true)),
+            ("empty".to_string(), Value::Null),
+        ]));
+        let obj = Value::object(HashMap::from([
+            ("count".to_string(), Value::Number(3.0)),
+            ("name".to_string(), Value::String("lsh".to_string())),
+            (
+                "items".to_string(),
+                Value::array(vec![Value::Number(1.0), Value::String("two".to_string())]),
+            ),
+            ("nested".to_string(), nested),
+        ]));
+
+        let expected = "\
+{
+  count = 3,
+  items = [1, \"two\"],
+  name = \"lsh\",
+  nested = {
+    empty = null,
+    enabled = true
+  }
+}";
+        assert_eq!(obj.to_string(), expected);
+        assert_eq!(Value::object(HashMap::new()).to_string(), "{}");
     }
 }
