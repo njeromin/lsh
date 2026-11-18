@@ -103,7 +103,7 @@ Command substitution captures the output of a command and returns a structured *
 - `.is_ok()` (or `.ok()`) — Boolean (`true` if exit code is 0)
 - `.is_err()` (or `.err()`) — Boolean (`true` if exit code is non-zero)
 - `.lines()` — Array of stdout lines
-- `.json()` — Parse stdout as JSON (raises a runtime error on invalid JSON)
+- `.from_json()` (or `.json()`) — Parse stdout as JSON (raises a runtime error on invalid JSON)
 
 ### Examples:
 
@@ -129,6 +129,6 @@ if $res.is_err() {
 }
 
 # Parse JSON output
-let pkg = $(cargo metadata --format-version 1).json()
+let pkg = $(cargo metadata --format-version 1).from_json()
 echo $pkg.packages[0].name
 ```

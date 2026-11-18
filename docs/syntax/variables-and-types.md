@@ -157,8 +157,9 @@ let has_world = $s.contains("World")      # true
 let starts = $s.starts_with("  Hello")    # true
 let ends = $s.ends_with("!  ")            # true
 
-# Splitting
+# Splitting & JSON
 let parts = $s.trim().split(", ")     # ["Hello", "World!"]
+let parsed = '{"a": 1}'.from_json()   # { a = 1 }
 ```
 
 ---
@@ -211,6 +212,7 @@ $fruits.push("mango")              # Appends "mango"
 let popped = $fruits.pop()         # Removes and returns "mango"
 let csv = $fruits.join(", ")       # "apple, banana, cherry"
 let has_apple = $fruits.contains("apple") # true
+let arr_json = $fruits.to_json()   # '["apple","banana","cherry"]'
 ```
 
 ---
@@ -230,9 +232,10 @@ let user = {
 echo $user.name                # "Alice"
 echo $user["role"]             # "admin"
 
-# Modifying properties:
+# Modifying & serialising properties:
 $user.visits += 1
 $user["status"] = "online"
+let serialized = $user.to_json(true)
 ```
 
 ---

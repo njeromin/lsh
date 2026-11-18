@@ -224,17 +224,15 @@ impl Evaluator {
         let json_stringify_fn =
             Value::function(FunctionValue::native("stringify", |_eval, args, _| {
                 let val = args.first().cloned().unwrap_or(Value::Null);
-                let indent = match args.get(1) {
-                    Some(Value::Bool(true)) => Some(2),
-                    Some(Value::Number(n)) if *n >= 1.0 => Some((*n as usize).min(16)),
-                    _ => None,
-                };
+                let indent = crate::eval::json::resolve_json_indent(&args, 1);
                 Value::String(crate::eval::json::stringify_json(&val, indent))
             }));
 
         let mut json_map = HashMap::new();
-        json_map.insert("parse".to_string(), json_parse_fn);
-        json_map.insert("stringify".to_string(), json_stringify_fn);
+        json_map.insert("parse".to_string(), json_parse_fn.clone());
+        json_map.insert("from_json".to_string(), json_parse_fn);
+        json_map.insert("stringify".to_string(), json_stringify_fn.clone());
+        json_map.insert("to_json".to_string(), json_stringify_fn);
         scope
             .vars
             .insert(String::from("json"), Value::object(json_map));

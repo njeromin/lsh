@@ -124,6 +124,16 @@ impl Evaluator {
                     Value::Bool(guard.iter().any(|item| item.check_equality(&target)))
                 }))
             }
+            "to_json" => {
+                let arr_clone = Arc::clone(arr);
+                Value::function(FunctionValue::native("to_json", move |_, args, _| {
+                    let indent = crate::eval::json::resolve_json_indent(&args, 0);
+                    Value::String(crate::eval::json::stringify_json(
+                        &Value::Array(Arc::clone(&arr_clone)),
+                        indent,
+                    ))
+                }))
+            }
             _ => Value::Null,
         }
     }
@@ -189,10 +199,12 @@ impl Evaluator {
                 let pat = args.first().map(|v| v.to_string()).unwrap_or_default();
                 Value::Bool(s_string.contains(&pat))
             })),
-            "json" => Value::function(FunctionValue::try_native("json", move |_, _, _| {
-                crate::eval::json::parse_json(&s_string)
-                    .map_err(|e| EvalError::InvalidJson(format!("Invalid JSON: {e}")))
-            })),
+            "from_json" | "json" => {
+                Value::function(FunctionValue::try_native("from_json", move |_, _, _| {
+                    crate::eval::json::parse_json(&s_string)
+                        .map_err(|e| EvalError::InvalidJson(format!("Invalid JSON: {e}")))
+                }))
+            }
             _ => Value::Null,
         }
     }
@@ -250,16 +262,38 @@ impl Evaluator {
                     },
                 )))
             }
-            "json" => {
+            "from_json" | "json" => {
                 let out = match guard.get("out") {
                     Some(Value::String(s)) => s.clone(),
                     _ => String::new(),
                 };
                 Some(Value::function(FunctionValue::try_native(
-                    "json",
+                    "from_json",
                     move |_, _, _| {
                         crate::eval::json::parse_json(&out)
                             .map_err(|e| EvalError::InvalidJson(format!("Invalid JSON: {e}")))
+                    },
+                )))
+            }
+            _ => None,
+        }
+    }
+
+    pub(crate) fn resolve_object_method(
+        map: &Arc<RwLock<HashMap<String, Value>>>,
+        method: &str,
+    ) -> Option<Value> {
+        match method {
+            "to_json" => {
+                let map_clone = Arc::clone(map);
+                Some(Value::function(FunctionValue::native(
+                    "to_json",
+                    move |_, args, _| {
+                        let indent = crate::eval::json::resolve_json_indent(&args, 0);
+                        Value::String(crate::eval::json::stringify_json(
+                            &Value::Object(Arc::clone(&map_clone)),
+                            indent,
+                        ))
                     },
                 )))
             }
@@ -278,6 +312,8 @@ impl Evaluator {
                     val
                 } else if let Some(method_val) = Self::resolve_command_result_method(&guard, key) {
                     method_val
+                } else if let Some(obj_method) = Self::resolve_object_method(map, key) {
+                    obj_method
                 } else {
                     Value::Null
                 }
@@ -299,6 +335,8 @@ impl Evaluator {
                     val
                 } else if let Some(method_val) = Self::resolve_command_result_method(&guard, key) {
                     method_val
+                } else if let Some(obj_method) = Self::resolve_object_method(map, key) {
+                    obj_method
                 } else {
                     Value::Null
                 }

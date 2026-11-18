@@ -31,6 +31,15 @@ pub fn stringify_json(value: &Value, indent: Option<usize>) -> String {
     out
 }
 
+/// Resolves an optional pretty-printing indent width argument (`true` -> 2 spaces, number -> clamped 1..=16).
+pub fn resolve_json_indent(args: &[Value], arg_index: usize) -> Option<usize> {
+    match args.get(arg_index) {
+        Some(Value::Bool(true)) => Some(2),
+        Some(Value::Number(n)) if *n >= 1.0 => Some((*n as usize).min(16)),
+        _ => None,
+    }
+}
+
 struct JsonParser<'a> {
     src: &'a str,
     bytes: &'a [u8],

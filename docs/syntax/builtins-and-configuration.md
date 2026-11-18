@@ -273,12 +273,12 @@ let data = $json.parse('{"name": "lsh", "tags": ["shell", "rust"]}')
 echo $data.name          # "lsh"
 echo $data.tags[0]       # "shell"
 
-# Or call .json() directly on strings or $(cmd) results:
-let user = $(printf '{"id": 1, "active": true}').json()
+# Or call .from_json() directly on strings or $(cmd) results:
+let user = $(printf '{"id": 1, "active": true}').from_json()
 
-# Serialise to compact or pretty-printed JSON:
-let compact = $json.stringify($data)
-let pretty = $json.stringify($data, true) # 2-space indentation (or pass a custom number of spaces)
+# Serialise objects/arrays to compact or pretty-printed JSON:
+let compact = $data.to_json()          # or $json.stringify($data) / $json.to_json($data)
+let pretty = $data.to_json(true)       # 2-space indentation (or pass a custom number of spaces)
 ```
 
 ---
