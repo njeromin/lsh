@@ -1772,3 +1772,64 @@ fn runtime_error_records_statement_span_and_formats_diagnostic() {
     assert!(rendered.contains("$x.a = 1"));
     assert!(rendered.contains("^^^^^^^^"));
 }
+
+#[test]
+fn test_json_command_result_method_and_global() {
+    let (mut eval, _) = eval_with_evaluator("");
+    let script = r#"
+        let parsed = $(printf '{"name":"lsh","items":[1,2,3],"ok":true,"empty":null}').json()
+        let parsed_name = $parsed.name
+        let parsed_item = $parsed.items[1]
+        let parsed_ok = $parsed.ok
+        let invalid = $(echo "not valid json").json()
+
+        let raw_str = '{"hello":"world\\n\\u2603\\ud83d\\ude80","num":-12.5}'
+        let str_parsed = $raw_str.json()
+        let str_hello = $str_parsed.hello
+        let str_num = $str_parsed.num
+
+        let from_cmd = $json.parse($(printf '{"a":10,"b":"ok"}'))
+        let from_cmd_a = $from_cmd.a
+
+        let obj = { b = 2, a = "hi\nthere", arr = [true, false] }
+        let compact = $json.stringify($obj)
+        let pretty = $json.stringify($obj, true)
+        let roundtrip = $json.parse($compact)
+    "#;
+
+    let prog = Parser::new(0, lexer::lex_input(0, script).unwrap())
+        .parse_program()
+        .unwrap();
+    let status = eval.evaluate(prog);
+    assert_eq!(status, 0);
+
+    assert_eq!(
+        eval.get_var(0, "parsed_name"),
+        Some(&Value::String("lsh".to_string()))
+    );
+    assert_eq!(eval.get_var(0, "parsed_item"), Some(&Value::Number(2.0)));
+    assert_eq!(eval.get_var(0, "parsed_ok"), Some(&Value::Bool(true)));
+    assert_eq!(eval.get_var(0, "invalid"), Some(&Value::Null));
+
+    assert_eq!(
+        eval.get_var(0, "str_hello"),
+        Some(&Value::String("world\n☃🚀".to_string()))
+    );
+    assert_eq!(eval.get_var(0, "str_num"), Some(&Value::Number(-12.5)));
+    assert_eq!(eval.get_var(0, "from_cmd_a"), Some(&Value::Number(10.0)));
+
+    assert_eq!(
+        eval.get_var(0, "compact"),
+        Some(&Value::String(
+            r#"{"a":"hi\nthere","arr":[true,false],"b":2}"#.to_string()
+        ))
+    );
+    assert_eq!(
+        eval.get_var(0, "pretty"),
+        Some(&Value::String(
+            "{\n  \"a\": \"hi\\nthere\",\n  \"arr\": [\n    true,\n    false\n  ],\n  \"b\": 2\n}"
+                .to_string()
+        ))
+    );
+    assert_eq!(eval.get_var(0, "roundtrip"), eval.get_var(0, "obj"));
+}

@@ -189,6 +189,9 @@ impl Evaluator {
                 let pat = args.first().map(|v| v.to_string()).unwrap_or_default();
                 Value::Bool(s_string.contains(&pat))
             })),
+            "json" => Value::function(FunctionValue::native("json", move |_, _, _| {
+                crate::eval::json::parse_json(&s_string).unwrap_or(Value::Null)
+            })),
             _ => Value::Null,
         }
     }
@@ -244,6 +247,16 @@ impl Evaluator {
                         };
                         Value::array(lines)
                     },
+                )))
+            }
+            "json" => {
+                let out = match guard.get("out") {
+                    Some(Value::String(s)) => s.clone(),
+                    _ => String::new(),
+                };
+                Some(Value::function(FunctionValue::native(
+                    "json",
+                    move |_, _, _| crate::eval::json::parse_json(&out).unwrap_or(Value::Null),
                 )))
             }
             _ => None,

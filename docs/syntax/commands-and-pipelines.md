@@ -103,6 +103,7 @@ Command substitution captures the output of a command and returns a structured *
 - `.is_ok()` (or `.ok()`) — Boolean (`true` if exit code is 0)
 - `.is_err()` (or `.err()`) — Boolean (`true` if exit code is non-zero)
 - `.lines()` — Array of stdout lines
+- `.json()` — Parse stdout as JSON (returns `null` on parse failure)
 
 ### Examples:
 
@@ -126,4 +127,8 @@ let res = $(git status)
 if $res.is_err() {
     echo "Git error: " + $res.err
 }
+
+# Parse JSON output
+let pkg = $(cargo metadata --format-version 1).json()
+echo $pkg.packages[0].name
 ```

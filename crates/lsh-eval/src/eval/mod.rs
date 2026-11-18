@@ -4,6 +4,7 @@ pub mod exec;
 mod expr;
 mod globals;
 pub mod hooks;
+pub mod json;
 mod lifecycle;
 mod methods;
 mod prompt;

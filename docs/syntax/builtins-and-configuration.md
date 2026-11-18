@@ -27,6 +27,7 @@
   - [Colours (`$palette`)](#colours-palette)
   - [Prompt Customisation (`$prompt`)](#prompt-customisation-prompt)
   - [Lifecycle Hooks (`$hooks`)](#lifecycle-hooks-hooks)
+  - [JSON (`$json`)](#json-json)
   - [Plugins & Modules (`import`)](#plugins--modules-import)
 
 ---
@@ -258,6 +259,26 @@ let registered = $hooks.list()
 
 # Clear all hooks for an event
 $hooks.clear("chpwd")
+```
+
+---
+
+### JSON (`$json`)
+
+Parse and serialise JSON values cleanly between strings, command results, and `lsh` objects:
+
+```lsh
+# Parse a JSON string (or a $(...) command result object):
+let data = $json.parse('{"name": "lsh", "tags": ["shell", "rust"]}')
+echo $data.name          # "lsh"
+echo $data.tags[0]       # "shell"
+
+# Or call .json() directly on strings or $(cmd) results:
+let user = $(printf '{"id": 1, "active": true}').json()
+
+# Serialise to compact or pretty-printed JSON:
+let compact = $json.stringify($data)
+let pretty = $json.stringify($data, true) # 2-space indentation (or pass a custom number of spaces)
 ```
 
 ---

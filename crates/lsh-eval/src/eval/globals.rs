@@ -188,6 +188,45 @@ impl Evaluator {
             .vars
             .insert(String::from("hooks"), Value::object(hooks_map));
 
+        let json_parse_fn = Value::function(FunctionValue::native("parse", |_eval, args, _| {
+            let Some(arg) = args.first() else {
+                return Value::Null;
+            };
+            match arg {
+                Value::String(s) => crate::eval::json::parse_json(s).unwrap_or(Value::Null),
+                Value::Object(map) => {
+                    let guard = match map.read() {
+                        Ok(g) => g,
+                        Err(p) => p.into_inner(),
+                    };
+                    if let Some(Value::String(out)) = guard.get("out") {
+                        crate::eval::json::parse_json(out).unwrap_or(Value::Null)
+                    } else {
+                        Value::Null
+                    }
+                }
+                _ => Value::Null,
+            }
+        }));
+
+        let json_stringify_fn =
+            Value::function(FunctionValue::native("stringify", |_eval, args, _| {
+                let val = args.first().cloned().unwrap_or(Value::Null);
+                let indent = match args.get(1) {
+                    Some(Value::Bool(true)) => Some(2),
+                    Some(Value::Number(n)) if *n >= 1.0 => Some((*n as usize).min(16)),
+                    _ => None,
+                };
+                Value::String(crate::eval::json::stringify_json(&val, indent))
+            }));
+
+        let mut json_map = HashMap::new();
+        json_map.insert("parse".to_string(), json_parse_fn);
+        json_map.insert("stringify".to_string(), json_stringify_fn);
+        scope
+            .vars
+            .insert(String::from("json"), Value::object(json_map));
+
         scope
             .vars
             .insert(String::from("options"), Self::default_options());
